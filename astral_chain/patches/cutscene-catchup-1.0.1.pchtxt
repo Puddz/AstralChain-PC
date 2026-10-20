@@ -11,7 +11,22 @@
 
 @flag offset_shift 0x100
 
+// Cut ends (0x8C2420, per-frame cutscene timeline update; [x19] = cut, [x19+4] = time in cut, w24 = cut length,
+// s8 = step). The game ends a cut by clamping its time to (length - step) once, then moving to the next cut at time 0.
+// With the original fixed step of 1.0 that loses nothing. With measured, slightly varying steps the clamp fires and
+// discards up to about half a frame at each cut, so cutscenes drift against their voices (Dynamic-FPS: "picture up to
+// about 0.5 s off"; its v1.1 fixed it with 30 FPS cutscene steps, which looked smeared). Here a cut ends when its time
+// reaches the length, and the remainder carries into the next cut. At a step of 1.0 this is the same as the original.
+//
+// 0x8C2548 ldr s0,[x19,#4] and 0x8C254C scvtf s1,w24 (a branch target) are kept; 0x8C2568-0x8C2570 become unused.
+
 @enabled
+008C2550 0020211E // fcmp s0,s1: time in cut against its length
+008C2554 04010054 // b.mi 0x8C2574: still inside the cut
+008C2558 0138211E // fsub s1,s0,s1: remainder past the cut's end
+008C255C 770200B9 // str w23,[x19]: next cut
+008C2560 610600BD // str s1,[x19,#4]: starts at the remainder
+008C2564 04000014 // b 0x8C2574
 00A0E7F8 F7010014 // b 0xA0EFD4
 00A0EFD4 0110201E // fmov s1,#2.0: gameplay maximum
 00A0EFD8 55000035 // cbnz w21,0xA0EFE0: not in a cutscene

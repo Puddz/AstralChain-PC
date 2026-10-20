@@ -97,8 +97,9 @@ game once, in about a minute. Your saves, game data and shader cache are kept.
 
 - Defeated enemies may leave dark remnants in the highway chase. A likely cause is fixed, but the fix is
   unconfirmed.
-- Cutscenes catch up after pauses of up to about 270 ms. Longer pauses (first-time shader compiles) can leave the
-  picture slightly behind the voices.
+- Cutscene timing: cuts no longer lose time (the drift the Dynamic-FPS mod documents), and cutscenes catch up after
+  pauses of up to about 270 ms. A longer pause, now mostly limited to loading screens, can still leave the picture
+  slightly behind the voices.
 - Save-slot thumbnails are not captured (`nvnTextureReadTexels` is not implemented).
 
 Reports are welcome. Include `build\game\round-00\stderr.log` and your GPU and driver version, but no game files.
