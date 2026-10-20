@@ -30,7 +30,7 @@ static void audout_stream_dispatch(unsigned session,uint8_t *buffer,const IpcReq
   {  /* The thread that feeds the sound runs above normal priority: when it is late the sound queue runs dry and the
       * sound stays behind the picture (cutscenes drifted out of sync after "AUDIO underrun" lines). */
    static __thread int raised;
-   if(!raised) {raised=1;SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_HIGHEST);
+   if(!raised) {raised=1;SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_HIGHEST);sound_guest_thread=current_thread;
     printf("AUDOUT sound thread (guest thread %u) at high priority\n",current_thread);}
   }
   audout_memory(request->send_address,40,1,"audout-buffer-not-readable");

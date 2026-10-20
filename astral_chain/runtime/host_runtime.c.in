@@ -46,16 +46,23 @@ static unsigned klock_depth;
 static uint64_t klock_contended,klock_contended_qpc;  /* (updated under the lock) */
 static uint64_t nvn_contended,nvn_contended_qpc;  /* (nvn_hle.h nvn_lock; parallel stats) */
 static uint64_t nvn_thread_qpc[33],nvn_thread_calls[33];  /* host time in NVN calls per guest thread (parallel stats) */
+/* (stall reports) the guest thread holding the lock for a supervisor call, and the call; the sound thread */
+static volatile unsigned klock_holder=99,klock_holder_svc;
+static unsigned sound_guest_thread=99;
 static void klock(void) {
  if(!parallel_mode) return;
  DWORD me=GetCurrentThreadId();
  if(klock_owner==me) {klock_depth++;return;}
  if(!TryAcquireSRWLockExclusive(&klock_srw)) {  /* contended: count the time (parallel stats) */
-  LARGE_INTEGER a,b;QueryPerformanceCounter(&a);
+  unsigned holder=klock_holder,svc=klock_holder_svc;
+  LARGE_INTEGER a,b,f;QueryPerformanceCounter(&a);
   AcquireSRWLockExclusive(&klock_srw);
   QueryPerformanceCounter(&b);klock_contended_qpc+=(uint64_t)(b.QuadPart-a.QuadPart);klock_contended++;
+  QueryPerformanceFrequency(&f);double ms=1000.0*(double)(b.QuadPart-a.QuadPart)/(double)f.QuadPart;
+  if(ms>30.0) printf("KLOCK host thread %lu waited %.0f ms for the kernel lock (last held for guest thread %u, svc 0x%x)\n",
+   (unsigned long)me,ms,holder,svc);
  }
- klock_owner=me;klock_depth=1;
+ klock_owner=me;klock_depth=1;klock_holder=99;klock_holder_svc=0;
 }
 static void kunlock(void) {
  if(!parallel_mode) return;
@@ -448,6 +455,7 @@ void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
   c->x[0]=0;return;
  }
  klock();threads_initialize();
+ klock_holder=current_thread;klock_holder_svc=imm;
  rt_svc_body(c,imm,pc);
  if(guest_threads[current_thread].status!=THREAD_RUNNABLE) parallel_block();
  if(guest_threads[current_thread].status==THREAD_EXITED) {

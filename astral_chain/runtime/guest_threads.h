@@ -309,6 +309,12 @@ static void parallel_block(void) {
  parallel_block_wait();
  if(kind<10) {parallel_wait_ticks[self][kind]+=rt_ticks()-start;parallel_wait_count[self][kind]++;}
  if(kind==THREAD_WAIT_MUTEX && owner<33) parallel_mutex_ticks[self][owner]+=rt_ticks()-start;
+ if(self==sound_guest_thread && rt_ticks()-start>19200*40) {  /* the sound thread late: the sound queue may run dry */
+  static const char *const kinds[]={"?","?","?","?","a mutex","sleep","a condition","an address","objects (events)","the GPU"};
+  printf("SOUND thread waited %.0f ms on %s",(double)(rt_ticks()-start)/19200.0,kind<10 ? kinds[kind] : "?");
+  if(kind==THREAD_WAIT_MUTEX) printf(" held by guest thread %u",owner);
+  printf("\n");
+ }
  parallel_stats();
 }
 static void parallel_block_wait(void) {
