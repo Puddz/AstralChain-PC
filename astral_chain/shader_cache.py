@@ -4,11 +4,11 @@ The game's shaders are all in one archive of its RomFS, root.pkz (PlatinumGames 
 format research: github.com/cabalex/astral-extractor). They are extracted once to game/shaders as <name>.code /
 <name>.control pairs, the two halves the game hands to nvnProgramSetShaders.
 
-At each launch, shader_precompile (runtime/shader_precompile.c) translates them for every known draw-time variant
-and compiles the SPIR-V that is missing from build/game/cache/spirv, on all cores. Known variants: the list shipped
-in astral_chain/data/shader_variants.bin (hashes of shader code and the draw state they were used with, no game
-data) and the ones recorded on this PC (build/game/cache/programs.bin). Shaders met for the first time in play are
-still compiled then, and recorded for the next launch.
+Then shader_precompile (runtime/shader_precompile.c) translates every one of them and compiles the SPIR-V missing
+from build/game/cache/spirv, on all cores: about 20 s the first time, nothing afterwards until something changes.
+It also covers the recorded variants: the list shipped in astral_chain/data/shader_variants.bin (hashes of shader
+code and the draw state they were used with, no game data) and the ones recorded on this PC
+(build/game/cache/programs.bin), for the few draws whose shaders differ from the generic translation.
 """
 from pathlib import Path
 import hashlib
@@ -139,6 +139,13 @@ def build_tool(zig: Path, build: Path) -> Path:
 
 def precompile(tool: Path, shaders: Path, game_build: Path, glslang: Path) -> None:
     records = [str(p) for p in (SHIPPED_VARIANTS, game_build/'cache'/'programs.bin') if p.is_file()]
+    # Nothing new since the last complete run (same tool, same records): skip the 2-second check of the cache
+    stamp = game_build/'cache'/'spirv'/'precompiled.txt'
+    state = ' '.join([tool.parent.name] + [f'{Path(r).stat().st_size}' for r in records])
+    if stamp.is_file() and stamp.read_text(encoding='ascii') == state:
+        return
+    for leftover in (game_build/'cache'/'spirv').glob('*.spv.*'):  # (stores whose rename failed, before spirv_cache.c retried)
+        leftover.unlink(missing_ok=True)
     threads = max(1, (os.cpu_count() or 4) - 2)
     env = dict(os.environ, AC_GLSLANG=str(glslang))
     process = subprocess.Popen([str(tool), str(shaders), str(threads), *records], cwd=game_build, env=env,
@@ -155,6 +162,8 @@ def precompile(tool: Path, shaders: Path, game_build: Path, glslang: Path) -> No
             variants, unknown, compiled, cached, failed = map(int, words[1:])
             print(f'  Shaders ready: {compiled} compiled now, {cached} already cached'
                   + (f', {failed} failed' if failed else ''))
+            if not failed:
+                stamp.write_text(state, encoding='ascii')
     process.wait()
 
 

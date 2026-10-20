@@ -1,12 +1,12 @@
 /* Shader precompiler: fills the SPIR-V cache (cache/spirv in the current directory) before the game runs.
  *
- * The game's shaders come from its own files (astral_chain/shader_extract.py writes <name>.code / <name>.control
- * pairs from root.pkz). Vertex and fragment shaders are translated for the draw-time variants listed in program
- * records (the runtime's cache/programs.bin format: hashes of the vertex and fragment code, and both ShaderKeys);
- * compute shaders depend on their code only and are all translated. Translation, the SPIR-V compile and the cache
+ * The game's shaders come from its own files (astral_chain/shader_cache.py writes <name>.code / <name>.control
+ * pairs from root.pkz). Every shader is translated with the draw-time keys play uses (see main), and vertex and
+ * fragment shaders also for the variants listed in program records (the runtime's cache/programs.bin format: hashes
+ * of the vertex and fragment code, and both ShaderKeys). Translation, the SPIR-V compile and the cache
  * file names are the runtime's own code (translate-reviewed.c, vulkan/spirv_cache.c), so the game finds every result.
  *
- *   shader_precompile <shader folder> <threads> <records file>...
+ *   shader_precompile <shader folder> <threads> [<records file>...]
  *
  * Output: progress lines, then "done <variants matched> <variants without code> <compiled> <cached> <failed>". */
 #include <pthread.h>
@@ -107,16 +107,20 @@ typedef struct { uint64_t vh, fh; ShaderKey vkey, fkey; } WarmRec;
 #define WARM_MAGIC (0x4D524157u ^ (uint32_t)sizeof(WarmRec))
 
 // --- compile jobs: GLSL sources, compiled on worker threads through the runtime's cache
-typedef struct { char *src; int stage; } Job;
+typedef struct { char *src; int stage; bool recorded, generic; } Job;
 static Job *jobs;
 static int njobs, capjobs;
 static atomic_int next_job, compiled, cached, failed, finished;
 
-static void add_job(const char *src, int stage) {
-    for (int i = 0; i < njobs; i++) if (jobs[i].stage == stage && !strcmp(jobs[i].src, src)) return;  // (shared shaders)
+static void add_job(const char *src, int stage, bool recorded) {
+    for (int i = 0; i < njobs; i++) {
+        if (jobs[i].stage == stage && !strcmp(jobs[i].src, src)) {  // (shared shaders)
+            if (recorded) jobs[i].recorded = true; else jobs[i].generic = true;
+            return;
+        }
+    }
     if (njobs == capjobs) { capjobs = capjobs ? capjobs * 2 : 1024; jobs = realloc(jobs, (size_t)capjobs * sizeof *jobs); }
-    jobs[njobs].src = _strdup(src);
-    jobs[njobs].stage = stage;
+    jobs[njobs] = (Job){_strdup(src), stage, recorded, !recorded};
     njobs++;
 }
 
@@ -145,7 +149,7 @@ static void *worker(void *arg) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 4) { fprintf(stderr, "usage: shader_precompile <shader folder> <threads> <records file>...\n"); return 2; }
+    if (argc < 3) { fprintf(stderr, "usage: shader_precompile <shader folder> <threads> [<records file>...]\n"); return 2; }
     load_codes(argv[1]);
     if (!ncodes) { fprintf(stderr, "no shaders in %s\n", argv[1]); return 1; }
     maxwell_gmem_base = 0x7200000000ull;  // (as the runtime: HEAP_BASE, HEAP_MAX)
@@ -170,22 +174,47 @@ int main(int argc, char **argv) {
             r.fkey.vs_out_mask = vi->out_mask;
             ShaderInfo *fi = fs ? maxwell_translate(fs->code, fs->const_offset, STAGE_FRAGMENT, &r.fkey) : NULL;
             if (fs && (!fi || !fi->msl)) { missing++; continue; }
-            add_job(vi->msl, STAGE_VERTEX);
-            add_job(fi ? fi->msl : "#version 460\nvoid main() {}\n", STAGE_FRAGMENT);
+            add_job(vi->msl, STAGE_VERTEX, true);
+            add_job(fi ? fi->msl : "#version 460\nvoid main() {}\n", STAGE_FRAGMENT, true);
             matched++;
         }
         free(data);
     }
-    // compute: exec.c compute_program (key: GLSL only), window as for the others
+    // Every shader of the game, with the draw-time keys play uses (the recorded variants: Astral Chain draws with
+    // float vertex attributes, except attribute 2 = unsigned bone indices in skinned meshes; float render targets;
+    // no flips, depth [0, 1]). A fragment shader depends on its vertex shader only through the varyings it reads
+    // that the vertex shader leaves out; assume none are (each vertex shader is written for its fragment shaders).
+    // Compute: exec.c compute_program (key: GLSL only).
+    int translated = 0;
+    add_job("#version 460\nvoid main() {}\n", STAGE_FRAGMENT, false);  // (programs without a fragment shader: depth only)
     for (int i = 0; i < ncodes; i++) {
-        if (codes[i].stage != 5) continue;
+        Code *c = &codes[i];
         ShaderKey k = {0};
         k.glsl = 1;
-        size_t window = codes[i].const_offset ? codes[i].const_offset : codes[i].size;
-        ShaderInfo *ci = maxwell_translate(codes[i].code, window, STAGE_COMPUTE, &k);
-        if (ci && ci->msl) add_job(ci->msl, STAGE_COMPUTE);
+        ShaderInfo *si;
+        if (c->stage == STAGE_VERTEX) {
+            if (!c->const_offset || c->const_offset > c->size) continue;
+            if ((si = maxwell_translate(c->code, c->const_offset, STAGE_VERTEX, &k)) && si->msl) {
+                add_job(si->msl, STAGE_VERTEX, false);
+                translated++;
+                if (si->attr_mask & 4) {  // (skinned)
+                    k.attr_kind[2] = 2;
+                    if ((si = maxwell_translate(c->code, c->const_offset, STAGE_VERTEX, &k)) && si->msl) add_job(si->msl, STAGE_VERTEX, false);
+                }
+            }
+        } else if (c->stage == STAGE_FRAGMENT) {
+            if (!c->const_offset || c->const_offset > c->size) continue;
+            k.vs_out_mask = 0xFFFFFFFFu;
+            if ((si = maxwell_translate(c->code, c->const_offset, STAGE_FRAGMENT, &k)) && si->msl) { add_job(si->msl, STAGE_FRAGMENT, false); translated++; }
+        } else if (c->stage == STAGE_COMPUTE) {
+            size_t window = c->const_offset ? c->const_offset : c->size;
+            if ((si = maxwell_translate(c->code, window, STAGE_COMPUTE, &k)) && si->msl) { add_job(si->msl, STAGE_COMPUTE, false); translated++; }
+        }
     }
-    printf("shaders %d, variants %d (without code %d), sources %d\n", ncodes, matched, missing, njobs);
+    int recorded = 0, covered = 0;
+    for (int i = 0; i < njobs; i++) if (jobs[i].recorded) { recorded++; covered += jobs[i].generic; }
+    printf("shaders %d (translated %d), variants %d (without code %d), sources %d; recorded sources %d, of them also"
+           " from the generic pass %d\n", ncodes, translated, matched, missing, njobs, recorded, covered);
     fflush(stdout);
     CreateDirectoryA("cache", NULL);
     CreateDirectoryA("cache\\spirv", NULL);

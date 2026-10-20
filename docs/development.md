@@ -81,7 +81,7 @@ load it. The game's own autosaves usually come right before story cutscenes.
 | `setup_game.py` | Setup and rebuild-on-update |
 | `native_trace.py` | Loads the NSOs, applies patches, translates, generates C, builds, writes `run-env.txt` |
 | `native_build.py`, `nvn_build.py`, `shader_build.py` | Cached compilation of code units, the NVN layer and the patched shader translator |
-| `shader_cache.py`, `runtime/shader_precompile.c` | Shader precompilation: extracts the shaders from `root.pkz` to `game\shaders`, compiles the variants of `data/shader_variants.bin` and `cache/programs.bin` into `cache/spirv` |
+| `shader_cache.py`, `runtime/shader_precompile.c` | Shader precompilation: extracts the shaders from `root.pkz` to `game\shaders`, compiles every one of them (generic draw-time keys) plus the variants of `data/shader_variants.bin` and `cache/programs.bin` into `cache/spirv` |
 | `data/shader_variants.bin` | Known shader variants (code hashes and draw-time keys, `programs.bin` format; no game data). Grows from test runs |
 | `runtime/host_runtime.c.in` | Kernel and services runtime |
 | `runtime/guest_threads.h` | Guest threads and the parallel scheduler |

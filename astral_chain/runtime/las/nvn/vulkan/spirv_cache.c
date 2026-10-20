@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "../../rt.h"
 #include "../maxwell/shader.h"
@@ -52,7 +53,11 @@ static void cache_store(uint64_t h, const uint32_t *spv, size_t nwords) {
     if (!f) return;
     bool ok = fwrite(spv, 4, nwords, f) == nwords;
     fclose(f);
-    if (!ok || rename(tmp, path) != 0) remove(tmp);  // (another thread may have stored it first)
+    // (another thread may have stored it first. A virus scanner can hold the new file for a moment: renames failed
+    // for about 1 in 70 files on a full precompile, leaving those shaders to compile again at every launch)
+    struct stat st;
+    for (int tries = 0; ok && rename(tmp, path) != 0 && stat(path, &st) != 0 && tries < 50; tries++) usleep(10000);
+    remove(tmp);
 }
 
 // Vertex shaders: every float add/sub/mul/div/fma gets NoContraction, so no compiler fuses or splits them. Depth
