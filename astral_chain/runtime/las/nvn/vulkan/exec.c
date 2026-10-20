@@ -33,6 +33,9 @@ uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
 #define PROF_T0() uint64_t prof_t0_ = prof ? SDL_GetTicksNS() : 0
 #define PROF_ADD(v) do { if (prof) v += SDL_GetTicksNS() - prof_t0_; } while (0)
 static _Atomic int stat_compiles;
+_Atomic unsigned long long vk_pipelines_built;  // (device.c: the pipeline cache is saved after new builds)
+// shader/pipeline build time per stats interval (ns): Maxwell translation, SPIR-V (cache or glslang), pipelines
+static _Atomic unsigned long long build_ns_translate, build_ns_spirv, build_ns_pipe;
 static uint64_t op_counts[CMD_COUNT];
 bool g_debug_frame;
 static char stats_text[2048];
@@ -781,6 +784,13 @@ const char *renderer_stats(void) {
              atomic_exchange(&stat_compiles, 0), (unsigned long long)stat_feedback_copies, (double)stat_upload_bytes / 1048576.0);
     stat_feedback_copies = stat_upload_bytes = 0;
     {
+        unsigned long long tr = atomic_exchange(&build_ns_translate, 0), sp = atomic_exchange(&build_ns_spirv, 0),
+                           pi = atomic_exchange(&build_ns_pipe, 0);
+        size_t n = strlen(stats_text);
+        if (tr || sp || pi)
+            snprintf(stats_text + n, sizeof stats_text - n, ", build ms translate %.0f spirv %.0f pipelines %.0f", tr / 1e6, sp / 1e6, pi / 1e6);
+    }
+    {
         size_t n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, ", mirror in %.1fMB, write-back %.1fMB in %llu (%llu faults, %d lazy)",
                  (double)stat_mirror_bytes / 1048576.0, (double)stat_wb_bytes / 1048576.0, (unsigned long long)stat_wb_ranges,
@@ -1281,8 +1291,10 @@ static void save_shader_input(uint64_t addr, uint64_t size, const ShaderKey *key
 static void compile_program(void *arg) {
     Prog *p = arg;
     size_t nv = 0, nf = 0;
+    uint64_t bt0 = SDL_GetTicksNS();
     uint32_t *sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
     uint32_t *sf = sv ? vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf) : NULL;
+    atomic_fetch_add(&build_ns_spirv, SDL_GetTicksNS() - bt0);
     if (!sv || !sf) { free(sv); free(sf); atomic_store(&p->state, 2); return; }
     p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
@@ -1291,7 +1303,7 @@ static void compile_program(void *arg) {
     free(sv);
     free(sf);
     p->layout = make_layout(p, 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
-    atomic_fetch_add(&stat_compiles, 1);
+    atomic_fetch_add(&stat_compiles, 1); atomic_fetch_add(&vk_pipelines_built, 1);
     atomic_store(&p->state, p->vs && p->fs ? 1 : 2);
 }
 
@@ -1299,6 +1311,7 @@ static void translate_program(void *arg) {
     Prog *p = arg;
     maxwell_gmem_base = HEAP_BASE;
     maxwell_gmem_size = HEAP_MAX;
+    uint64_t bt0 = SDL_GetTicksNS();
     pthread_mutex_lock(&translate_lock);
     save_shader_input(p->code[0], p->cmax[0], &p->vkey, "vs");
     p->vi = maxwell_translate((const uint8_t *)(uintptr_t)p->code[0], p->cmax[0], STAGE_VERTEX, &p->vkey);
@@ -1314,6 +1327,7 @@ static void translate_program(void *arg) {
         }
     }
     pthread_mutex_unlock(&translate_lock);
+    atomic_fetch_add(&build_ns_translate, SDL_GetTicksNS() - bt0);
     if (!p->vi->msl) {
         LOG("[shader] VS translate failed: %s (code %llx)\n", p->vi->error, (unsigned long long)p->code[0]);
         atomic_store(&p->state, 2);
@@ -1627,12 +1641,14 @@ static void build_pipeline(void *arg) {
                                        .pStages = stages, .pVertexInputState = &vi, .pInputAssemblyState = &ia, .pViewportState = &vs,
                                        .pRasterizationState = &rs, .pMultisampleState = &ms, .pDepthStencilState = &ds,
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = k->prog->layout};
+    uint64_t bt0 = SDL_GetTicksNS();
     VkResult r = vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &pp->pipe);
+    atomic_fetch_add(&build_ns_pipe, SDL_GetTicksNS() - bt0);
     if (r != VK_SUCCESS) {
         static int n;
         if (n++ < 10) LOG("[vk] pipeline creation failed: %d\n", r);
     }
-    atomic_fetch_add(&stat_compiles, 1);
+    atomic_fetch_add(&stat_compiles, 1); atomic_fetch_add(&vk_pipelines_built, 1);
     atomic_store(&pp->state, r == VK_SUCCESS ? 1 : 2);
 }
 
@@ -2841,7 +2857,7 @@ static void build_compute(void *arg) {
                                                 .pSpecializationInfo = &spec},
                                       .layout = cp->p.layout};
     VkResult r = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &cp->pipe);
-    atomic_fetch_add(&stat_compiles, 1);
+    atomic_fetch_add(&stat_compiles, 1); atomic_fetch_add(&vk_pipelines_built, 1);
     atomic_store(&cp->p.state, r == VK_SUCCESS ? 1 : 2);
     if (r != VK_SUCCESS) LOG("[compute] pipeline failed: %d\n", r);
 }

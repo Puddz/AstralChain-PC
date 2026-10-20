@@ -583,6 +583,17 @@ void backend_present(NvnTexture *t) {
     if (slow_ms > 0 && total_frames > 2600 && (!slow_until || (long)total_frames < slow_until)) SDL_Delay((Uint32)slow_ms);
     extern void vk_level_change_check(void);
     vk_level_change_check();
+    {   // The pipeline cache was only written at a clean exit, which closing the window or the watchdog never reaches:
+        // every session rebuilt every pipeline, and cutscenes stalled behind their audio on first sight. Save it
+        // once new builds have settled (5 s without one).
+        extern _Atomic unsigned long long vk_pipelines_built;
+        static unsigned long long saved_count, seen_count;
+        static uint64_t seen_ns;
+        unsigned long long built = atomic_load(&vk_pipelines_built);
+        uint64_t now_ns = plat_now_ns();
+        if (built != seen_count) { seen_count = built; seen_ns = now_ns; }
+        else if (built != saved_count && now_ns - seen_ns > 5000000000ull) { saved_count = built; vk_pipeline_cache_save(); }
+    }
     static long shot_every = -1;
     if (shot_every < 0) { const char *e = getenv("LARECOMP_SCREENSHOT_EVERY"); shot_every = e ? atol(e) : 0; }
     extern bool g_debug_frame;

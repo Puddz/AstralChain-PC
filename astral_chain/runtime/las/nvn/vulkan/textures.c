@@ -494,6 +494,44 @@ static void upload_pending(TexBackend *b) {
                 vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
 }
 
+// ASTC on GPUs without it (NVIDIA desktop: textureCompressionASTC_LDR false) is decoded on the CPU, 16x the bytes
+// out. One thread took 0.4-2 s whenever a scene brought new 4096x4096 character textures (loading screens, the start
+// of cutscenes, which then ran behind their audio). Large textures are split by block rows over the CPU's cores.
+#include <SDL3/SDL_cpuinfo.h>
+typedef struct { const uint8_t *blocks; uint32_t w, h, bw, bh; bool srgb; uint8_t *out; } AstcPart;
+static void *astc_part(void *arg) {
+    AstcPart *p = arg;
+    astc_decode_ldr(p->blocks, p->w, p->h, p->bw, p->bh, p->srgb, p->out);
+    return NULL;
+}
+static void astc_decode_parallel(const uint8_t *blocks, uint32_t w, uint32_t h, uint32_t bw, uint32_t bh, bool srgb,
+                                 uint8_t *out) {
+    static int threads;
+    if (!threads) {
+        threads = SDL_GetNumLogicalCPUCores() - 2;
+        if (threads < 1) threads = 1;
+        if (threads > 16) threads = 16;
+    }
+    uint32_t bx = (w + bw - 1) / bw, by = (h + bh - 1) / bh;
+    if (threads < 2 || (uint64_t)bx * by < 4096 || by < 2) { astc_decode_ldr(blocks, w, h, bw, bh, srgb, out); return; }
+    uint32_t n = (uint32_t)threads < by ? (uint32_t)threads : by, per = (by + n - 1) / n;
+    AstcPart parts[16];
+    pthread_t tid[16];
+    int k = 0;
+    for (uint32_t j = 0; j < by && k < 16; j += per, k++) {
+        uint32_t y0 = j * bh, rows = by - j < per ? by - j : per;
+        uint32_t ph = y0 + rows * bh > h ? h - y0 : rows * bh;
+        parts[k] = (AstcPart){blocks + 16 * (size_t)j * bx, w, ph, bw, bh, srgb, out + (size_t)y0 * w * 4};
+    }
+    bool started[16] = {0};
+    for (int i = 1; i < k; i++) started[i] = pthread_create(&tid[i], NULL, astc_part, &parts[i]) == 0;
+    astc_part(&parts[0]);
+    for (int i = 1; i < k; i++) {
+        if (started[i]) pthread_join(tid[i], NULL);
+        else astc_part(&parts[i]);
+    }
+}
+
 uint64_t prof_tex_checks, prof_tex_samples, prof_tex_full, prof_tex_full_bytes, prof_tex_dyn, prof_tex_watch_skips, prof_tex_unknown;
 static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (!t->addr || t->target == 10) return;
@@ -566,7 +604,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 else tegra_deswizzle(src, blocks, l.wb, l.hb, 1, 16, l.block_height_log2, l.block_depth_log2);
                 if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, blocks, l.w, l.h, l.wb * 16);
                 VkSpan s = vk_transient((uint64_t)l.w * l.h * 4, 16);
-                astc_decode_ldr(blocks, l.w, l.h, b->astc_bw, b->astc_bh, b->astc_srgb, s.ptr);
+                astc_decode_parallel(blocks, l.w, l.h, b->astc_bw, b->astc_bh, b->astc_srgb, s.ptr);
                 {   // LARECOMP_DUMP_ASTC=<min width>: level-0 blocks and our decode of up to 16 textures (decoder tests)
                     static int dumped = -1;
                     static long minw;
