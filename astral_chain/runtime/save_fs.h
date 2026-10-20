@@ -82,13 +82,79 @@ static DWORD save_delete_tree(const wchar_t *directory) {
  return RemoveDirectoryW(directory)?0:GetLastError();
 }
 static uint64_t save_capacity(const SaveStore *store) {uint64_t size;memcpy(&size,store->identity+40,8);return size;}
+/* Each commit is also copied, in the background, to <save>-snapshots\<date-time>\data (the newest 30 are kept):
+ * checkpoints to load again later, e.g. the one just before a cutscene (tests with AC_DATA_DIR), and a backup.
+ * AC_SAVE_SNAPSHOTS=0 turns this off. */
+static void snapshot_copy(const wchar_t *from,const wchar_t *to) {
+ CreateDirectoryW(to,NULL);
+ wchar_t pattern[1100];swprintf(pattern,1100,L"%ls\\*",from);
+ WIN32_FIND_DATAW f;HANDLE h=FindFirstFileW(pattern,&f);if(h==INVALID_HANDLE_VALUE)return;
+ do {
+  if(!wcscmp(f.cFileName,L".") || !wcscmp(f.cFileName,L".."))continue;
+  wchar_t a[1100],b[1100];swprintf(a,1100,L"%ls\\%ls",from,f.cFileName);swprintf(b,1100,L"%ls\\%ls",to,f.cFileName);
+  if(f.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) snapshot_copy(a,b); else CopyFileW(a,b,FALSE);
+ } while(FindNextFileW(h,&f));
+ FindClose(h);
+}
+static void snapshot_delete(const wchar_t *path) {
+ wchar_t pattern[1100];swprintf(pattern,1100,L"%ls\\*",path);
+ WIN32_FIND_DATAW f;HANDLE h=FindFirstFileW(pattern,&f);
+ if(h!=INVALID_HANDLE_VALUE) {
+  do {
+   if(!wcscmp(f.cFileName,L".") || !wcscmp(f.cFileName,L".."))continue;
+   wchar_t a[1100];swprintf(a,1100,L"%ls\\%ls",path,f.cFileName);
+   if(f.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) snapshot_delete(a); else DeleteFileW(a);
+  } while(FindNextFileW(h,&f));
+  FindClose(h);
+ }
+ RemoveDirectoryW(path);
+}
+static wchar_t snapshot_root[221];
+static volatile LONG snapshot_busy;
+static DWORD WINAPI snapshot_thread(void *argument) {
+ (void)argument;
+ Sleep(500);  /* (writes made right after the commit call) */
+ wchar_t dir[1100],from[1100],to[1100];
+ swprintf(dir,1100,L"\\\\?\\%ls-snapshots",snapshot_root);CreateDirectoryW(dir,NULL);
+ SYSTEMTIME t;GetLocalTime(&t);
+ swprintf(to,1100,L"%ls\\%04u%02u%02u-%02u%02u%02u",dir,t.wYear,t.wMonth,t.wDay,t.wHour,t.wMinute,t.wSecond);
+ CreateDirectoryW(to,NULL);wcscat(to,L"\\data");
+ swprintf(from,1100,L"\\\\?\\%ls\\data",snapshot_root);
+ snapshot_copy(from,to);
+ /* keep the newest 30 (names sort by time) */
+ wchar_t pattern[1100],names[64][32];unsigned n=0;swprintf(pattern,1100,L"%ls\\*",dir);
+ WIN32_FIND_DATAW f;HANDLE h=FindFirstFileW(pattern,&f);
+ if(h!=INVALID_HANDLE_VALUE) {
+  do if((f.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) && f.cFileName[0]!=L'.' && wcslen(f.cFileName)<32 && n<64)
+   wcscpy(names[n++],f.cFileName);
+  while(FindNextFileW(h,&f));
+  FindClose(h);
+ }
+ while(n>30) {
+  unsigned oldest=0;for(unsigned j=1;j<n;j++) if(wcscmp(names[j],names[oldest])<0) oldest=j;
+  wchar_t old[1100];swprintf(old,1100,L"%ls\\%ls",dir,names[oldest]);snapshot_delete(old);
+  wcscpy(names[oldest],names[--n]);
+ }
+ printf("SAVE snapshot %ls\n",to);
+ snapshot_busy=0;
+ return 0;
+}
+static void save_snapshot(SaveStore *store) {
+ static int on=-1;
+ if(on<0) {char v[8];DWORD n=GetEnvironmentVariableA("AC_SAVE_SNAPSHOTS",v,sizeof(v));on=!(n && n<sizeof(v) && v[0]=='0');}
+ if(!on || !store->ready)return;
+ if(InterlockedCompareExchange(&snapshot_busy,1,0))return;  /* one copy at a time */
+ wcscpy(snapshot_root,store->root);
+ HANDLE thread=CreateThread(NULL,0,snapshot_thread,NULL,0,NULL);
+ if(thread) CloseHandle(thread); else snapshot_busy=0;
+}
 /* Returns 1 when handled; result is the Horizon result for the reply. */
 static int save_fs_command(SaveStore *store,const IpcRequest *request,const uint8_t *input,
                            uint32_t *result,uint64_t *value,int *has_value,HANDLE *opened) {
  *result=0;*has_value=0;*opened=NULL;
  unsigned command=request->command;
  if(command==10) { /* Commit: writes are already in place; make them durable. */
-  printf("SAVE commit\n");return 1;
+  printf("SAVE commit\n");save_snapshot(store);return 1;
  }
  if(command==11 || command==12) {
   wchar_t root[1100];swprintf(root,1100,L"\\\\?\\%ls\\data",store->root);

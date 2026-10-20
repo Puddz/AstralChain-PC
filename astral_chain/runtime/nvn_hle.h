@@ -216,6 +216,14 @@ void guest_call(Cpu *c,uint64_t address) {
  thread_switch_locked--;nvn_nested_guest_calls--;c->pc=pc;c->x[30]=lr;
 }
 __attribute__((noreturn)) void nvn_glue_fatal(const char *message) {boundary(message,&state,state.pc);}
+#include <stdarg.h>
+void rt_log(const char *format,...) {
+ char text[16384];va_list args;va_start(args,format);
+ int n=vsnprintf(text,sizeof text,format,args);va_end(args);
+ if(n<0)return;
+ if((size_t)n>=sizeof text) {va_start(args,format);vfprintf(stderr,format,args);va_end(args);return;}
+ fwrite(text,1,(size_t)n,stderr);
+}
 uint64_t plat_now_ns(void) {
  static LARGE_INTEGER frequency;LARGE_INTEGER now;
  if(!frequency.QuadPart)QueryPerformanceFrequency(&frequency);

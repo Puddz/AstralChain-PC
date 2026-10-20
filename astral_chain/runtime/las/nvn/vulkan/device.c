@@ -580,7 +580,18 @@ void backend_present(NvnTexture *t) {
     if (slow_ms < 0) slow_ms = getenv("LARECOMP_SLOW_FRAME_MS") ? atol(getenv("LARECOMP_SLOW_FRAME_MS")) : 0;
     static long slow_until = -1;  // LARECOMP_SLOW_FRAME_UNTIL=<frame>: the stall ends there (frame pacing recovery tests)
     if (slow_until < 0) slow_until = getenv("LARECOMP_SLOW_FRAME_UNTIL") ? atol(getenv("LARECOMP_SLOW_FRAME_UNTIL")) : 0;
-    if (slow_ms > 0 && total_frames > 2600 && (!slow_until || (long)total_frames < slow_until)) SDL_Delay((Uint32)slow_ms);
+    static long slow_from = -1;  // LARECOMP_SLOW_FRAME_FROM=<frame>: the stall starts there (default 2600)
+    if (slow_from < 0) slow_from = getenv("LARECOMP_SLOW_FRAME_FROM") ? atol(getenv("LARECOMP_SLOW_FRAME_FROM")) : 2601;
+    static long slow_every = -1;  // LARECOMP_SLOW_FRAME_EVERY=<n>: only every n-th frame of that range
+    if (slow_every < 0) slow_every = getenv("LARECOMP_SLOW_FRAME_EVERY") ? atol(getenv("LARECOMP_SLOW_FRAME_EVERY")) : 1;
+    if (slow_ms > 0 && (long)total_frames >= slow_from && (!slow_until || (long)total_frames < slow_until) &&
+        (slow_every <= 1 || ((long)total_frames - slow_from) % slow_every == 0))
+        SDL_Delay((Uint32)slow_ms);
+    for (const char *p = getenv("LARECOMP_STALLS"); p && *p;) {  // <frame>:<ms>,...: single stalls (A/V sync tests)
+        long at = strtol(p, (char **)&p, 10), ms = *p == ':' ? strtol(p + 1, (char **)&p, 10) : 0;
+        if (at == (long)total_frames && ms > 0) SDL_Delay((Uint32)ms);
+        if (*p == ',') p++; else break;
+    }
     extern void vk_level_change_check(void);
     vk_level_change_check();
     {   // The pipeline cache was only written at a clean exit, which closing the window or the watchdog never reaches:
@@ -657,6 +668,7 @@ void backend_present(NvnTexture *t) {
         if (shot_from) mkdir("frames", 0755);
         snprintf(path, sizeof path, shot_from ? "frames/frame_%05llu.png" : "frame_%05llu.png",
                  (unsigned long long)total_frames);
+        if (shot_from) LOG("[shot] frame %llu at %.4f s\n", (unsigned long long)total_frames, plat_now_ns() / 1e9);  // (A/V sync)
         renderer_save_texture_tex(b, path);
         // a series (SCREENSHOT_FROM) runs on until LARECOMP_WINDOW_SHOT exits
         if (getenv("LARECOMP_EXIT_AFTER_SHOT") && !shot_from) { fflush(stderr); _exit(0); }

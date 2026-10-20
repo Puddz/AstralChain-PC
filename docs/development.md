@@ -57,6 +57,19 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_DUMP_TEX=<min width>` | Level-0 data of up to 24 textures (as uploaded, unswizzled) to `tex_*.bin` in the run folder |
 | `LARECOMP_DUMP_ASTC=<min width>` | Blocks and CPU decode of up to 16 ASTC textures (GPUs without ASTC only) to `astc_*.bin` |
 | `LARECOMP_LOG_PACKAGED=1` | Log each texture's packaged layout (block height) |
+| `AC_CUTSCENE_STALL=<n>:<s>:<ms>[:<s>:<ms>...]` | Stall the game thread `<ms>` ms, `<s>` s after the n-th cutscene starts (A/V sync tests) |
+| `LARECOMP_STALLS=<frame>:<ms>,...` | Stall the render thread at those frames; `LARECOMP_SLOW_FRAME_MS` / `_FROM` / `_UNTIL` / `_EVERY` for ranges |
+| `AC_SAVE_SNAPSHOTS=0` | Do not copy each game save to `<save folder>-snapshots\<date-time>\` (on by default, newest 30 kept) |
+
+With `LARECOMP_VK_PROF=1`, frames over 50 ms are logged as `[hitch]` lines with their time split (texture uploads,
+waits for shader programs). `trace.log` always gets `CUTSCENE` lines (cutscene start and end, frames over 200 ms in a
+cutscene) and `AUDIO underrun` lines when the sound queue ran dry.
+
+### Testing from a checkpoint
+
+Game saves work as checkpoints: every save the game writes is also copied to `<save folder>-snapshots\<date-time>\`.
+To replay a moment, copy a snapshot's `data` folder over a test save folder (`AC_DATA_DIR=<folder>`, see above) and
+load it. The game's own autosaves usually come right before story cutscenes.
 
 ## Code map
 

@@ -97,9 +97,11 @@ game once, in about a minute. Your saves, game data and shader cache are kept.
 
 - Defeated enemies may leave dark remnants in the highway chase. A likely cause is fixed, but the fix is
   unconfirmed.
-- Cutscene audio was reported out of sync (the cutscene just before character creation, which started with a loading
-  pause). Since then textures and shaders are prepared ahead of time (no pause at its start in tests), and the 60 fps
-  cutscene keeps the same pace as the unmodified game (measured, within 0.1 s over 48 s). Not yet confirmed to fix it.
+- In-game cutscenes were reported to drift out of sync with their audio after a stutter, then resynchronize later.
+  Measured on the cutscene after the highway chase: stutters up to 0.4 s are caught up by the game, one of 0.6 s left
+  the picture 0.35-0.6 s behind until the game resynchronized the sound. A periodic 38 ms stutter (every 2 s, the
+  renderer's log) is fixed; the first frame of a cutscene can still take 0.2-0.3 s. Not yet confirmed fixed.
+- Rarely the game closes right at startup (`STOP host-shared-placeholder-reserve` in `trace.log`). Start it again.
 - Save-slot thumbnails are not captured (`nvnTextureReadTexels` is not implemented).
 
 Reports are welcome. Include `build\game\round-00\stderr.log` and your GPU and driver version, but no game files.

@@ -45,6 +45,7 @@ typedef struct {
  unsigned head,count,running,ready;
  uint64_t queued_bytes,position_epoch;
  uint32_t last_position;
+ double play_end,starved;  /* (QPC seconds) when the queued sound runs out; total time the queue was dry */
 } WaveOutput;
 
 static void CALLBACK wave_output_callback(HWAVEOUT wave,UINT message,DWORD_PTR context,DWORD_PTR first,DWORD_PTR second) {
@@ -80,7 +81,7 @@ static MMRESULT wave_output_open(WaveOutput *output,unsigned rate,unsigned chann
 static MMRESULT wave_output_start(WaveOutput *output) {
  if(!output->handle || !output->ready)return MMSYSERR_INVALHANDLE;
  MMRESULT result=wave_api.restart(output->handle);
- if(!result)output->running=1;
+ if(!result) {output->running=1;output->play_end=0;}
  return result;
 }
 static MMRESULT wave_output_pause(WaveOutput *output) {
@@ -104,8 +105,10 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
    if(n && n<sizeof(path)) {dump=fopen(path,"wb");
     FILETIME ft;GetSystemTimePreciseAsFileTime(&ft);  /* (wall clock of the first appended sample: A/V sync checks) */
     unsigned long long t100=((unsigned long long)ft.dwHighDateTime<<32|ft.dwLowDateTime);
-    printf("AUDIO dump %s rate=%lu channels=%u bits=16 first_append_unix=%.4f\n",path,(unsigned long)output->format.nSamplesPerSec,
-     output->format.nChannels,(double)(t100-116444736000000000ull)/1e7);fflush(stdout);}
+    LARGE_INTEGER f,q;QueryPerformanceFrequency(&f);QueryPerformanceCounter(&q);
+    printf("AUDIO dump %s rate=%lu channels=%u bits=16 first_append_unix=%.4f qpc=%.4f\n",path,
+     (unsigned long)output->format.nSamplesPerSec,output->format.nChannels,(double)(t100-116444736000000000ull)/1e7,
+     (double)q.QuadPart/(double)f.QuadPart);fflush(stdout);}
   }
   if(dump) {fwrite(pcm,1,size,dump);fflush(dump);}
  }
@@ -118,7 +121,18 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
   }
   free(buffer->header.lpData);memset(buffer,0,sizeof(*buffer));return result;
  }
- output->count++;output->queued_bytes+=size;return MMSYSERR_NOERROR;
+ output->count++;output->queued_bytes+=size;
+ if(output->running) {  /* the queue ran dry: the sound falls behind by the gap (A/V sync after stalls) */
+  LARGE_INTEGER f,q;QueryPerformanceFrequency(&f);QueryPerformanceCounter(&q);
+  double now=(double)q.QuadPart/(double)f.QuadPart;
+  if(output->play_end>0 && now>output->play_end) {
+   double gap=now-output->play_end;output->starved+=gap;
+   if(gap>0.01) printf("AUDIO underrun at %.3f s: %.1f ms (total %.1f ms)\n",now,gap*1e3,output->starved*1e3);
+  }
+  if(output->play_end<now)output->play_end=now;
+  output->play_end+=(double)size/output->format.nAvgBytesPerSec;
+ }
+ return MMSYSERR_NOERROR;
 }
 static MMRESULT wave_output_collect(WaveOutput *output,uint64_t *tags,unsigned capacity,unsigned *count) {
  if(!output->handle || !output->ready)return MMSYSERR_INVALHANDLE;

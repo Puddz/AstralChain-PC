@@ -427,6 +427,7 @@ static void reply_wide_value(uint8_t *buffer,const IpcRequest *request,uint64_t 
 #include "account_service.h"
 #include "save_service.h"
 static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc);
+static unsigned test_stall_ms;  /* (AC_CUTSCENE_STALL) slept after the kernel lock is released */
 /* Parallel mode: supervisor calls run under the kernel lock; any state change may wake other guest threads; a call
  * that leaves this thread waiting blocks its host thread (lock released while asleep); an exited thread ends. */
 void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
@@ -454,6 +455,7 @@ void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
   klock_release_all();ExitThread(0);
  }
  kunlock();
+ if(test_stall_ms) {unsigned ms=test_stall_ms;test_stall_ms=0;Sleep(ms);}
 }
 /* svc #0xB1 (astral_chain/patches/cutscene-catchup-1.0.1.pchtxt): Dynamic-FPS's step code reports each frame whether
  * the game's cutscene mode is on (w21 == 0); the runtime answers in w21 (the function restores x21 on return):
@@ -468,6 +470,30 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   if(at30<0) {char v[8];DWORD n=GetEnvironmentVariableA("AC_CUTSCENE_FPS",v,sizeof(v));at30=n && n<sizeof(v) && atoi(v)==30;}
   int cutscene=!(c->x[21]&1);
   cutscene_mode=cutscene && at30;
+  /* Cutscene A/V sync, measured on the cutscene after the highway chase (screenshots and recorded sound against a run
+   * without stalls): stalls of 150-400 ms are caught up by the game; one of 600 ms left the picture 0.35-0.6 s behind
+   * its sound until the game resynchronized the sound 15-20 s later. Catching up more per frame (repaying the stall's
+   * time in steps of 1-3 frames) changed nothing. CUTSCENE lines in trace.log time cutscenes and test stalls. */
+  {static int last=-1,count;static uint64_t on_at;
+   if(cutscene!=last) {
+    last=cutscene;if(cutscene) {count++;on_at=rt_ticks();}
+    printf("CUTSCENE mode %s at %.3f s\n",cutscene?"on":"off",(double)rt_ticks()/19200000.0);
+   }
+   /* AC_CUTSCENE_STALL=<n>:<seconds>:<ms>: one stall of <ms> that long after the n-th cutscene starts (A/V tests) */
+   static int sn=-1;static double ss;static unsigned sms;
+   if(sn<0) {char v[64];DWORD l=GetEnvironmentVariableA("AC_CUTSCENE_STALL",v,sizeof(v));sn=0;
+    if(l && l<sizeof(v) && sscanf(v,"%d:%lf:%u",&sn,&ss,&sms)!=3) sn=0;}
+   if(sn && cutscene && count==sn && (double)(rt_ticks()-on_at)/19200000.0>=ss) {
+    printf("CUTSCENE test stall %u ms at %.3f s\n",sms,(double)rt_ticks()/19200000.0);test_stall_ms=sms;
+    /* ...:<seconds>:<ms> repeated: further stalls */
+    {char v[64];DWORD l=GetEnvironmentVariableA("AC_CUTSCENE_STALL",v,sizeof(v));v[l<sizeof(v)?l:0]=0;
+     static int done;done++;char *p=v;for(int k=0;k<1+2*done && p;k++) {p=strchr(p,':');if(p)p++;}
+     sn=0;if(p && sscanf(p,"%lf:%u",&ss,&sms)==2) sn=count;}
+   }}
+  if(cutscene) {  /* frames long enough to matter for sync (see above), for reports */
+   float m;uint32_t b=(uint32_t)c->v[8];memcpy(&m,&b,4);
+   if(m>6.0f && m<9000.0f) printf("CUTSCENE long frame of %.0f ms at %.3f s\n",m*1000.0f/30.0f,(double)rt_ticks()/19200000.0);
+  }
   if(!cutscene_mode) {debt=0;was=0;return;}
   /* The original's fixed step of 1.0 per frame; whole extra frames once the picture is a frame or more behind real
    * time (a stall), up to 7. Late and early frames of the 30 FPS cadence cancel out. The first cutscene frame's time

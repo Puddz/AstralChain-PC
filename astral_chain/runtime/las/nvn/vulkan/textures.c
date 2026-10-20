@@ -857,10 +857,10 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     if (b->pending_rgba) upload_pending(b);
     if (for_render) b->gpu_owned = true;
     else if (!b->gpu_owned) {
-        extern uint64_t prof_up_ns;
+        extern uint64_t prof_up_ns, cum_up_ns;
         uint64_t t0 = prof_up_ns != ~0ull ? SDL_GetTicksNS() : 0;
         upload_texture(t, b);
-        if (prof_up_ns != ~0ull) prof_up_ns += SDL_GetTicksNS() - t0;
+        if (prof_up_ns != ~0ull) { prof_up_ns += SDL_GetTicksNS() - t0; cum_up_ns += SDL_GetTicksNS() - t0; }
     }
     return b;
 }

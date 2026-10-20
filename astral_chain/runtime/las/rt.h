@@ -4,7 +4,10 @@
 #include <stdio.h>
 #include "cpu.h"
 #include "platform.h"
-#define LOG(...) fprintf(stderr, __VA_ARGS__)
+/* One write per message (nvn_hle.h): stderr is unbuffered, and fprintf wrote it in pieces, ~38 ms for the 2-s stats
+ * line, a dropped frame every 2 s. */
+void rt_log(const char *format, ...) __attribute__((format(printf, 1, 2)));
+#define LOG(...) rt_log(__VA_ARGS__)
 void nvn_glue_fatal(const char *message) __attribute__((noreturn));
 #define FATAL(...) (fprintf(stderr, "FATAL: " __VA_ARGS__), nvn_glue_fatal("las-fatal"))
 typedef void (*HostFn)(Cpu *c);

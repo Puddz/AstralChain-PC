@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,7 @@ static VkQueryPool prof_qp;
 static uint64_t cum_exec, cum_wait, cum_draws, cum_submits;  // (profiling) never reset: hitch log
 static uint32_t prof_end_line[4096];  // passes ended, by the exec.c line that ended them (0: submit / present)
 uint64_t prof_views_created;  // textures.c vk_image_view cache misses
+uint64_t cum_up_ns, cum_built_ns;  // (profiling) texture upload checks, waits for pipelines: hitch log
 uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
 #define PROF_T0() uint64_t prof_t0_ = prof ? SDL_GetTicksNS() : 0
 #define PROF_ADD(v) do { if (prof) v += SDL_GetTicksNS() - prof_t0_; } while (0)
@@ -777,16 +779,18 @@ bool renderer_origin_lower_left(void) { return nvn_window_origin() == 0; }
 // present_ns: time in backend_present's acquire/blit/present.
 void vk_prof_frame(uint64_t frame, uint64_t present_ns) {
     if (!prof) return;
-    static uint64_t last_t, l_exec, l_wait, l_draws, l_subs;
+    static uint64_t last_t, l_exec, l_wait, l_draws, l_subs, l_up, l_built;
     uint64_t now = SDL_GetTicksNS();
     if (last_t && now - last_t > 50000000) {
         uint64_t dt = now - last_t, ex = cum_exec - l_exec, wt = cum_wait - l_wait;
-        LOG("[hitch] frame %llu: %.0f ms = backend exec %.1f (of which GPU waits %.1f) + present %.1f + other %.1f; %llu draws, "
-            "%llu submits, compiles %d pending\n", (unsigned long long)frame, dt / 1e6, ex / 1e6, wt / 1e6, present_ns / 1e6,
+        LOG("[hitch] frame %llu at %.3f s: %.0f ms = backend exec %.1f (of which GPU waits %.1f, texture uploads %.1f, waits for "
+            "pipelines %.1f) + present %.1f + other %.1f; %llu draws, %llu submits, compiles %d pending\n", (unsigned long long)frame,
+            now / 1e9, dt / 1e6, ex / 1e6, wt / 1e6, (cum_up_ns - l_up) / 1e6, (cum_built_ns - l_built) / 1e6, present_ns / 1e6,
             ((double)dt - ex - present_ns) / 1e6, (unsigned long long)(cum_draws - l_draws), (unsigned long long)(cum_submits - l_subs),
             atomic_load(&stat_compiles));
     }
-    last_t = now; l_exec = cum_exec; l_wait = cum_wait; l_draws = cum_draws; l_subs = cum_submits;
+    last_t = now; l_exec = cum_exec; l_wait = cum_wait; l_draws = cum_draws; l_subs = cum_submits; l_up = cum_up_ns;
+    l_built = cum_built_ns;
 }
 
 const char *renderer_stats(void) {
@@ -1731,6 +1735,7 @@ static VkPrimitiveTopology topo_class_base(uint8_t c) {
     return c == 0 ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST : c == 1 ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 }
 
+static bool skip_unbuilt(void);
 static void build_pipeline(void *arg) {
     Pipe *pp = arg;
     PipeKey *k = &pp->k;
@@ -3060,11 +3065,21 @@ static void warm_compute(NvnProgram *np) { compute_program(np); }
 // hairstyle change: blocky dark patches stayed in it) and sets up effects that way, and a first session with an
 // empty shader cache skipped ~10000 draws. The wait costs a stall the first time a shader is met (the SPIR-V cache
 // and the driver's pipeline cache keep later sessions short). LARECOMP_SKIP_UNBUILT=1: skip as before.
-static void wait_built(_Atomic int *state) {
+static bool skip_unbuilt(void) {
     static int skip = -1;
     if (skip < 0) skip = getenv("LARECOMP_SKIP_UNBUILT") != NULL;
-    if (skip) return;
-    for (int ms = 0; atomic_load(state) == 0 && ms < 3000; ms++) SDL_Delay(1);
+    return skip;
+}
+// Waits poll without sleeping for the first 20 ms: a build takes ~0.1-2 ms, and Sleep(1) (1-2 ms each) made the
+// 78 new pipelines of a cutscene's first frame cost 148 ms of waiting for ~20 ms of building.
+static void wait_built(_Atomic int *state) {
+    if (skip_unbuilt() || atomic_load(state) != 0) return;
+    uint64_t t0 = SDL_GetTicksNS(), now = t0;
+    while (atomic_load(state) == 0 && now - t0 < 3000000000ull) {
+        if (now - t0 < 20000000ull) sched_yield(); else SDL_Delay(1);
+        now = SDL_GetTicksNS();
+    }
+    cum_built_ns += SDL_GetTicksNS() - t0;
 }
 
 static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
@@ -3286,7 +3301,8 @@ static void draw_(CmdRec *r, bool indexed) {
         pp->k = k;
         pipe_tab[pslot].key = ph;
         pipe_tab[pslot].pipe = pp;
-        run_job(build_pipeline, pp);
+        // the draw needs it now: built here rather than queued for a worker and waited for (see wait_built)
+        if (skip_unbuilt()) run_job(build_pipeline, pp); else build_pipeline(pp);
     }
     wait_built(&pp->state);
     if (atomic_load(&pp->state) != 1) { SKIPPED(); return; }
