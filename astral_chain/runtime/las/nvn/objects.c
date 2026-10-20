@@ -377,6 +377,7 @@ NVN(nvnTextureInitialize) {
         LOG("[nvn] video texture %p: %ux%u fmt %#x flags %#x target %u addr %llx stride %llu\n", t, t->width, t->height,
             t->format, t->flags, t->target, t->addr, t->stride);
     SET_HOST(A(0), t);
+    backend_texture_created(t);
     RET(1);
 }
 NVN(nvnTextureFinalize) {

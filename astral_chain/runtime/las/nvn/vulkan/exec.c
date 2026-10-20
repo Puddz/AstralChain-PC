@@ -838,11 +838,11 @@ const char *renderer_stats(void) {
                      (unsigned long long)prof_vc_hits, (unsigned long long)prof_vc_bypass, prof_vc_copied / 1048576.0,
                      (unsigned long long)prof_vc_queries, prof_vc_scan_ns / 1e6, (unsigned long long)prof_vc_scan_pages);
             prof_vc_hits = prof_vc_bypass = prof_vc_copied = prof_vc_queries = prof_vc_scan_pages = prof_vc_scan_ns = 0;
-            extern uint64_t prof_tex_watch_skips, prof_tex_unknown;
+            extern uint64_t prof_tex_watch_skips, prof_tex_unknown, prof_tex_warmed;
             n = strlen(stats_text);
-            snprintf(stats_text + n, sizeof stats_text - n, " | tex unwritten %llu untracked %llu", (unsigned long long)prof_tex_watch_skips,
-                     (unsigned long long)prof_tex_unknown);
-            prof_tex_watch_skips = prof_tex_unknown = 0;
+            snprintf(stats_text + n, sizeof stats_text - n, " | tex unwritten %llu untracked %llu warmed %llu", (unsigned long long)prof_tex_watch_skips,
+                     (unsigned long long)prof_tex_unknown, (unsigned long long)prof_tex_warmed);
+            prof_tex_watch_skips = prof_tex_unknown = prof_tex_warmed = 0;
         }
         pthread_mutex_lock(&wait_tab_lock);
         for (int i = 0; i < 12 && wait_tab[i].why; i++) {

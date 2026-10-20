@@ -4,6 +4,7 @@
 #include <float.h>
 #include <math.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -423,9 +424,42 @@ static TexBackend *tex_backend(NvnTexture *t) {
     return b;
 }
 
+// ================================================================== warm-up (Astral Chain)
+// Textures were uploaded at their first draw. A scene's new textures (ASTC 4096x4096 character atlases, decoded on the
+// CPU on GPUs without ASTC) then all landed in its first frame: ~0.5 s in the first frame of the opening cutscene,
+// after the loading screen had sat idle. Textures the game initializes are now uploaded ahead of use, newest first,
+// within a per-frame budget (LARECOMP_TEX_WARM_MS, default 6; 0: off), once their memory has gone a frame without
+// CPU writes (so a texture still being loaded is not decoded twice).
+static NvnTexture **warm_list;
+static uint32_t *warm_gen;
+static int warm_n, warm_cap;
+uint64_t prof_tex_warmed;
+static void astc_cancel(TexBackend *b);
+
+void backend_texture_created(NvnTexture *t) {
+    if (!t || t->target == 10 || !t->addr) return;
+    if (warm_n == warm_cap) {
+        warm_cap = warm_cap ? warm_cap * 2 : 1024;
+        warm_list = realloc(warm_list, warm_cap * sizeof *warm_list);
+        warm_gen = realloc(warm_gen, warm_cap * sizeof *warm_gen);
+    }
+    warm_list[warm_n] = t;
+    warm_gen[warm_n++] = 0;
+}
+
+static void warm_remove(int i) {
+    warm_list[i] = warm_list[warm_n - 1];
+    warm_gen[i] = warm_gen[warm_n - 1];
+    warm_n--;
+}
+
 void backend_texture_destroyed(NvnTexture *t) {
+    for (int i = warm_n - 1; i >= 0; i--) if (warm_list[i] == t) { warm_remove(i); break; }
     TexBackend *b = t->backend;
     if (b) {
+        astc_cancel(b);
+        while (atomic_load(&b->pre_state) == 1) SDL_Delay(1);  // (a background decode writes into b)
+        free(b->pre_rgba);
         extern void vk_alias_texture_destroyed(NvnTexture *t);  // (exec.c copy aliases: a source's contents handed over)
         vk_alias_texture_destroyed(t);
         live_remove(b);
@@ -594,9 +628,28 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     uint64_t layer_size = tegra_layer_size(&t->layout);
     bool linear = (t->flags & 0x10) != 0;
     uint32_t levels = t->layout.levels < b->levels ? t->layout.levels : b->levels;
+    // A background decode of these bytes (warm-up below): wait for it if it is still running, use it if its data hash
+    // matches, else drop it.
+    const uint8_t *pre = NULL;
+    uint64_t pre_off = 0;
+    if (b->astc_bw && atomic_load(&b->pre_state)) {
+        astc_cancel(b);  // (still queued: decoded here and now instead of after the jobs ahead of it)
+        while (atomic_load(&b->pre_state) == 1) SDL_Delay(1);
+        if (b->pre_hash == h && b->tp <= 0) pre = b->pre_rgba;
+    }
     for (uint32_t layer = 0; layer < layers; layer++) {
         for (uint32_t lv = 0; lv < levels; lv++) {
             LevelLayout l = tegra_level(&t->layout, lv);
+            if (pre) {  // decoded already: copy
+                VkSpan s = vk_transient((uint64_t)l.w * l.h * 4, 16);
+                memcpy(s.ptr, pre + pre_off, (size_t)l.w * l.h * 4);
+                pre_off += (uint64_t)l.w * l.h * 4;
+                VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = l.w, .bufferImageHeight = l.h,
+                                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, layer, 1},
+                                        .imageExtent = {l.w < level_w(b, lv) ? l.w : level_w(b, lv), l.h < level_h(b, lv) ? l.h : level_h(b, lv), 1}};
+                vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+                continue;
+            }
             if (b->astc_bw) {  // blocks -> linear block rows -> RGBA8 texels
                 const uint8_t *src = (const uint8_t *)(uintptr_t)t->addr + layer * layer_size + l.offset;
                 uint8_t *blocks = malloc((uint64_t)l.wb * l.hb * 16);
@@ -673,6 +726,129 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
             vk_dl_note_upload((void *)b->image, rg.imageExtent.width, rg.imageExtent.height, rg.imageSubresource.mipLevel);
                 vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
         }
+    }
+    if (atomic_load(&b->pre_state) == 2) {  // (used or stale: either way done with)
+        free(b->pre_rgba);
+        b->pre_rgba = NULL;
+        atomic_store(&b->pre_state, 0);
+    }
+}
+
+// ---- warm-up, part 2: background ASTC decode and the per-frame pass
+// Decoding in the frame itself (one 4096x4096 texture: tens of ms) made frames of ~260 ms when a scene's textures
+// arrived. Large ASTC textures are decoded on worker threads instead; the render thread only copies finished results
+// (upload_texture above). Guest bytes that change during the decode (hash before != after) are not used.
+typedef struct {
+    TexBackend *b;
+    uint64_t addr, total, layer_size, stride;
+    TexLayout layout;
+    uint32_t layers, levels;
+    uint8_t bw, bh;
+    bool srgb, linear;
+} AstcJob;
+static AstcJob astc_jobs[256];
+static int astc_head, astc_count;
+static pthread_mutex_t astc_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t astc_cond = PTHREAD_COND_INITIALIZER;
+
+static void *astc_worker(void *arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&astc_lock);
+        while (!astc_count) pthread_cond_wait(&astc_cond, &astc_lock);
+        AstcJob j = astc_jobs[astc_head];
+        astc_head = (astc_head + 1) % 256;
+        astc_count--;
+        pthread_mutex_unlock(&astc_lock);
+        if (!j.b) continue;  // (cancelled)
+        const uint8_t *mem = (const uint8_t *)(uintptr_t)j.addr;
+        uint64_t h0 = hash_full(mem, j.total), size = 0;
+        for (uint32_t layer = 0; layer < j.layers; layer++)
+            for (uint32_t lv = 0; lv < j.levels; lv++) { LevelLayout l = tegra_level(&j.layout, lv); size += (uint64_t)l.w * l.h * 4; }
+        uint8_t *out = malloc(size), *blocks = NULL;
+        uint64_t off = 0, cap = 0;
+        for (uint32_t layer = 0; out && layer < j.layers; layer++) {
+            for (uint32_t lv = 0; lv < j.levels; lv++) {
+                LevelLayout l = tegra_level(&j.layout, lv);
+                uint64_t need = (uint64_t)l.wb * l.hb * 16;
+                if (need > cap) { free(blocks); blocks = malloc(need); cap = need; }
+                if (!blocks) { free(out); out = NULL; break; }
+                const uint8_t *src = mem + layer * j.layer_size + l.offset;
+                if (j.linear) for (uint32_t y = 0; y < l.hb; y++) memcpy(blocks + (uint64_t)y * l.wb * 16, src + (uint64_t)y * j.stride, l.wb * 16);
+                else tegra_deswizzle(src, blocks, l.wb, l.hb, 1, 16, l.block_height_log2, l.block_depth_log2);
+                astc_decode_ldr(blocks, l.w, l.h, j.bw, j.bh, j.srgb, out + off);
+                off += (uint64_t)l.w * l.h * 4;
+            }
+        }
+        free(blocks);
+        if (out && hash_full(mem, j.total) != h0) { free(out); out = NULL; }  // (written meanwhile: decode at use)
+        j.b->pre_rgba = out;
+        j.b->pre_hash = h0;
+        atomic_store(&j.b->pre_state, out ? 2 : 0);
+    }
+    return NULL;
+}
+
+// A job for b that has not started yet is dropped (b's decode then happens at its use or not at all).
+static void astc_cancel(TexBackend *b) {
+    pthread_mutex_lock(&astc_lock);
+    for (int k = 0; k < astc_count; k++) {
+        AstcJob *j = &astc_jobs[(astc_head + k) % 256];
+        if (j->b == b) { j->b = NULL; atomic_store(&b->pre_state, 0); break; }
+    }
+    pthread_mutex_unlock(&astc_lock);
+}
+
+static bool astc_queue(NvnTexture *t, TexBackend *b) {
+    static int started;
+    if (!started) {
+        started = 1;
+        int n = SDL_GetNumLogicalCPUCores() / 2;
+        if (n < 1) n = 1;
+        if (n > 8) n = 8;
+        for (int i = 0; i < n; i++) { pthread_t tid; pthread_create(&tid, NULL, astc_worker, NULL); }
+    }
+    uint32_t layers = t->layout.layers ? t->layout.layers : 1;
+    if (layers > b->layers && b->depth == 1) layers = b->layers;
+    AstcJob j = {.b = b, .addr = t->addr, .total = tegra_total_size(&t->layout), .layer_size = tegra_layer_size(&t->layout),
+                 .stride = t->stride, .layout = t->layout, .layers = layers,
+                 .levels = t->layout.levels < b->levels ? t->layout.levels : b->levels,
+                 .bw = b->astc_bw, .bh = b->astc_bh, .srgb = b->astc_srgb, .linear = (t->flags & 0x10) != 0};
+    pthread_mutex_lock(&astc_lock);
+    bool ok = astc_count < 256;
+    if (ok) {
+        atomic_store(&b->pre_state, 1);
+        astc_jobs[(astc_head + astc_count++) % 256] = j;
+        pthread_cond_signal(&astc_cond);
+    }
+    pthread_mutex_unlock(&astc_lock);
+    return ok;
+}
+
+// Once a frame (device.c): textures the game initialized but has not drawn, newest first, within the budget. Small or
+// non-ASTC ones upload here; large ASTC ones go to the decode workers, and upload here once decoded.
+void vk_texture_warmup(void) {
+    static long budget_ms = -1;
+    if (budget_ms < 0) { const char *e = getenv("LARECOMP_TEX_WARM_MS"); budget_ms = e ? atol(e) : 4; }
+    if (!budget_ms || !warm_n) return;
+    extern int vk_pages_changed(uint64_t addr, uint64_t size, uint32_t since, uint32_t *now);
+    uint64_t t0 = SDL_GetTicksNS(), limit = (uint64_t)budget_ms * 1000000ull;
+    for (int i = warm_n - 1; i >= 0 && i < warm_n && SDL_GetTicksNS() - t0 < limit; i--) {
+        NvnTexture *t = warm_list[i];
+        TexBackend *b = t->backend;
+        if (b && (b->uploaded || b->gpu_owned)) { warm_remove(i); continue; }  // (drawn or rendered to already)
+        if (b && atomic_load(&b->pre_state) == 1) continue;                    // (decoding)
+        if (b && atomic_load(&b->pre_state) == 2) { vk_tex(t, false); prof_tex_warmed++; warm_remove(i); continue; }
+        if (!t->layout.fmt || !t->layout.fmt->bpb) { warm_remove(i); continue; }
+        uint32_t now = 0;
+        uint64_t total = tegra_total_size(&t->layout);
+        int ch = vk_pages_changed(t->addr, total, warm_gen[i], &now);
+        if (ch > 0 || !warm_gen[i]) { warm_gen[i] = now ? now : 1; continue; }  // still being written: next frame
+        b = tex_backend(t);
+        if (b->astc_bw && total >= (256u << 10) && astc_queue(t, b)) continue;
+        vk_tex(t, false);
+        prof_tex_warmed++;
+        warm_remove(i);
     }
 }
 

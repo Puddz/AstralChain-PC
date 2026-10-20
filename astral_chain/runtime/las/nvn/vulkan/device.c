@@ -594,6 +594,10 @@ void backend_present(NvnTexture *t) {
         if (built != seen_count) { seen_count = built; seen_ns = now_ns; }
         else if (built != saved_count && now_ns - seen_ns > 5000000000ull) { saved_count = built; vk_pipeline_cache_save(); }
     }
+    {   // textures the game created but has not drawn yet (textures.c)
+        extern void vk_texture_warmup(void);
+        vk_texture_warmup();
+    }
     static long shot_every = -1;
     if (shot_every < 0) { const char *e = getenv("LARECOMP_SCREENSHOT_EVERY"); shot_every = e ? atol(e) : 0; }
     extern bool g_debug_frame;
