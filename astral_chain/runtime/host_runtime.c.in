@@ -454,6 +454,10 @@ void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
   printf("PARALLEL guest thread %u exited\n",current_thread);fflush(stdout);
   klock_release_all();ExitThread(0);
  }
+ if(test_stall_ms) {  /* AC_CUTSCENE_STALL_LOCKED=1: holding the kernel lock, so every guest thread (sound too) waits */
+  static int locked=-1;if(locked<0) locked=GetEnvironmentVariableA("AC_CUTSCENE_STALL_LOCKED",NULL,0)>0;
+  if(locked) {unsigned ms=test_stall_ms;test_stall_ms=0;Sleep(ms);}
+ }
  kunlock();
  if(test_stall_ms) {unsigned ms=test_stall_ms;test_stall_ms=0;Sleep(ms);}
 }

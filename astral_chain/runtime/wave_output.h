@@ -47,6 +47,8 @@ typedef struct {
  uint32_t last_position;
  double play_end,starved;  /* (QPC seconds) when the queued sound runs out; total time the queue was dry */
  double last_append,queued_then;  /* (underrun reports) previous append, and the sound queued before it */
+ double owed,skipped;  /* sound still to skip after an underrun; total skipped */
+ uint64_t appended;  /* frames written to the device since it was opened */
 } WaveOutput;
 
 static void CALLBACK wave_output_callback(HWAVEOUT wave,UINT message,DWORD_PTR context,DWORD_PTR first,DWORD_PTR second) {
@@ -91,15 +93,48 @@ static MMRESULT wave_output_pause(WaveOutput *output) {
  if(!result)output->running=0;
  return result;
 }
+static MMRESULT wave_output_position(WaveOutput *output,uint64_t *frames);
 static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *pcm,size_t size) {
  if(!output->handle || !output->ready)return MMSYSERR_INVALHANDLE;
  if(!pcm || !size || size>16u*1024*1024 || size%output->format.nBlockAlign)return MMSYSERR_INVALPARAM;
  if(output->count==32 || output->queued_bytes+size>64u*1024*1024)return MMSYSERR_NOMEM;
- WaveBuffer *buffer=&output->buffers[(output->head+output->count)%32];
- if(buffer->header.lpData)return MMSYSERR_ALLOCATED;
- buffer->header.lpData=malloc(size);if(!buffer->header.lpData)return MMSYSERR_NOMEM;
- memcpy(buffer->header.lpData,pcm,size);buffer->header.dwBufferLength=(DWORD)size;buffer->tag=tag;
- {  /* AC_AUDIO_DUMP=<file>: every appended buffer as raw PCM (verification without listening) */
+ /* Timing: when the queued sound runs out (play_end, QPC seconds) and whether it ran dry before this buffer. A dry
+  * queue pauses the sound, which then stays behind the picture by the gap: the cutscene drift reported on a second PC
+  * (the game keeps only 15-47 ms queued; its sound thread was 55-128 ms late in 140 ms frames). Gaps under 0.5 s are
+  * repaid by skipping as much of the following sound (at most 0.3 s owed; AC_AUDIO_RESYNC=0: off); longer gaps are
+  * the game's own pauses (loading). */
+ size_t skip=0;double dump_gap=0;
+ if(output->running) {
+  static int resync=-1;
+  if(resync<0) {char v[8];DWORD n=GetEnvironmentVariableA("AC_AUDIO_RESYNC",v,sizeof(v));resync=!(n && n<sizeof(v) && v[0]=='0');}
+  LARGE_INTEGER f,q;QueryPerformanceFrequency(&f);QueryPerformanceCounter(&q);
+  double now=(double)q.QuadPart/(double)f.QuadPart;
+  uint64_t played;  /* re-anchored on the device's position: the estimate alone drifts with the device clock */
+  if(output->appended && !wave_output_position(output,&played)) {
+   uint64_t queued=output->appended>played ? output->appended-played : 0;
+   if(queued) output->play_end=now+(double)queued/output->format.nSamplesPerSec;
+   else if(output->play_end>now) output->play_end=now;
+  }
+  if(output->play_end>0 && now>output->play_end) {
+   double gap=now-output->play_end;output->starved+=gap;dump_gap=gap<5.0 ? gap : 0;
+   if(resync && gap<0.5) {output->owed+=gap;if(output->owed>0.3) output->owed=0.3;}
+   if(gap>0.01) printf("AUDIO underrun at %.3f s: %.1f ms (total %.1f ms); %.0f ms since the previous buffer, %.0f ms queued then\n",
+    now,gap*1e3,output->starved*1e3,(now-output->last_append)*1e3,output->queued_then*1e3);
+  }
+  if(output->owed>0) {
+   size_t owed=(size_t)(output->owed*output->format.nAvgBytesPerSec)/output->format.nBlockAlign*output->format.nBlockAlign;
+   size_t most=size/4*3/output->format.nBlockAlign*output->format.nBlockAlign;  /* (the device keeps playing) */
+   skip=owed<most ? owed : most;
+   output->owed-=(double)skip/output->format.nAvgBytesPerSec;if(output->owed<0.0005) output->owed=0;
+   output->skipped+=(double)skip/output->format.nAvgBytesPerSec;
+  }
+  output->queued_then=output->play_end>now ? output->play_end-now : 0;
+  output->last_append=now;
+  if(output->play_end<now)output->play_end=now;
+  output->play_end+=(double)(size-skip)/output->format.nAvgBytesPerSec;
+ }
+ {  /* AC_AUDIO_DUMP=<file>: the sound as the device plays it, raw PCM: silence for the gaps of underruns, without
+     * skipped sound (verification without listening) */
   static FILE *dump;static int tried;
   if(!tried) {
    tried=1;char path[MAX_PATH];DWORD n=GetEnvironmentVariableA("AC_AUDIO_DUMP",path,sizeof(path));
@@ -111,31 +146,28 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
      (unsigned long)output->format.nSamplesPerSec,output->format.nChannels,(double)(t100-116444736000000000ull)/1e7,
      (double)q.QuadPart/(double)f.QuadPart);fflush(stdout);}
   }
-  if(dump) {fwrite(pcm,1,size,dump);fflush(dump);}
+  if(dump) {
+   static const uint8_t zero[4096];
+   size_t silence=(size_t)(dump_gap*output->format.nAvgBytesPerSec)/output->format.nBlockAlign*output->format.nBlockAlign;
+   while(silence) {size_t n=silence<sizeof zero ? silence : sizeof zero;fwrite(zero,1,n,dump);silence-=n;}
+   fwrite((const uint8_t*)pcm+skip,1,size-skip,dump);fflush(dump);
+  }
  }
+ size_t length=size-skip;
+ WaveBuffer *buffer=&output->buffers[(output->head+output->count)%32];
+ if(buffer->header.lpData)return MMSYSERR_ALLOCATED;
+ buffer->header.lpData=malloc(length);if(!buffer->header.lpData)return MMSYSERR_NOMEM;
+ memcpy(buffer->header.lpData,(const uint8_t*)pcm+skip,length);buffer->header.dwBufferLength=(DWORD)length;buffer->tag=tag;
  MMRESULT result=wave_api.prepare(output->handle,&buffer->header,sizeof(WAVEHDR));
  if(!result)result=wave_api.write(output->handle,&buffer->header,sizeof(WAVEHDR));
  if(result) {
   if(buffer->header.dwFlags&WHDR_PREPARED) {
    MMRESULT cleanup=wave_api.unprepare(output->handle,&buffer->header,sizeof(WAVEHDR));
-   if(cleanup) {output->count++;output->queued_bytes+=size;output->ready=0;return cleanup;}
+   if(cleanup) {output->count++;output->queued_bytes+=length;output->ready=0;return cleanup;}
   }
   free(buffer->header.lpData);memset(buffer,0,sizeof(*buffer));return result;
  }
- output->count++;output->queued_bytes+=size;
- if(output->running) {  /* the queue ran dry: the sound falls behind by the gap (A/V sync after stalls) */
-  LARGE_INTEGER f,q;QueryPerformanceFrequency(&f);QueryPerformanceCounter(&q);
-  double now=(double)q.QuadPart/(double)f.QuadPart;
-  if(output->play_end>0 && now>output->play_end) {
-   double gap=now-output->play_end;output->starved+=gap;
-   if(gap>0.01) printf("AUDIO underrun at %.3f s: %.1f ms (total %.1f ms); %.0f ms since the previous buffer, %.0f ms queued then\n",
-    now,gap*1e3,output->starved*1e3,(now-output->last_append)*1e3,output->queued_then*1e3);
-  }
-  output->queued_then=output->play_end>now ? output->play_end-now : 0;
-  output->last_append=now;
-  if(output->play_end<now)output->play_end=now;
-  output->play_end+=(double)size/output->format.nAvgBytesPerSec;
- }
+ output->count++;output->queued_bytes+=length;output->appended+=length/output->format.nBlockAlign;
  return MMSYSERR_NOERROR;
 }
 static MMRESULT wave_output_collect(WaveOutput *output,uint64_t *tags,unsigned capacity,unsigned *count) {
