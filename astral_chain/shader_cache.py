@@ -37,7 +37,7 @@ def _zstd_decompress():
         pass
     try:
         import zstandard
-        return lambda data: zstandard.ZstdDecompressor().decompress(data)
+        return lambda data: zstandard.ZstdDecompressor().decompressobj().decompress(data)
     except ImportError:
         return None
 
@@ -89,6 +89,9 @@ def extract_shaders(romfs: Path, out: Path) -> int:
     if done.is_file():
         return int(done.read_text(encoding='ascii').split()[0])
     decompress = _zstd_decompress()
+    if decompress is None:  # (Python before 3.14, set up before requirements.txt listed it)
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '-q', 'zstandard==0.25.0'])
+        decompress = _zstd_decompress()
     if decompress is None:
         print('  (shader precompilation needs Python 3.14, or the "zstandard" package: skipped)')
         return 0

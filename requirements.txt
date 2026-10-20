@@ -1,3 +1,4 @@
 # Build-time packages for astral_chain (setup.cmd installs them into .venv)
 capstone==5.0.9
 lz4==4.4.5
+zstandard==0.25.0; python_version < "3.14"  # (shader extraction; Python 3.14 has compression.zstd)
