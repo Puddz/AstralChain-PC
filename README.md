@@ -1,5 +1,13 @@
 # Astral Chain PC
 
+
+> [!IMPORTANT]
+> **This project was built entirely with AI.** All of the code, tooling, reverse engineering and
+> documentation in this repository was written by an AI model (Anthropic's Claude, through Claude Code, and Codex), directed,
+> tested and reviewed by the project's owner. It is shared as is, as a fan project. If you prefer not to use
+> AI-written code, you are free to skip it. As with any code from the internet, you build and run it at your own
+> discretion.
+
 An unofficial, experimental native Windows port of *Astral Chain* (Nintendo Switch, PlatinumGames, 2019), made by
 **static recompilation**. The game's ARM64 code is translated to C and compiled into an ordinary Windows x64
 program, and its NVN graphics calls run on Vulkan. There is no emulator or JIT.
