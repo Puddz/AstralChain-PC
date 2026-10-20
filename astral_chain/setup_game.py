@@ -11,7 +11,8 @@ Stages (each is skipped when its result already exists, so a failed run can be f
   5. build    translate the game code to C and compile build/game/round-00/trace.exe
   6. shaders  extract the game's shaders and compile the known ones into build/game/cache (also at each launch)
 
-Nothing here leaves your PC. Keys are read in place by NSTool and never copied; NSPs carry their own tickets. Files picked through the dialogs
+Nothing here leaves your PC. prod.keys is read in place by NSTool and never copied. NSPs carry their own tickets;
+the title keys in them are written to a temporary title.keys under game/work for NSTool and deleted after use. Files picked through the dialogs
 are remembered in userdata/setup.json (paths only) for the next run.
 """
 from pathlib import Path
@@ -235,14 +236,34 @@ def extract_update(inputs, base_program, base_tik):
     return ncas['Program'], tik
 
 
-def build_romfs(inputs, base_program, update_program, update_tik):
+def title_keys_env(*tiks):
+    """NSTool takes one --tik, but an NSP base and the update each need their ticket's title key. NSTool also reads
+    .switch/title.keys in the user's home folder, so both keys go into a temporary one (deleted after use)."""
+    home = WORK/'nstool-home'
+    lines = []
+    for tik in filter(None, tiks):
+        data = tik.read_bytes()
+        lines.append(f'{data[0x2A0:0x2B0].hex()} = {data[0x180:0x190].hex()}')  # rights ID = encrypted title key
+    (home/'.switch').mkdir(parents=True, exist_ok=True)
+    (home/'.switch'/'title.keys').write_text(''.join(line + '\n' for line in lines), encoding='ascii')
+    return {**os.environ, 'USERPROFILE': str(home), 'HOME': str(home)}, home
+
+
+def build_romfs(inputs, base_program, base_tik, update_program, update_tik):
     if ROMFS_IMAGE.is_file():
         return
     tree = WORK/'romfs'
     step('Extracting the game data (RomFS, about 10 GB; this takes a while)')
     shutil.rmtree(tree, ignore_errors=True)
-    run([NSTOOL, '-k', inputs['keys'], *(['--tik', update_tik] if update_tik else []), '--basenca', base_program,
-         '--part1', str(tree), update_program])
+    env, home = title_keys_env(base_tik, update_tik)
+    try:
+        run([NSTOOL, '-k', inputs['keys'], *(['--tik', update_tik] if update_tik else []), '--basenca', base_program,
+             '--part1', str(tree), update_program], env=env)
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+    if not tree.is_dir() or not any(tree.iterdir()):
+        raise SetupError('NSTool could not read the game data (it extracted nothing). Check that the base game and '
+                         'update are complete dumps and that prod.keys comes from the same or a newer firmware.')
     step('Packing the game data into game/romfs.bin')
     partial = GAME/'romfs.bin.partial'
     run([ROMFS_TOOL, tree, partial])
@@ -332,7 +353,7 @@ def main():
             base_program, base_tik = extract_base(inputs)
             step('Reading the update')
             update_program, update_tik = extract_update(inputs, base_program, base_tik)
-            build_romfs(inputs, base_program, update_program, update_tik)
+            build_romfs(inputs, base_program, base_tik, update_program, update_tik)
         if not args.keep_temp and WORK.exists():
             step('Removing temporary files')
             shutil.rmtree(WORK, ignore_errors=True)
