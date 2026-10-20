@@ -231,6 +231,8 @@ uint64_t plat_now_ns(void) {
  return (uint64_t)((unsigned __int128)now.QuadPart*1000000000u/(uint64_t)frequency.QuadPart);
 }
 void plat_sleep_until_ns(uint64_t t) {for(uint64_t now=plat_now_ns();now<t;now=plat_now_ns())Sleep(0);}
+/* Background work (texture warm-up decodes, cache saves) below normal priority: it must not delay the game's sound thread. */
+void plat_thread_background(void) {SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);}
 /* Pages of [addr,addr+size) written by the CPU since the last query of them
  * (LASRecomp platform/windows.c semantics). Only the guest heap is reserved with
  * MEM_WRITE_WATCH; elsewhere -1 tells the backend tracking is unavailable, and it

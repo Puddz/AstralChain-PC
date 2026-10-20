@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -113,6 +114,16 @@ static void pick_device(void) {
     free(qp);
     if (g_vk.qfam == UINT32_MAX) FATAL("no graphics+present queue\n");
     LOG("[vk] using %s\n", g_vk.props.deviceName);
+    {   // (for reports) the CPU: brand string and logical processors
+        unsigned r[12] = {0}, a, b, c, d;
+        for (unsigned i = 0; i < 3; i++) {
+            __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x80000002u + i), "c"(0));
+            r[i * 4] = a; r[i * 4 + 1] = b; r[i * 4 + 2] = c; r[i * 4 + 3] = d;
+        }
+        char brand[49];
+        memcpy(brand, r, 48); brand[48] = 0;
+        LOG("[cpu] %s, %lu logical processors\n", brand, (unsigned long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
+    }
 }
 
 static bool g_fault_ext;
@@ -273,6 +284,25 @@ void vk_pipeline_cache_save(void) {
         }
     }
     free(data);
+}
+
+// During play the save runs on its own thread: on the render thread it blocked the game, its sound thread included,
+// for 100+ ms (34 MB), and cutscene sound fell behind the picture (an "AUDIO underrun" ~5 s after the last build).
+static _Atomic int pcache_saving;
+static void *pcache_save_thread(void *arg) {
+    (void)arg;
+    plat_thread_background();
+    uint64_t t0 = plat_now_ns();
+    vk_pipeline_cache_save();
+    LOG("[vk] pipeline cache saved in %.0f ms (background)\n", (plat_now_ns() - t0) / 1e6);
+    atomic_store(&pcache_saving, 0);
+    return NULL;
+}
+static void vk_pipeline_cache_save_async(void) {
+    if (atomic_exchange(&pcache_saving, 1)) return;
+    pthread_t t;
+    if (pthread_create(&t, NULL, pcache_save_thread, NULL) == 0) pthread_detach(t);
+    else atomic_store(&pcache_saving, 0);
 }
 
 // ================================================================== swapchain
@@ -603,7 +633,7 @@ void backend_present(NvnTexture *t) {
         unsigned long long built = atomic_load(&vk_pipelines_built);
         uint64_t now_ns = plat_now_ns();
         if (built != seen_count) { seen_count = built; seen_ns = now_ns; }
-        else if (built != saved_count && now_ns - seen_ns > 5000000000ull) { saved_count = built; vk_pipeline_cache_save(); }
+        else if (built != saved_count && now_ns - seen_ns > 5000000000ull) { saved_count = built; vk_pipeline_cache_save_async(); }
     }
     {   // textures the game created but has not drawn yet (textures.c)
         extern void vk_texture_warmup(void);
@@ -698,6 +728,7 @@ void vk_shaders_init(void);
 static void exit_handler(void) {
     if (g_vk.dev) {
         vkDeviceWaitIdle(g_vk.dev);
+        for (int i = 0; i < 2000 && atomic_load(&pcache_saving); i++) SDL_Delay(1);  // (a background save writes the same file)
         vk_pipeline_cache_save();
     }
     fflush(stdout);

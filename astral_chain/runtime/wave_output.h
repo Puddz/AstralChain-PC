@@ -46,6 +46,7 @@ typedef struct {
  uint64_t queued_bytes,position_epoch;
  uint32_t last_position;
  double play_end,starved;  /* (QPC seconds) when the queued sound runs out; total time the queue was dry */
+ double last_append,queued_then;  /* (underrun reports) previous append, and the sound queued before it */
 } WaveOutput;
 
 static void CALLBACK wave_output_callback(HWAVEOUT wave,UINT message,DWORD_PTR context,DWORD_PTR first,DWORD_PTR second) {
@@ -127,8 +128,11 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
   double now=(double)q.QuadPart/(double)f.QuadPart;
   if(output->play_end>0 && now>output->play_end) {
    double gap=now-output->play_end;output->starved+=gap;
-   if(gap>0.01) printf("AUDIO underrun at %.3f s: %.1f ms (total %.1f ms)\n",now,gap*1e3,output->starved*1e3);
+   if(gap>0.01) printf("AUDIO underrun at %.3f s: %.1f ms (total %.1f ms); %.0f ms since the previous buffer, %.0f ms queued then\n",
+    now,gap*1e3,output->starved*1e3,(now-output->last_append)*1e3,output->queued_then*1e3);
   }
+  output->queued_then=output->play_end>now ? output->play_end-now : 0;
+  output->last_append=now;
   if(output->play_end<now)output->play_end=now;
   output->play_end+=(double)size/output->format.nAvgBytesPerSec;
  }

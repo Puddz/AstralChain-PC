@@ -753,6 +753,7 @@ static pthread_cond_t astc_cond = PTHREAD_COND_INITIALIZER;
 
 static void *astc_worker(void *arg) {
     (void)arg;
+    plat_thread_background();
     for (;;) {
         pthread_mutex_lock(&astc_lock);
         while (!astc_count) pthread_cond_wait(&astc_cond, &astc_lock);
