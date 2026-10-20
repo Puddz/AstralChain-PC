@@ -479,6 +479,7 @@ void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
  * 1 gameplay, 0 cutscene with the measured step at 60 FPS (default), 2 cutscene as in the unmodified game
  * (AC_CUTSCENE_FPS=30): the original fixed-step path at 30 FPS (nvn_present_pace, nvn_hle.h). */
 int cutscene_mode;  /* (presented at 30 FPS) */
+static unsigned cut_ends;static double cut_carried;  /* (svc #0xB2, reported at a cutscene's end) */
 static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
  if(imm==0xB1) {
   static int at30=-1;
@@ -495,6 +496,8 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    if(cutscene!=last) {
     last=cutscene;if(cutscene) {count++;on_at=rt_ticks();}
     printf("CUTSCENE mode %s at %.3f s\n",cutscene?"on":"off",(double)rt_ticks()/19200000.0);
+    if(!cutscene && cut_ends) printf("CUTSCENE %u cut ends, %.0f ms carried into the next cuts\n",cut_ends,cut_carried*1000.0/30.0);
+    cut_ends=0;cut_carried=0;
    }
    /* AC_CUTSCENE_STALL=<n>:<seconds>:<ms>: one stall of <ms> that long after the n-th cutscene starts (A/V tests) */
    static int sn=-1;static double ss;static unsigned sms;
@@ -526,6 +529,40 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   memcpy(&bits,&step,4);c->v[8]=bits;
   uint32_t ticks=(uint32_t)step;memcpy((void*)(uintptr_t)(c->x[19]+0xD8),&ticks,4);
   c->x[21]=(c->x[21]&~0xFFFFFFFFull)|2;
+  return;
+ }
+ if(imm==0xB2) {
+  /* svc #0xB2 (cutscene-catchup-1.0.1.pchtxt): the end of a cut, for a cutscene track (state: int cut, float time).
+   * Original: past lim = length - speed, the time is clamped to lim (the cut's last frame); the update after that
+   * starts the next cut at 0. Here the time past lim is remembered per track, and the next cut starts once
+   * lim + that reaches the cut's length, with the rest carried into it. AC_CUT_CARRY=0: the original. */
+  static int carry=-1;
+  if(carry<0) {char v[8];DWORD n=GetEnvironmentVariableA("AC_CUT_CARRY",v,sizeof(v));carry=!(n && n<sizeof(v) && v[0]=='0');}
+  static struct {uint64_t track;int32_t cut;float over;} pending[64];
+  float t,in_t,speed;uint32_t b=(uint32_t)c->v[0];memcpy(&t,&b,4);b=(uint32_t)c->v[8];memcpy(&speed,&b,4);
+  b=(uint32_t)c->v[9];memcpy(&in_t,&b,4);  /* (the old time, loaded before the new one was stored: s9) */
+  int32_t cut;memcpy(&cut,(void*)(uintptr_t)c->x[19],4);
+  float length=(float)(int32_t)c->x[24],lim=length-speed;
+  uint64_t track=c->x[19];
+  unsigned slot=0;while(slot<64 && pending[slot].track && pending[slot].track!=track) slot++;
+  if(slot==64) {slot=(unsigned)(track>>4)%64;pending[slot].track=0;}
+  if(!(t>lim)) {if(pending[slot].track==track) pending[slot].track=0;return;}  /* within the cut: time as computed */
+  if(!carry) {  /* the original */
+   if(in_t<lim) memcpy((void*)(uintptr_t)(c->x[19]+4),&lim,4);
+   else {int32_t next=(int32_t)c->x[23];float zero=0;memcpy((void*)(uintptr_t)c->x[19],&next,4);memcpy((void*)(uintptr_t)(c->x[19]+4),&zero,4);}
+   return;
+  }
+  float over=0;  /* time past lim not shown yet */
+  if(in_t>=lim && pending[slot].track==track && pending[slot].cut==cut) over=pending[slot].over;
+  float real=(in_t>=lim ? lim+over : in_t)+(t-in_t);
+  if(real<length) {  /* still the cut's last frame */
+   memcpy((void*)(uintptr_t)(c->x[19]+4),&lim,4);
+   pending[slot].track=track;pending[slot].cut=cut;pending[slot].over=real-lim;
+  } else {  /* next cut, with the rest */
+   int32_t next=(int32_t)c->x[23];float rest=real-length;
+   memcpy((void*)(uintptr_t)c->x[19],&next,4);memcpy((void*)(uintptr_t)(c->x[19]+4),&rest,4);
+   pending[slot].track=0;cut_ends++;cut_carried+=rest;
+  }
   return;
  }
  app_pump();

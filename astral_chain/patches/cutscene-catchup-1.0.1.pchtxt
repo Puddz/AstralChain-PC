@@ -27,4 +27,12 @@
 00A0EFE8 02000014 // b 0xA0EFF0
 00A0EFEC 173BFC17 // b 0x91DC48: the original's fixed-step path (str s8,[x19,#0xD0])
 00A0EFF0 03FEFF17 // b 0xA0E7FC: fminnm s0,s0,s1
+// Cut ends (main+0x8C2410, a cutscene track's time step): past "length - speed" the time was clamped to the cut's last
+// frame, then the next cut started at time 0, dropping the time past the cut's end. Exact at the original 30 FPS
+// (step 1.0); at 60 FPS each cut ended up to a frame early and the picture ran ahead of the voices (Dynamic-FPS's
+// known limit, about 0.5 s over a cutscene). The runtime (svc #0xB2, host_runtime.c.in) moves to the next cut once the
+// cut's full length has passed, carrying the rest into it. In: s0 = new time, s9 = old time, x19 = new state, w23 =
+// next cut, w24 = cut length, s8 = speed.
+008C254C 411600D4 // svc #0xB2 (was scvtf s1,w24)
+008C2550 09000014 // b 0x8C2574: return
 @stop
