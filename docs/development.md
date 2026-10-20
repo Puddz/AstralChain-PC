@@ -60,6 +60,7 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_CUTSCENE_STALL=<n>:<s>:<ms>[:<s>:<ms>...]` | Stall the game thread `<ms>` ms, `<s>` s after the n-th cutscene starts (A/V sync tests) |
 | `LARECOMP_STALLS=<frame>:<ms>,...` | Stall the render thread at those frames; `LARECOMP_SLOW_FRAME_MS` / `_FROM` / `_UNTIL` / `_EVERY` for ranges |
 | `AC_CUTSCENE_STALL_LOCKED=1` | Test stalls hold the kernel lock: every guest thread waits, the sound thread too |
+| `AC_CUT_CARRY=0` | Cutscene cuts end as in the original code (each cut up to a frame early at 60 fps; svc #0xB2) |
 | `AC_AUDIO_RESYNC=0` | Do not skip sound after an underrun (by default the gap, up to 0.3 s, is skipped to stay in sync) |
 | `AC_SAVE_SNAPSHOTS=0` | Do not copy each game save to `<save folder>-snapshots\<date-time>\` (on by default, newest 30 kept) |
 
