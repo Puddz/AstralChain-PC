@@ -456,24 +456,23 @@ void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
  kunlock();
 }
 /* svc #0xB1 (astral_chain/patches/cutscene-catchup-1.0.1.pchtxt): Dynamic-FPS's step code reports each frame whether
- * the game's cutscene mode is on (w21 == 0). The patch then uses the original fixed step, and nvn_present_pace
- * (nvn_hle.h) presents at 30 FPS. AC_CUTSCENE_FPS=60: w21 is set for the rest of the mod's step code (the measured
- * step, as in gameplay; the function restores x21 on return) and the presentation stays at 60. */
-int cutscene_mode;
+ * the game's cutscene mode is on (w21 == 0); the runtime answers in w21 (the function restores x21 on return):
+ * 1 gameplay, 0 cutscene with the measured step at 60 FPS (default), 2 cutscene as in the unmodified game
+ * (AC_CUTSCENE_FPS=30): the original fixed-step path at 30 FPS (nvn_present_pace, nvn_hle.h). */
+int cutscene_mode;  /* (presented at 30 FPS) */
 static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
  if(imm==0xB1) {
-  static int at60=-1;
+  static int at30=-1;
   static float debt;  /* real time the cutscene picture is behind, in 30 FPS frames */
-  if(at60<0) {char v[8];DWORD n=GetEnvironmentVariableA("AC_CUTSCENE_FPS",v,sizeof(v));at60=n && n<sizeof(v) && atoi(v)>=60;}
-  cutscene_mode=!(c->x[21]&1) && !at60;
-  if(at60) c->x[21]|=1;
   static int was;
+  if(at30<0) {char v[8];DWORD n=GetEnvironmentVariableA("AC_CUTSCENE_FPS",v,sizeof(v));at30=n && n<sizeof(v) && atoi(v)==30;}
+  int cutscene=!(c->x[21]&1);
+  cutscene_mode=cutscene && at30;
   if(!cutscene_mode) {debt=0;was=0;return;}
   /* The original's fixed step of 1.0 per frame; whole extra frames once the picture is a frame or more behind real
-   * time (a stall), up to 7. Late and early frames of the 30 FPS cadence cancel out instead of adding up. The first
-   * cutscene frame's time (a loading screen before it) does not count. */
-  /* In: s8 = the mod's measured step, x19 = the timer object. Out: s8 = the step for the original fixed-step path
-   * (main+0x91DC48 stores it at +0xD0), and the mod's whole-tick count (+0xD8) for its patched counters. */
+   * time (a stall), up to 7. Late and early frames of the 30 FPS cadence cancel out. The first cutscene frame's time
+   * (a loading screen before it) does not count. In: s8 = the mod's measured step, x19 = the timer object. Out: s8 =
+   * the step the original path stores at +0xD0, and the mod's whole-tick count (+0xD8) for its patched counters. */
   float measured;uint32_t bits=(uint32_t)c->v[8];memcpy(&measured,&bits,4);
   if(!was || !(measured>0.0f) || measured>30.0f) measured=1.0f;
   was=1;
@@ -483,6 +482,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   if(debt<-2.0f) debt=-2.0f;
   memcpy(&bits,&step,4);c->v[8]=bits;
   uint32_t ticks=(uint32_t)step;memcpy((void*)(uintptr_t)(c->x[19]+0xD8),&ticks,4);
+  c->x[21]=(c->x[21]&~0xFFFFFFFFull)|2;
   return;
  }
  app_pump();

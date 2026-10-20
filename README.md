@@ -24,7 +24,7 @@ shaders, keys or firmware, and never will. Everything the setup produces comes f
 | | |
 | --- | --- |
 | Tested | Title, menus, opening cutscene, character creation, the highway chase and the first on-foot section of File 01 |
-| Frame rate | Gameplay at 60 fps (Dynamic-FPS patch, game speed correct at any frame rate); cutscenes at 30 fps with the original game's timing, as on the Switch (`AC_CUTSCENE_FPS=60` for 60). RTX 4090 / Ryzen 7 7800X3D: 57-60 fps |
+| Frame rate | 60 fps target, cutscenes included (Dynamic-FPS patch, game speed correct at any frame rate). RTX 4090 / Ryzen 7 7800X3D: 57-60 fps. `AC_CUTSCENE_FPS=30` plays cutscenes exactly as the original does |
 | Stability | Driver watchdog plus a GPU hang stop. No driver resets since 2026-10-19 across dozens of test runs |
 | Saving | Works (tested in File 01) |
 | Not yet tested | Everything after the first on-foot section of File 01 |
@@ -98,9 +98,8 @@ game once, in about a minute. Your saves, game data and shader cache are kept.
 - Defeated enemies may leave dark remnants in the highway chase. A likely cause is fixed, but the fix is
   unconfirmed.
 - Cutscene audio was reported out of sync (the cutscene just before character creation, which started with a loading
-  pause). Since then: textures and shaders are prepared ahead of time (no pause at its start in tests), and cutscenes
-  run through the original game's own timer at 30 fps (measured frame for frame the same as the unmodified game).
-  Not yet confirmed to fix it.
+  pause). Since then textures and shaders are prepared ahead of time (no pause at its start in tests), and the 60 fps
+  cutscene keeps the same pace as the unmodified game (measured, within 0.1 s over 48 s). Not yet confirmed to fix it.
 - Save-slot thumbnails are not captured (`nvnTextureReadTexels` is not implemented).
 
 Reports are welcome. Include `build\game\round-00\stderr.log` and your GPU and driver version, but no game files.

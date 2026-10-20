@@ -376,7 +376,7 @@ void nvn_present_pace(int interval) {
  static int logged_interval=-1;
  if(interval!=logged_interval) {printf("NVN present interval=%d override=%d\n",interval,override);logged_interval=interval;}
  if(override>=0) interval=override;
- /* Cutscenes at 30 FPS, as on the Switch (svc #0xB1 in host_runtime.c.in; AC_CUTSCENE_FPS=60: as gameplay). */
+ /* AC_CUTSCENE_FPS=30: cutscenes at 30 FPS, as in the unmodified game (svc #0xB1 in host_runtime.c.in). */
  extern int cutscene_mode;
  if(cutscene_mode && interval>0 && interval<2) interval=2;
  if(interval<=0) return;

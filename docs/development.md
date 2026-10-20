@@ -45,7 +45,7 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_VK_PROF=1` | Per-2-s CPU/GPU breakdown, texture upload and tracking counters, vertex cache stats |
 | `LARECOMP_GPUPROF_AT=<frame>` / `LARECOMP_GPUPROF_DRAWS=1` | GPU time per pass, or per draw, of a frame |
 | `LARECOMP_GPUPROF_AUTO=1` | Also profile the frame after each frame slower than 250 ms (up to 12; profiling makes a frame slow) |
-| `AC_CUTSCENE_FPS=60` | Cutscenes at 60 FPS with Dynamic-FPS's measured step (default: 30 FPS, the original's fixed step) |
+| `AC_CUTSCENE_FPS=30` | Cutscenes as in the unmodified game: its fixed-step timer path at 30 FPS (default: 60 FPS, measured step) |
 | `AC_PROFILE=1` (+ `AC_PROFILE_THREAD=N`) | CPU sampling profiler. Report: `python -m astral_chain.profile_report <run>` |
 | `AC_PARALLEL_STATS=1` | Guest thread scheduling stats |
 | `AC_AUDIO_DUMP=<file>` | Raw PCM of everything played. Report: `python -m astral_chain.audio_report <run>` (needs `requirements-dev.txt`) |
