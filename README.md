@@ -97,9 +97,9 @@ game once, in about a minute. Your saves, game data and shader cache are kept.
 
 - Defeated enemies may leave dark remnants in the highway chase. A likely cause is fixed, but the fix is
   unconfirmed.
-- Cutscene timing: cuts no longer lose time (the drift the Dynamic-FPS mod documents), and cutscenes catch up after
-  pauses of up to about 270 ms. A longer pause, now mostly limited to loading screens, can still leave the picture
-  slightly behind the voices.
+- Cutscene audio is out of sync, for example in the cutscene just before character creation. There is a short pause
+  at its start while it loads. Changes that target it so far: cuts keep exact time (`astral_chain/patches/`),
+  cutscenes catch up after pauses up to about 270 ms, and shorter texture-decode stalls. None is confirmed to fix it.
 - Save-slot thumbnails are not captured (`nvnTextureReadTexels` is not implemented).
 
 Reports are welcome. Include `build\game\round-00\stderr.log` and your GPU and driver version, but no game files.
