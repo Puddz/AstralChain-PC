@@ -456,7 +456,12 @@ void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
  }
  klock();threads_initialize();
  klock_holder=current_thread;klock_holder_svc=imm;
+ LARGE_INTEGER svc_a,svc_b;QueryPerformanceCounter(&svc_a);
  rt_svc_body(c,imm,pc);
+ QueryPerformanceCounter(&svc_b);
+ {static LARGE_INTEGER f;if(!f.QuadPart) QueryPerformanceFrequency(&f);
+  double ms=1000.0*(double)(svc_b.QuadPart-svc_a.QuadPart)/(double)f.QuadPart;  /* (stall reports: under the lock) */
+  if(ms>30.0) printf("SVC 0x%x of guest thread %u took %.0f ms (mostly under the kernel lock)\n",imm,current_thread,ms);}
  if(guest_threads[current_thread].status!=THREAD_RUNNABLE) parallel_block();
  if(guest_threads[current_thread].status==THREAD_EXITED) {
   printf("PARALLEL guest thread %u exited\n",current_thread);fflush(stdout);

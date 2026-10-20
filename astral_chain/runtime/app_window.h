@@ -107,11 +107,26 @@ static void app_pump(void) {
  if(!app_window || GetCurrentThreadId()!=app_window_thread) return;
  MSG message;
  unsigned count=0;
- while(PeekMessageW(&message,NULL,0,0,PM_REMOVE)) {
+ /* (stall reports) this runs under the kernel lock: a slow message or input read stops every guest thread. Steps over
+  * 30 ms are logged ("PUMP"). */
+ LARGE_INTEGER f,a,b;QueryPerformanceFrequency(&f);QueryPerformanceCounter(&a);
+ for(;;) {
+  BOOL got=PeekMessageW(&message,NULL,0,0,PM_REMOVE);
+  QueryPerformanceCounter(&b);
+  double ms=1000.0*(double)(b.QuadPart-a.QuadPart)/(double)f.QuadPart;
+  if(ms>30.0) printf("PUMP PeekMessage took %.0f ms\n",ms);
+  if(!got) break;
   if(++count>4096) boundary("host-message-budget",&state,state.pc);
   TranslateMessage(&message);DispatchMessageW(&message);
+  QueryPerformanceCounter(&a);
+  ms=1000.0*(double)(a.QuadPart-b.QuadPart)/(double)f.QuadPart;
+  if(ms>30.0) printf("PUMP message 0x%x took %.0f ms\n",message.message,ms);
  }
+ QueryPerformanceCounter(&a);
  hid_poll(app_input_focus && app_focus==1 && !app_exit_requested);
+ QueryPerformanceCounter(&b);
+ double ms=1000.0*(double)(b.QuadPart-a.QuadPart)/(double)f.QuadPart;
+ if(ms>30.0) printf("PUMP input read took %.0f ms\n",ms);
 }
 static void app_checkpoint(void) {
  clock_refresh();
