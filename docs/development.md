@@ -52,6 +52,9 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_SKIP_UNBUILT=1` | Skip draws whose pipeline is still compiling, instead of waiting for it |
 | `LARECOMP_TEX_FULLHASH=1` | Hash every texture fully at each check (slow; rules change detection in or out) |
 | `AC_GPU_HANG_MS=<ms>` | GPU hang stop threshold (default 1200) |
+| `LARECOMP_DUMP_TEX=<min width>` | Level-0 data of up to 24 textures (as uploaded, unswizzled) to `tex_*.bin` in the run folder |
+| `LARECOMP_DUMP_ASTC=<min width>` | Blocks and CPU decode of up to 16 ASTC textures (GPUs without ASTC only) to `astc_*.bin` |
+| `LARECOMP_LOG_PACKAGED=1` | Log each texture's packaged layout (block height) |
 
 ## Code map
 

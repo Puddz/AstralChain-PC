@@ -95,8 +95,6 @@ game once, in about a minute. Your saves, game data and shader cache are kept.
 
 ## Known issues
 
-- Character faces can show blocky dark patches up close. A likely cause is fixed, but the fix is unconfirmed.
-- Armor surfaces and the red "POLICE" print on the vest look patchy.
 - Defeated enemies may leave dark remnants in the highway chase. A likely cause is fixed, but the fix is
   unconfirmed.
 - Cutscenes catch up after pauses of up to about 270 ms. Longer pauses (first-time shader compiles) can leave the

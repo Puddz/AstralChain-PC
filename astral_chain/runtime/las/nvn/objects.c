@@ -323,7 +323,12 @@ static void builder_layout(uint64_t b, TexLayout *t) {
     // Packaged textures (BNTX) were swizzled offline with their own block height, which can differ
     // from the driver default: NVNpackagedTextureLayout's low word is log2(GOBs per block).
     uint64_t pl = G(uint64_t, b, 0x50);
-    if (pl && (uint32_t)pl <= 5) t->block_height_log2 = (uint32_t)pl;
+    // Astral Chain's packaged layouts carry flag bits above the low byte (0x403: block height 8 GOBs). Comparing
+    // the whole word with 5 dropped them, and its large textures (4096x4096 character atlases: 16 GOBs by default)
+    // were unswizzled with the wrong block height: bands of texels from elsewhere in the atlas on faces and armor,
+    // on the top levels only (smaller levels shrink both block heights to the same value).
+    uint32_t pl_bh = (uint32_t)pl & 0xFF;
+    if (pl && pl_bh <= 5) t->block_height_log2 = pl_bh;
     if (pl && getenv("LARECOMP_LOG_PACKAGED")) {
         static int n;
         if (n++ < 4000) LOG("[nvn] packaged layout %016llx fmt %#x %ux%u lv %u -> default bh %u\n", pl, G(uint32_t, b, 0x20), t->width, t->height, t->levels, t->block_height_log2);

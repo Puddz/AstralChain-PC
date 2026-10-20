@@ -567,6 +567,19 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, blocks, l.w, l.h, l.wb * 16);
                 VkSpan s = vk_transient((uint64_t)l.w * l.h * 4, 16);
                 astc_decode_ldr(blocks, l.w, l.h, b->astc_bw, b->astc_bh, b->astc_srgb, s.ptr);
+                {   // LARECOMP_DUMP_ASTC=<min width>: level-0 blocks and our decode of up to 16 textures (decoder tests)
+                    static int dumped = -1;
+                    static long minw;
+                    if (dumped < 0) { const char *e = getenv("LARECOMP_DUMP_ASTC"); dumped = e ? 0 : 16; minw = e ? atol(e) : 0; }
+                    if (dumped < 16 && lv == 0 && layer == 0 && (long)l.w >= minw) {
+                        char path[160];
+                        snprintf(path, sizeof path, "astc_%02d_%ux%u_%ux%u_%s.bin", dumped, l.w, l.h, b->astc_bw, b->astc_bh,
+                                 b->astc_srgb ? "srgb" : "unorm");
+                        FILE *f = fopen(path, "wb");
+                        if (f) { fwrite(blocks, 16, (size_t)l.wb * l.hb, f); fwrite(s.ptr, 4, (size_t)l.w * l.h, f); fclose(f); }
+                        dumped++;
+                    }
+                }
                 free(blocks);
                 VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = l.w, .bufferImageHeight = l.h,
                                         .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, layer, 1},
@@ -588,6 +601,18 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 tegra_deswizzle(src, lin, l.wb, l.hb, l.d, fi->bpb, l.block_height_log2, l.block_depth_log2);
             }
             if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, lin, l.w, l.h, row);
+            {   // LARECOMP_DUMP_TEX=<min width>: level-0 linear data of up to 24 textures (format checks offline)
+                static int dumped = -1;
+                static long minw;
+                if (dumped < 0) { const char *e = getenv("LARECOMP_DUMP_TEX"); dumped = e ? 0 : 24; minw = e ? atol(e) : 0; }
+                if (dumped < 24 && lv == 0 && layer == 0 && (long)l.w >= minw) {
+                    char path[160];
+                    snprintf(path, sizeof path, "tex_%02d_%p_%ux%u_f%#x.bin", dumped, (void *)t, l.w, l.h, t->format);
+                    FILE *f = fopen(path, "wb");
+                    if (f) { fwrite(lin, 1, sz, f); fclose(f); }
+                    dumped++;
+                }
+            }
             if (expand) {  // RGB8 -> RGBA8
                 uint8_t *o = s.ptr;
                 uint64_t n = (uint64_t)l.wb * l.hb * l.d;
