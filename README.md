@@ -104,7 +104,9 @@ game once, in about a minute. Your saves, game data and shader cache are kept.
 - Rarely the game closes right at startup (`STOP host-shared-placeholder-reserve` in `trace.log`). Start it again.
 - Save-slot thumbnails are not captured (`nvnTextureReadTexels` is not implemented).
 
-Reports are welcome. Include `build\game\round-00\stderr.log` and your GPU and driver version, but no game files.
+Reports are welcome. Include `build\game\round-00\stderr.log` and `trace.log` and your GPU and driver version, but
+no game files. For stutters, start the game with **`Play Astral Chain (diagnostics).cmd`** first: it logs where the
+time of each slow frame went.
 
 ## Folder layout
 
