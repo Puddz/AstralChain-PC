@@ -154,7 +154,7 @@ static int save_fs_command(SaveStore *store,const IpcRequest *request,const uint
  *result=0;*has_value=0;*opened=NULL;
  unsigned command=request->command;
  if(command==10) { /* Commit: writes are already in place; make them durable. */
-  printf("SAVE commit\n");save_snapshot(store);return 1;
+  app_save_write_tick=GetTickCount64();printf("SAVE commit\n");save_snapshot(store);return 1;
  }
  if(command==11 || command==12) {
   wchar_t root[1100];swprintf(root,1100,L"\\\\?\\%ls\\data",store->root);
@@ -229,6 +229,7 @@ static DWORD save_file_write(HANDLE file,uint64_t offset,const void *data,uint32
  LARGE_INTEGER position;position.QuadPart=(LONGLONG)offset;
  if(!SetFilePointerEx(file,position,NULL,FILE_BEGIN))return GetLastError();
  guest_io_prepare((uint64_t)(uintptr_t)data,size);
+ app_save_write_tick=GetTickCount64();  /* (the exit watchdog waits for save writes to finish) */
  DWORD written=0;if(size && (!WriteFile(file,data,size,&written,NULL) || written!=size))return GetLastError() ? GetLastError() : ERROR_WRITE_FAULT;
  return 0;
 }

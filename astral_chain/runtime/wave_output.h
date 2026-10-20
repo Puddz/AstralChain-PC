@@ -158,6 +158,7 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
  if(buffer->header.lpData)return MMSYSERR_ALLOCATED;
  buffer->header.lpData=malloc(length);if(!buffer->header.lpData)return MMSYSERR_NOMEM;
  memcpy(buffer->header.lpData,(const uint8_t*)pcm+skip,length);buffer->header.dwBufferLength=(DWORD)length;buffer->tag=tag;
+ if(app_exit_requested) memset(buffer->header.lpData,0,length);  /* (the window was closed: silent while the game exits) */
  MMRESULT result=wave_api.prepare(output->handle,&buffer->header,sizeof(WAVEHDR));
  if(!result)result=wave_api.write(output->handle,&buffer->header,sizeof(WAVEHDR));
  if(result) {

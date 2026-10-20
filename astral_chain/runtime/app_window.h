@@ -58,10 +58,30 @@ static int app_receive(unsigned *message) {
  if(!--app_message_count && !ResetEvent(app_message_event)) boundary("applet-event-reset",&state,state.pc);
  return 1;
 }
+static volatile ULONGLONG app_save_write_tick;  /* (save_fs.h) */
 static DWORD WINAPI app_exit_watchdog(LPVOID unused) {
- (void)unused;Sleep(3000);fflush(stdout);fflush(stderr);TerminateProcess(GetCurrentProcess(),0);return 0;
+ (void)unused;Sleep(1500);
+ /* A save being written is not cut off (a write goes straight into the save file): wait until writes have been quiet
+  * for 1 s, at most 5 s more. */
+ for(int i=0;i<50 && GetTickCount64()-app_save_write_tick<1000;i++) Sleep(100);
+ fflush(stdout);fflush(stderr);TerminateProcess(GetCurrentProcess(),0);return 0;
 }
 static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,LPARAM lparam) {
+ /* Dragging by the title bar is done here: Windows' own move loop runs inside this call, on the game's main thread
+  * and under the kernel lock, and held the whole game (sound included) for as long as the button was down. */
+ static int dragging;static POINT grab;
+ if(message==WM_NCLBUTTONDOWN && wparam==HTCAPTION && !IsZoomed(window)) {
+  POINT p;RECT r;GetCursorPos(&p);GetWindowRect(window,&r);
+  grab.x=p.x-r.left;grab.y=p.y-r.top;dragging=1;SetCapture(window);return 0;
+ }
+ if(dragging) {
+  if(message==WM_MOUSEMOVE) {
+   POINT p;GetCursorPos(&p);
+   SetWindowPos(window,NULL,p.x-grab.x,p.y-grab.y,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);return 0;
+  }
+  if(message==WM_LBUTTONUP) {dragging=0;ReleaseCapture();return 0;}
+  if(message==WM_CAPTURECHANGED) {dragging=0;return 0;}
+ }
  if(message==WM_PAINT && app_frame_pixels) {
   PAINTSTRUCT paint;HDC dc=BeginPaint(window,&paint);RECT client;GetClientRect(window,&client);
   app_paint_frame(dc,&client);EndPaint(window,&paint);return 0;
@@ -97,6 +117,7 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
   /* The game gets the exit request; if shutdown stalls (GPU work, waits), the
    * process must not linger invisibly holding the save lock and GPU memory. */
   if(!app_exit_requested) {HANDLE t=CreateThread(NULL,0,app_exit_watchdog,NULL,0,NULL);if(t)CloseHandle(t);}
+  ShowWindow(window,SW_HIDE);  /* (closing looks immediate; the sound is muted too: wave_output.h) */
   app_exit_requested=1;app_enqueue(4);return 0;
  }
  return DefWindowProcW(window,message,wparam,lparam);
