@@ -2261,10 +2261,23 @@ static void lazy_supersede(uint64_t na, uint64_t nb, bool keep) {
     lazy_compact();
 }
 static int lazy_fault(uint64_t addr) {
+    extern int nvn_page_state(uint64_t addr);
     pthread_mutex_lock(&lazy_lock);
     uint64_t p = addr & ~4095ull;
     int hit = lazy_pending(p);
     if (hit) { stat_wb_faults++; lazy_resolve_page(p, true); lazy_compact(); }
+    else if (p >= HEAP_BASE && p - HEAP_BASE < HEAP_MAX) {
+        // Not pending. Guest threads run in parallel: another one may have resolved the page between this fault and
+        // the lock (it is accessible now: retry the access). A no-access page that no entry holds is a bookkeeping
+        // gap: lift the protection rather than stop the game (one run died here at the end of the highway chase).
+        int state = nvn_page_state(p);
+        if (state == 1) hit = 1;
+        else if (state == 2 && nvn_page_protect(p, 4096, 0)) {
+            static int nlog;
+            if (nlog++ < 20) LOG("[vk] lazy write-back: unexpected protected page %llx lifted\n", (unsigned long long)p);
+            hit = 1;
+        }
+    }
     pthread_mutex_unlock(&lazy_lock);
     return hit;
 }

@@ -281,6 +281,12 @@ int nvn_page_protect(uint64_t addr,uint64_t size,int noaccess) {
  DWORD old;
  return VirtualProtect((void*)(uintptr_t)addr,(SIZE_T)size,noaccess ? PAGE_NOACCESS : PAGE_READWRITE,&old)!=0;
 }
+/* 0: not committed, 1: accessible, 2: committed but no access (lazy write-back protection). */
+int nvn_page_state(uint64_t addr) {
+ MEMORY_BASIC_INFORMATION info;
+ if(!VirtualQuery((void*)(uintptr_t)addr,&info,sizeof(info)) || info.State!=MEM_COMMIT) return 0;
+ return info.Protect&PAGE_NOACCESS ? 2 : 1;
+}
 static void guest_io_prepare(uint64_t addr,uint64_t size) {if(nvn_lazy_flush_hook && size) nvn_lazy_flush_hook(addr,size);}
 #include "exclusive_pair.h"
 static int reserve_heap_range(void) {
