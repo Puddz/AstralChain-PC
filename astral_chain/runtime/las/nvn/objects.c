@@ -579,6 +579,10 @@ NVN(nvnProgramFinalize) { free(HOST(NvnProgram, A(0))); SET_HOST(A(0), 0); }
 NVN(nvnProgramSetDebugLabel) { (void)c; }
 NVN(nvnProgramSetSampleShading) { (void)c; }
 NVN(nvnProgramSetSubroutineLinkage) { RET(1); }
+// (Astral Chain) the Vulkan backend's program warm-up (vulkan/exec.c): builds known variants of a program ahead of
+// its first draw. NULL with other backends.
+void (*nvn_program_warm_hook)(NvnProgram *p);
+
 static void set_shaders(Cpu *c, int stride) {
     NvnProgram *p = HOST(NvnProgram, A(0));
     int n = (int)A(1);
@@ -608,6 +612,7 @@ static void set_shaders(Cpu *c, int stride) {
         p->stages[stage].const_size = *(const uint32_t *)(control + 0x6FC);
         p->stage_mask |= 1u << stage;
     }
+    if (nvn_program_warm_hook) nvn_program_warm_hook(p);
     RET(1);
 }
 

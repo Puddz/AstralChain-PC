@@ -36,6 +36,8 @@ static _Atomic int stat_compiles;
 _Atomic unsigned long long vk_pipelines_built;  // (device.c: the pipeline cache is saved after new builds)
 // shader/pipeline build time per stats interval (ns): Maxwell translation, SPIR-V (cache or glslang), pipelines
 static _Atomic unsigned long long build_ns_translate, build_ns_spirv, build_ns_pipe;
+// program warm-up (see get_program): variants queued at SetShaders, and at their first draw ready or still building
+static uint64_t warm_stat_queued, warm_stat_ready, warm_stat_late;
 static uint64_t op_counts[CMD_COUNT];
 bool g_debug_frame;
 static char stats_text[2048];
@@ -712,6 +714,23 @@ static void run_job(void (*fn)(void *), void *arg) {
     pthread_mutex_unlock(&jobs_lock);
 }
 
+// (Astral Chain) a queued job a draw now waits for moves to the front of its queue: warm-up jobs (program warm-up
+// below) must not delay the builds the current frame needs.
+static void promote_job(Job **head, Job **tail, pthread_mutex_t *lock, void *arg) {
+    pthread_mutex_lock(lock);
+    for (Job *prev = NULL, *j = *head; j; prev = j, j = j->next) {
+        if (j->arg != arg) continue;
+        if (prev) {
+            prev->next = j->next;
+            if (*tail == j) *tail = prev;
+            j->next = *head;
+            *head = j;
+        }
+        break;
+    }
+    pthread_mutex_unlock(lock);
+}
+
 // ================================================================== state
 typedef struct {
     NvnTexture *color[8];
@@ -789,6 +808,11 @@ const char *renderer_stats(void) {
         size_t n = strlen(stats_text);
         if (tr || sp || pi)
             snprintf(stats_text + n, sizeof stats_text - n, ", build ms translate %.0f spirv %.0f pipelines %.0f", tr / 1e6, sp / 1e6, pi / 1e6);
+        n = strlen(stats_text);
+        if (warm_stat_queued || warm_stat_ready || warm_stat_late)
+            snprintf(stats_text + n, sizeof stats_text - n, ", warm-up queued %llu ready %llu late %llu", (unsigned long long)warm_stat_queued,
+                     (unsigned long long)warm_stat_ready, (unsigned long long)warm_stat_late);
+        warm_stat_queued = warm_stat_ready = warm_stat_late = 0;
     }
     {
         size_t n = strlen(stats_text);
@@ -875,7 +899,12 @@ static void st_defaults(void) {
     for (int i = 0; i < 8; i++) { st.blend[i][1] = 2; st.blend[i][2] = 1; st.blend[i][3] = 2; st.blend[i][4] = 1; st.blend[i][5] = 1; st.blend[i][6] = 1; }
 }
 
+static void warm_program(NvnProgram *np);
 void vk_exec_init(void) {
+    {   // program warm-up: nvnProgramSetShaders (objects.c) queues known variants of the program it sets
+        extern void (*nvn_program_warm_hook)(NvnProgram *np);
+        nvn_program_warm_hook = warm_program;
+    }
     prof = getenv("LARECOMP_VK_PROF") != NULL;
     if (prof) {
         prof_up_ns = 0;
@@ -1250,6 +1279,7 @@ typedef struct {
     VkDescriptorSetLayout set_layout[2];
     VkPipelineLayout layout;
     bool vs_uses_vid;
+    bool warmed, drawn;  // (program warm-up: created ahead of its first draw / drawn since)
     _Atomic int state;  // 0 building, 1 ready, 2 failed
 } Prog;
 
@@ -1347,7 +1377,25 @@ static void translate_program(void *arg) {
 #define PROG_TAB 4096
 static struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
 
+static void warm_record(const NvnProgram *np, const ShaderKey *vkey, const ShaderKey *fkey);
+static Prog *get_program_ex(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey, bool from_draw);
+
+// Draws: the program for this state, built at its first use (or by the warm-up). A draw waiting for one that is
+// still queued moves it to the front.
 static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
+    Prog *p = get_program_ex(np, vkey, fkey, true);
+    if (p && !p->drawn) {
+        p->drawn = true;
+        if (p->warmed) { if (atomic_load(&p->state) == 0) warm_stat_late++; else warm_stat_ready++; }
+    }
+    if (p && atomic_load(&p->state) == 0) {
+        promote_job(&tjobs_head, &tjobs_tail, &tjobs_lock, p);
+        promote_job(&jobs_head, &jobs_tail, &jobs_lock, p);
+    }
+    return p;
+}
+
+static Prog *get_program_ex(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey, bool from_draw) {
     // (Astral Chain) vertex-only programs (depth-only passes such as shadow maps) get an empty fragment stage
     // (translate_program); they were skipped (~1750 draws/s in the highway chase, run 437).
     if (!(np->stage_mask & 1)) {  // (other stage bits occur too, e.g. 0x23: ignored, as before)
@@ -1373,8 +1421,106 @@ static Prog *get_program(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey) {
     }
     p->vkey = *vkey;
     p->fkey = *fkey;
+    p->warmed = !from_draw;
+    if (from_draw) warm_record(np, vkey, fkey);
+    else warm_stat_queued++;
     run_translate(translate_program, p);
     return p;
+}
+
+// ================================================================== program warm-up (Astral Chain)
+// Programs were translated and compiled at their first draw. A scene's first frame could need dozens at once and
+// waited for them one by one (the opening cutscene's first frame: 69 programs, ~340 ms in the draw path). The game
+// hands its shader code to NVN while loading (nvnProgramSetShaders); the draw-time state that also selects a program
+// (vertex attribute and render target kinds: ShaderKey) is only known at the draw. So every program a draw creates is
+// recorded in cache/programs.bin (hashes of its vertex and fragment code, both keys), and when the game sets the same
+// code again (this or a later session) the recorded variants are queued for translation and compilation at once.
+// Compute programs depend on their code only: they are translated at SetShaders directly. LARECOMP_NO_WARM=1: off.
+typedef struct { uint64_t vh, fh; ShaderKey vkey, fkey; } WarmRec;
+#define WARM_MAX 16384
+#define WARM_MAGIC (0x4D524157u ^ (uint32_t)sizeof(WarmRec))  // "WARM", record size: a layout change starts afresh
+static WarmRec warm_rec[WARM_MAX];
+static int warm_n = -1;  // -1: cache/programs.bin not read yet
+static FILE *warm_out;
+static uint64_t hmix(uint64_t h, const void *p, size_t n);
+static void warm_compute(NvnProgram *np);  // (compute_program, defined with the compute programs)
+
+static bool warm_off(void) {
+    static int off = -1;
+    if (off < 0) off = getenv("LARECOMP_NO_WARM") != NULL || sync_shaders();
+    return off;
+}
+static uint64_t stage_hash(const NvnProgram *np, int i) {
+    if (!(np->stage_mask & (1u << i)) || !np->stages[i].code_addr) return 0;
+    uint64_t n = np->stages[i].const_offset ? np->stages[i].const_offset : 0x10000;
+    return hmix(0x9E3779B97F4A7C15ull + (uint64_t)i, (const void *)(uintptr_t)np->stages[i].code_addr, (size_t)n);
+}
+static void warm_load(void) {
+    warm_n = 0;
+    FILE *f = fopen("cache/programs.bin", "rb");
+    if (!f) return;
+    uint32_t magic = 0;
+    if (fread(&magic, 4, 1, f) == 1 && magic == WARM_MAGIC)
+        while (warm_n < WARM_MAX && fread(&warm_rec[warm_n], sizeof warm_rec[0], 1, f) == 1) warm_n++;
+    fclose(f);
+    if (magic != WARM_MAGIC) remove("cache/programs.bin");  // (older layout: rebuilt from the next draws)
+    LOG("[vk] program warm-up: %d recorded variants\n", warm_n);
+}
+static void warm_record(const NvnProgram *np, const ShaderKey *vkey, const ShaderKey *fkey) {
+    if (warm_off()) return;
+    if (warm_n < 0) warm_load();
+    WarmRec r;
+    memset(&r, 0, sizeof r);
+    r.vh = stage_hash(np, 0);
+    r.fh = stage_hash(np, 1);
+    r.vkey = *vkey;
+    r.fkey = *fkey;
+    for (int i = 0; i < warm_n; i++) if (!memcmp(&warm_rec[i], &r, sizeof r)) return;
+    if (warm_n == WARM_MAX) return;
+    warm_rec[warm_n++] = r;
+    if (!warm_out) {
+        mkdir("cache", 0755);
+        warm_out = fopen("cache/programs.bin", "ab");
+        if (warm_out && ftell(warm_out) == 0) { uint32_t magic = WARM_MAGIC; fwrite(&magic, 4, 1, warm_out); }
+    }
+    if (warm_out) { fwrite(&r, sizeof r, 1, warm_out); fflush(warm_out); }
+}
+// nvnProgramSetShaders (objects.c hook; NVN calls are serialized, as are draws). The game sets one stage per program
+// object and binds a vertex and a fragment program separately; draws see the pair. So the stages set so far are
+// remembered by code hash, and a recorded pair is queued once both of its stages have been set in this session.
+#define WARM_SEEN 8192
+static struct { uint64_t hash; NvnShaderStage stage; } warm_seen[WARM_SEEN];
+static int warm_nseen;
+static const NvnShaderStage *warm_seen_stage(uint64_t h) {
+    for (int i = warm_nseen - 1; i >= 0; i--) if (warm_seen[i].hash == h) return &warm_seen[i].stage;
+    return NULL;
+}
+static void warm_program(NvnProgram *np) {
+    if (warm_off()) return;
+    if (np->stage_mask & (1u << 5)) { warm_compute(np); return; }
+    if (warm_n < 0) warm_load();
+    if (!warm_n) return;
+    for (int s = 0; s < 2; s++) {
+        if (!(np->stage_mask & (1u << s))) continue;
+        uint64_t h = stage_hash(np, s);
+        if (warm_nseen < WARM_SEEN && !warm_seen_stage(h)) {
+            warm_seen[warm_nseen].hash = h;
+            warm_seen[warm_nseen++].stage = np->stages[s];
+        }
+        for (int i = 0; i < warm_n; i++) {
+            if ((s == 0 ? warm_rec[i].vh : warm_rec[i].fh) != h) continue;
+            const NvnShaderStage *vs = warm_seen_stage(warm_rec[i].vh);
+            const NvnShaderStage *fs = warm_rec[i].fh ? warm_seen_stage(warm_rec[i].fh) : NULL;
+            if (!vs || (warm_rec[i].fh && !fs)) continue;  // (the other stage is not set yet)
+            NvnProgram pair;
+            memset(&pair, 0, sizeof pair);
+            pair.stages[0] = *vs;
+            pair.stage_mask = 1;
+            if (fs) { pair.stages[1] = *fs; pair.stage_mask |= 2; }
+            ShaderKey vk = warm_rec[i].vkey, fk = warm_rec[i].fkey;
+            get_program_ex(&pair, &vk, &fk, false);
+        }
+    }
 }
 
 // ================================================================== vertex formats / fixed function tables
@@ -2907,6 +3053,7 @@ static CsProg *compute_program(NvnProgram *np) {
     run_job(build_compute, cp);
     return cp;
 }
+static void warm_compute(NvnProgram *np) { compute_program(np); }
 
 // A draw or dispatch whose program / pipeline is still building waits for it (bounded) instead of being skipped.
 // Skipped work is lost for good when it runs once: the game bakes textures (the player character's face after a
