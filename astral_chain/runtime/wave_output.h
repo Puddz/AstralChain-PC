@@ -102,7 +102,10 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
   if(!tried) {
    tried=1;char path[MAX_PATH];DWORD n=GetEnvironmentVariableA("AC_AUDIO_DUMP",path,sizeof(path));
    if(n && n<sizeof(path)) {dump=fopen(path,"wb");
-    printf("AUDIO dump %s rate=%lu channels=%u bits=16\n",path,(unsigned long)output->format.nSamplesPerSec,output->format.nChannels);}
+    FILETIME ft;GetSystemTimePreciseAsFileTime(&ft);  /* (wall clock of the first appended sample: A/V sync checks) */
+    unsigned long long t100=((unsigned long long)ft.dwHighDateTime<<32|ft.dwLowDateTime);
+    printf("AUDIO dump %s rate=%lu channels=%u bits=16 first_append_unix=%.4f\n",path,(unsigned long)output->format.nSamplesPerSec,
+     output->format.nChannels,(double)(t100-116444736000000000ull)/1e7);fflush(stdout);}
   }
   if(dump) {fwrite(pcm,1,size,dump);fflush(dump);}
  }

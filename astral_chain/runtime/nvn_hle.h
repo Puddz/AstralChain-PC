@@ -376,15 +376,23 @@ void nvn_present_pace(int interval) {
  static int logged_interval=-1;
  if(interval!=logged_interval) {printf("NVN present interval=%d override=%d\n",interval,override);logged_interval=interval;}
  if(override>=0) interval=override;
+ /* Cutscenes at 30 FPS, as on the Switch (svc #0xB1 in host_runtime.c.in; AC_CUTSCENE_FPS=60: as gameplay). */
+ extern int cutscene_mode;
+ if(cutscene_mode && interval>0 && interval<2) interval=2;
  if(interval<=0) return;
  static uint64_t origin,last_vsync;
  const uint64_t period=320000; /* 19.2 MHz / 60 Hz */
  uint64_t now=rt_ticks();
  if(!origin) {origin=now;last_vsync=0;return;}
  /* Adaptive: a frame that missed its slot (last + interval) is shown at once
-  * rather than held to the next refresh, which would only add idle time. */
+  * rather than held to the next refresh, which would only add idle time. The cadence is kept: the next frame is due
+  * an interval after the missed slot, not after the late present (resynchronized only when more than 4 slots
+  * behind). Restarting the cadence at each late frame lost up to a slot each time: 30 FPS cutscenes ran at 29.0. */
  uint64_t due=last_vsync+(uint64_t)interval;
- if(now-origin>due*period) {last_vsync=(now-origin)/period;return;}
+ if(now-origin>due*period) {
+  last_vsync=now-origin>(due+4)*period ? (now-origin)/period : due;
+  return;
+ }
  uint64_t vsync=(now-origin+period-1)/period;
  if(vsync<due) vsync=due;
  last_vsync=vsync;

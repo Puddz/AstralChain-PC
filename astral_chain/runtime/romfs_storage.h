@@ -18,6 +18,7 @@ static void romfs_open(void) {
  boundary("missing-romfs-image",&state,state.pc);
 #endif
 }
+uint64_t rt_ticks(void);
 static void romfs_read(uint64_t offset,uint64_t length,uint64_t address) {
  romfs_open();
  if(offset>romfs_size || length>romfs_size-offset || length>16*1024*1024)
@@ -26,9 +27,11 @@ static void romfs_read(uint64_t offset,uint64_t length,uint64_t address) {
  if(length && (!(destination.permission&2) || length>destination.size-(address-destination.base)))
   boundary("romfs-read-destination",&state,state.pc);
  if(!length) return;
+ uint64_t t0=rt_ticks();
  guest_io_prepare(address,length);
  LARGE_INTEGER position;position.QuadPart=(LONGLONG)offset;DWORD read=0;
  if(!SetFilePointerEx(romfs_file,position,NULL,FILE_BEGIN) || !ReadFile(romfs_file,(void*)(uintptr_t)address,(DWORD)length,&read,NULL) || read!=length)
   boundary("romfs-read-failed",&state,state.pc);
- printf("ROMFS read offset=0x%llx size=0x%llx\n",(unsigned long long)offset,(unsigned long long)length);
+ uint64_t us=(rt_ticks()-t0)*10/192;
+ printf("ROMFS read offset=0x%llx size=0x%llx us=%llu thread=%u\n",(unsigned long long)offset,(unsigned long long)length,(unsigned long long)us,current_thread);
 }

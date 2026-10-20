@@ -1,35 +1,27 @@
 @nsobid-4B159F0F7A360669738390EE8657B4F0
 // Astral Chain v1.0.1, applied after Dynamic-FPS 1.0.1.pchtxt (native_trace --patch, in that order).
 //
-// Dynamic-FPS limits the frame step to 2 ticks of 1/30 s. A frame that takes longer (a shader built for the first
-// time, a streaming stall) loses the rest, while the audio plays on in real time: cutscenes drifted behind their
-// voices by the sum of those losses. During cutscene playback (timer flag bit 30 set: w21 == 0 in the mod's step
-// code) the limit becomes 8 ticks, so a cutscene catches up after a stall of up to ~270 ms. Gameplay keeps 2.
+// Cutscenes play as in the original game: its own fixed-step timer path (main+0x91DC48, step 1.0 per frame) at a
+// steady 30 FPS, while gameplay keeps Dynamic-FPS's measured step at 60 FPS. Measured on the opening cutscene (frames
+// from its start to a white flash ~97 s in; the original takes 2910 frames, its audio ~97 s): Dynamic-FPS's step path
+// reached it in 2820 frames even at a step of exactly 1.0, i.e. its picture ran ~3 % ahead of the voices at any frame
+// rate; at 60 FPS by 2.5-2.8 s at that point. The game's cutscene mode is timer flag bit 30 (w21 == 0 there).
 //
-// 0xA0E7F8 held "fmov s1,#2" (the maximum step) in the mod's code cave; it branches to 4 new words after the cave's
+// The step code reports cutscene mode to the runtime every frame (svc #0xB1, host_runtime.c.in). In a cutscene the
+// runtime sets the step (1.0, plus whole frames when the picture falls a frame or more behind real time after a stall,
+// up to 7) and the mod's whole-tick count (+0xD8), and nvn_present_pace (nvn_hle.h) presents at 30 FPS.
+// AC_CUTSCENE_FPS=60: cutscenes as gameplay (measured step, 60 FPS).
+//
+// 0xA0E7F8 held "fmov s1,#2" (the maximum step) in the mod's code cave; it branches to 5 new words after the cave's
 // last one (0xA0EFD0), still inside the executable page that ends the text segment.
 
 @flag offset_shift 0x100
 
-// Cut ends (0x8C2420, per-frame cutscene timeline update; [x19] = cut, [x19+4] = time in cut, w24 = cut length,
-// s8 = step). The game ends a cut by clamping its time to (length - step) once, then moving to the next cut at time 0.
-// With the original fixed step of 1.0 that loses nothing. With measured, slightly varying steps the clamp fires and
-// discards up to about half a frame at each cut, so cutscenes drift against their voices (Dynamic-FPS: "picture up to
-// about 0.5 s off"; its v1.1 fixed it with 30 FPS cutscene steps, which looked smeared). Here a cut ends when its time
-// reaches the length, and the remainder carries into the next cut. At a step of 1.0 this is the same as the original.
-//
-// 0x8C2548 ldr s0,[x19,#4] and 0x8C254C scvtf s1,w24 (a branch target) are kept; 0x8C2568-0x8C2570 become unused.
-
 @enabled
-008C2550 0020211E // fcmp s0,s1: time in cut against its length
-008C2554 04010054 // b.mi 0x8C2574: still inside the cut
-008C2558 0138211E // fsub s1,s0,s1: remainder past the cut's end
-008C255C 770200B9 // str w23,[x19]: next cut
-008C2560 610600BD // str s1,[x19,#4]: starts at the remainder
-008C2564 04000014 // b 0x8C2574
 00A0E7F8 F7010014 // b 0xA0EFD4
-00A0EFD4 0110201E // fmov s1,#2.0: gameplay maximum
-00A0EFD8 55000035 // cbnz w21,0xA0EFE0: not in a cutscene
-00A0EFDC 0110241E // fmov s1,#8.0: cutscene maximum
-00A0EFE0 07FEFF17 // b 0xA0E7FC: fminnm s0,s0,s1
+00A0EFD4 211600D4 // svc #0xB1: cutscene mode to the runtime; in a cutscene it sets s8 (step) and +0xD8
+00A0EFD8 0110201E // fmov s1,#2.0: gameplay maximum step
+00A0EFDC 55000035 // cbnz w21,0xA0EFE4: not in a cutscene
+00A0EFE0 1A3BFC17 // b 0x91DC48: the original's fixed-step path (str s8,[x19,#0xD0])
+00A0EFE4 06FEFF17 // b 0xA0E7FC: fminnm s0,s0,s1
 @stop
