@@ -753,7 +753,6 @@ static pthread_cond_t astc_cond = PTHREAD_COND_INITIALIZER;
 
 static void *astc_worker(void *arg) {
     (void)arg;
-    plat_thread_background();
     for (;;) {
         pthread_mutex_lock(&astc_lock);
         while (!astc_count) pthread_cond_wait(&astc_cond, &astc_lock);
@@ -831,9 +830,16 @@ static bool astc_queue(NvnTexture *t, TexBackend *b) {
 void vk_texture_warmup(void) {
     static long budget_ms = -1;
     if (budget_ms < 0) { const char *e = getenv("LARECOMP_TEX_WARM_MS"); budget_ms = e ? atol(e) : 4; }
+    // Frames with few draws (loading screens: ~30) get 12 ms: a cutscene's textures, created while it loads, were not
+    // all ready by its first frame (386 ms of uploads in that frame on a second PC).
+    extern uint64_t vk_draws_total;
+    static uint64_t last_draws;
+    uint64_t draws = vk_draws_total - last_draws;
+    last_draws = vk_draws_total;
     if (!budget_ms || !warm_n) return;
+    long frame_ms = draws < 100 && budget_ms < 12 ? 12 : budget_ms;
     extern int vk_pages_changed(uint64_t addr, uint64_t size, uint32_t since, uint32_t *now);
-    uint64_t t0 = SDL_GetTicksNS(), limit = (uint64_t)budget_ms * 1000000ull;
+    uint64_t t0 = SDL_GetTicksNS(), limit = (uint64_t)frame_ms * 1000000ull;
     for (int i = warm_n - 1; i >= 0 && i < warm_n && SDL_GetTicksNS() - t0 < limit; i--) {
         NvnTexture *t = warm_list[i];
         TexBackend *b = t->backend;

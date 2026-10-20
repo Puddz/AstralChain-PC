@@ -30,6 +30,7 @@ static VkQueryPool prof_qp;
 static uint64_t cum_exec, cum_wait, cum_draws, cum_submits;  // (profiling) never reset: hitch log
 static uint32_t prof_end_line[4096];  // passes ended, by the exec.c line that ended them (0: submit / present)
 uint64_t prof_views_created;  // textures.c vk_image_view cache misses
+uint64_t vk_draws_total;  // (textures.c warm-up: draws per frame)
 uint64_t cum_up_ns, cum_built_ns;  // (profiling) texture upload checks, waits for pipelines: hitch log
 uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
 #define PROF_T0() uint64_t prof_t0_ = prof ? SDL_GetTicksNS() : 0
@@ -3623,7 +3624,7 @@ static void draw_(CmdRec *r, bool indexed) {
         if (!use_index) vkCmdDraw(cb, count, run_n[ri], first, base_inst + run_at[ri]);
         else vkCmdDrawIndexed(cb, icount, run_n[ri], 0, base_vertex, base_inst + run_at[ri]);
     }
-    stat_draws++;
+    stat_draws++; vk_draws_total++;
     cum_draws++;
     if (g_gpuprof_frame && gp_n) {
         if (!gp_draws[gp_n - 1]) {  // first draw of the row: its fragment shader hash

@@ -91,21 +91,31 @@ static void hid_ring_write(HidRing *ring,const HidSample *sample) {
  * the Switch layout: Xbox A/B/X/Y (bottom/right/left/top) -> Switch B/A/Y/X. */
 typedef struct {uint16_t buttons;uint8_t lt,rt;int16_t lx,ly,rx,ry;} HidXinputPad;
 typedef struct {uint32_t packet;HidXinputPad pad;} HidXinputState;
+/* Probing absent pads is slow (~100 ms on a second PC): it ran once per second on the game thread under the kernel
+ * lock, stopping every guest thread, the sound's too (sound queue dry every ~1.15 s in play). A background thread
+ * looks for a pad; the game thread only reads the one found. */
+static DWORD (WINAPI *xinput_get_state)(DWORD,HidXinputState*);
+static volatile LONG xinput_pad=-1;
+static DWORD WINAPI xinput_probe(void *argument) {
+ (void)argument;
+ SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
+ for(;;) {
+  if(xinput_pad<0) for(int i=0;i<4;i++) {HidXinputState s;if(!xinput_get_state(i,&s)) {InterlockedExchange(&xinput_pad,i);break;}}
+  Sleep(1000);
+ }
+ return 0;
+}
 static void hid_xinput(HidSample *sample) {
- static DWORD (WINAPI *get_state)(DWORD,HidXinputState*);static int loaded;static uint64_t retry;
+ static int loaded;
  if(!loaded) {
   loaded=1;HMODULE x=LoadLibraryExW(L"xinput1_4.dll",NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);
-  if(x) get_state=(DWORD (WINAPI*)(DWORD,HidXinputState*))GetProcAddress(x,"XInputGetState");
+  if(x) xinput_get_state=(DWORD (WINAPI*)(DWORD,HidXinputState*))GetProcAddress(x,"XInputGetState");
+  if(xinput_get_state) {HANDLE t=CreateThread(NULL,0,xinput_probe,NULL,0,NULL);if(t) CloseHandle(t);}
  }
- if(!get_state) return;
- static int pad=-1;
- if(pad<0) {
-  uint64_t now=rt_ticks();if(now<retry) return; /* probing absent pads is slow: once per second */
-  retry=now+19200000;
-  for(int i=0;i<4 && pad<0;i++){HidXinputState s;if(!get_state(i,&s))pad=i;}
-  if(pad<0) return;
- }
- HidXinputState s;if(get_state((DWORD)pad,&s)){pad=-1;return;}
+ if(!xinput_get_state) return;
+ LONG pad=xinput_pad;
+ if(pad<0) return;
+ HidXinputState s;if(xinput_get_state((DWORD)pad,&s)){InterlockedCompareExchange(&xinput_pad,-1,pad);return;}
  static const struct {uint16_t xinput;unsigned bit;} map[]={
   {0x1000,1},{0x2000,0},{0x4000,3},{0x8000,2},{0x0040,4},{0x0080,5},{0x0100,6},{0x0200,7},
   {0x0010,10},{0x0020,11},{0x0004,12},{0x0001,13},{0x0008,14},{0x0002,15}};
