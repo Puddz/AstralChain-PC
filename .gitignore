@@ -1,0 +1,14 @@
+# Everything made from your own dump, plus downloaded tools. Never commit or share these.
+/game/
+/build/
+/tools/
+/userdata/
+/.venv/
+__pycache__/
+*.pyc
+# Dumps and keys, in case they are placed here
+*.xci
+*.nsp
+*.nca
+*.keys
+/setup-test.log

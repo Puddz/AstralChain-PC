@@ -1,0 +1,681 @@
+@nsobid-4B159F0F7A360669738390EE8657B4F0
+
+# Astral Chain [01007300020FA000] v1.0.1 - Dynamic-60fps v1.1.1 (60 fps cap)
+# v1.0 + two fixes for high frame rates:
+#  - Action and input timers (move input windows, double-tap windows, action delays) count whole 30 FPS frames.
+#  - Camera smoothing uses the frame time instead of a fixed fraction per frame.
+# Disable the Static mods and the "Cutscenes Speed Fix For 60 FPS Patch" cheat.
+
+@flag offset_shift 0x100
+# Dynamic FPS v1.1.1 - Dynamic-60fps
+@enabled
+009E8D84 21008052 // Init: mov w1,#1
+009DB6BC 21008052 // Runtime: mov w1,#1
+0091DBDC 686278B4 // First sample: cbz x8,0xA0E828
+0091DC10 F0C20314 // Measured sample: b 0xA0E7D0
+0048BE14 08D940B9 // Replace FCVTZS: ldr w8,[x8,#0xD8]
+0057E7DC 08DB40B9 // Load whole ticks: ldr w8,[x24,#0xD8]
+0057E7E0 88010034 // Zero ticks: cbz w8,0x57E810
+00A0E7D0 61DE40BD // ldr s1,[x19,#0xDC]: frames per millisecond
+00A0E7D4 0808211E // fmul s8,s0,s1: measured frame step
+00A0E7D8 B5000034 // cbz w21,0xA0E7EC: preserve override eligibility
+00A0E7DC 656BFA97 // bl 0x8A9570: read override
+00A0E7E0 0820201E // fcmp s0,#0
+00A0E7E4 4D000054 // b.le 0xA0E7EC: ignore nonpositive override
+00A0E7E8 0809201E // fmul s8,s8,s0: apply positive correction
+00A0E7EC 08B0A752 // mov w8,#0x3D800000: float 1/16
+00A0E7F0 0101271E // fmov s1,w8: load floor
+00A0E7F4 0069211E // fmaxnm s0,s8,s1: enforce floor
+00A0E7F8 0110201E // fmov s1,#2: maximum step
+00A0E7FC 0078211E // fminnm s0,s0,s1: enforce maximum
+00A0E800 60D200BD // str s0,[x19,#0xD0]: publish floating step
+00A0E804 61D640BD // ldr s1,[x19,#0xD4]: integer-clock remainder
+00A0E808 2128201E // fadd s1,s1,s0: accumulate fractional ticks
+00A0E80C 2800391E // fcvtzu w8,s1: extract whole ticks
+00A0E810 0201231E // ucvtf s2,w8
+00A0E814 2138221E // fsub s1,s1,s2: retain remainder
+00A0E818 61D600BD // str s1,[x19,#0xD4]: no feedback into D0
+00A0E81C 68DA00B9 // str w8,[x19,#0xD8]: publish whole ticks
+00A0E820 7FE600B9 // str wzr,[x19,#0xE4]: clear unused averaging count
+00A0E824 243DFC17 // b 0x91DCB4: timestamp and normal epilogue
+00A0E828 7FD600B9 // First sample: clear integer remainder
+00A0E82C F0FFFF17 // b 0xA0E7EC: incoming s8 is 1
+00308A9C 65171C14 // EXPERIMENTAL r2 combo cue (v1 site 1) +0x1290: b 0xa0e830 (was subs w8,w8,#1)
+00A0E830 491D00D0 // r2 cave 0x308a9c: adrp x9, #0xdb8000
+00A0E834 29D144F9 // r2 cave 0x308a9c: ldr x9, [x9, #0x9a0]
+00A0E838 29D940B9 // r2 cave 0x308a9c: ldr w9, [x9, #0xd8]
+00A0E83C C9000034 // r2 cave 0x308a9c: cbz w9, #0xa0e854
+00A0E840 1F050071 // r2 cave 0x308a9c: cmp w8, #1
+00A0E844 00A1497A // r2 cave 0x308a9c: ccmp w8, w9, #0, ge
+00A0E848 09B1891A // r2 cave 0x308a9c: csel w9, w8, w9, lt
+00A0E84C 0801096B // r2 cave 0x308a9c: subs w8, w8, w9
+00A0E850 94E8E317 // r2 cave 0x308a9c: b #0x308aa0
+00A0E854 1F010071 // r2 cave 0x308a9c: cmp w8, #0
+00A0E858 08C9407A // r2 cave 0x308a9c: ccmp w8, #0, #8, gt
+00A0E85C 91E8E317 // r2 cave 0x308a9c: b #0x308aa0
+000E7F64 4B9A2414 // EXPERIMENTAL r2 15-count (v1 site 3) +0x2020: b 0xa0e890 (was subs w8,w8,#1)
+00A0E890 4A1D00D0 // r2 cave 0xe7f64: adrp x10, #0xdb8000
+00A0E894 4AD144F9 // r2 cave 0xe7f64: ldr x10, [x10, #0x9a0]
+00A0E898 4AD940B9 // r2 cave 0xe7f64: ldr w10, [x10, #0xd8]
+00A0E89C CA000034 // r2 cave 0xe7f64: cbz w10, #0xa0e8b4
+00A0E8A0 1F050071 // r2 cave 0xe7f64: cmp w8, #1
+00A0E8A4 00A14A7A // r2 cave 0xe7f64: ccmp w8, w10, #0, ge
+00A0E8A8 0AB18A1A // r2 cave 0xe7f64: csel w10, w8, w10, lt
+00A0E8AC 08010A6B // r2 cave 0xe7f64: subs w8, w8, w10
+00A0E8B0 AE65DB17 // r2 cave 0xe7f64: b #0xe7f68
+00A0E8B4 1F010071 // r2 cave 0xe7f64: cmp w8, #0
+00A0E8B8 08C9407A // r2 cave 0xe7f64: ccmp w8, #0, #8, gt
+00A0E8BC AB65DB17 // r2 cave 0xe7f64: b #0xe7f68
+000F7CE8 F65A2414 // EXPERIMENTAL r2 chain bind (v1 site 4) +0x2024: b 0xa0e8c0 (was subs w8,w8,#1)
+00A0E8C0 491D00D0 // r2 cave 0xf7ce8: adrp x9, #0xdb8000
+00A0E8C4 29D144F9 // r2 cave 0xf7ce8: ldr x9, [x9, #0x9a0]
+00A0E8C8 29D940B9 // r2 cave 0xf7ce8: ldr w9, [x9, #0xd8]
+00A0E8CC C9000034 // r2 cave 0xf7ce8: cbz w9, #0xa0e8e4
+00A0E8D0 1F050071 // r2 cave 0xf7ce8: cmp w8, #1
+00A0E8D4 00A1497A // r2 cave 0xf7ce8: ccmp w8, w9, #0, ge
+00A0E8D8 09B1891A // r2 cave 0xf7ce8: csel w9, w8, w9, lt
+00A0E8DC 0801096B // r2 cave 0xf7ce8: subs w8, w8, w9
+00A0E8E0 03A5DB17 // r2 cave 0xf7ce8: b #0xf7cec
+00A0E8E4 1F010071 // r2 cave 0xf7ce8: cmp w8, #0
+00A0E8E8 08C9407A // r2 cave 0xf7ce8: ccmp w8, #0, #8, gt
+00A0E8EC 00A5DB17 // r2 cave 0xf7ce8: b #0xf7cec
+000F8720 50582414 // EXPERIMENTAL r2 S3 15-count in site-4 routine +0x2020: b 0xa0e860 (was subs w8,w8,#1)
+00A0E860 4A1D00D0 // r2 cave 0xf8720: adrp x10, #0xdb8000
+00A0E864 4AD144F9 // r2 cave 0xf8720: ldr x10, [x10, #0x9a0]
+00A0E868 4AD940B9 // r2 cave 0xf8720: ldr w10, [x10, #0xd8]
+00A0E86C CA000034 // r2 cave 0xf8720: cbz w10, #0xa0e884
+00A0E870 1F050071 // r2 cave 0xf8720: cmp w8, #1
+00A0E874 00A14A7A // r2 cave 0xf8720: ccmp w8, w10, #0, ge
+00A0E878 0AB18A1A // r2 cave 0xf8720: csel w10, w8, w10, lt
+00A0E87C 08010A6B // r2 cave 0xf8720: subs w8, w8, w10
+00A0E880 A9A7DB17 // r2 cave 0xf8720: b #0xf8724
+00A0E884 1F010071 // r2 cave 0xf8720: cmp w8, #0
+00A0E888 08C9407A // r2 cave 0xf8720: ccmp w8, #0, #8, gt
+00A0E88C A6A7DB17 // r2 cave 0xf8720: b #0xf8724
+000D5E28 B2E22414 // EXPERIMENTAL r2 S3 +0x2024 exact-zero (D1 handler 0xD3380) +0x2024: b 0xa0e8f0 (was subs w8,w8,#1)
+00A0E8F0 4A1D00D0 // r2 cave 0xd5e28: adrp x10, #0xdb8000
+00A0E8F4 4AD144F9 // r2 cave 0xd5e28: ldr x10, [x10, #0x9a0]
+00A0E8F8 4AD940B9 // r2 cave 0xd5e28: ldr w10, [x10, #0xd8]
+00A0E8FC CA000034 // r2 cave 0xd5e28: cbz w10, #0xa0e914
+00A0E900 1F050071 // r2 cave 0xd5e28: cmp w8, #1
+00A0E904 00A14A7A // r2 cave 0xd5e28: ccmp w8, w10, #0, ge
+00A0E908 0AB18A1A // r2 cave 0xd5e28: csel w10, w8, w10, lt
+00A0E90C 08010A6B // r2 cave 0xd5e28: subs w8, w8, w10
+00A0E910 471DDB17 // r2 cave 0xd5e28: b #0xd5e2c
+00A0E914 1F010071 // r2 cave 0xd5e28: cmp w8, #0
+00A0E918 08C9407A // r2 cave 0xd5e28: ccmp w8, #0, #8, gt
+00A0E91C 441DDB17 // r2 cave 0xd5e28: b #0xd5e2c
+002828AC 1D301E14 // EXPERIMENTAL r2 +0xF64 short latch +0xf64: b 0xa0e920 (was subs w8,w8,#1)
+00A0E920 4A1D00D0 // r2 cave 0x2828ac: adrp x10, #0xdb8000
+00A0E924 4AD144F9 // r2 cave 0x2828ac: ldr x10, [x10, #0x9a0]
+00A0E928 4AD940B9 // r2 cave 0x2828ac: ldr w10, [x10, #0xd8]
+00A0E92C CA000034 // r2 cave 0x2828ac: cbz w10, #0xa0e944
+00A0E930 1F050071 // r2 cave 0x2828ac: cmp w8, #1
+00A0E934 00A14A7A // r2 cave 0x2828ac: ccmp w8, w10, #0, ge
+00A0E938 0AB18A1A // r2 cave 0x2828ac: csel w10, w8, w10, lt
+00A0E93C 08010A6B // r2 cave 0x2828ac: subs w8, w8, w10
+00A0E940 DCCFE117 // r2 cave 0x2828ac: b #0x2828b0
+00A0E944 1F010071 // r2 cave 0x2828ac: cmp w8, #0
+00A0E948 08C9407A // r2 cave 0x2828ac: ccmp w8, #0, #8, gt
+00A0E94C D9CFE117 // r2 cave 0x2828ac: b #0x2828b0
+00283100 142E1E14 // EXPERIMENTAL r2 +0x14B8 buffer +0x14b8: b 0xa0e950 (was subs w8,w8,#1)
+00A0E950 4A1D00D0 // r2 cave 0x283100: adrp x10, #0xdb8000
+00A0E954 4AD144F9 // r2 cave 0x283100: ldr x10, [x10, #0x9a0]
+00A0E958 4AD940B9 // r2 cave 0x283100: ldr w10, [x10, #0xd8]
+00A0E95C CA000034 // r2 cave 0x283100: cbz w10, #0xa0e974
+00A0E960 1F050071 // r2 cave 0x283100: cmp w8, #1
+00A0E964 00A14A7A // r2 cave 0x283100: ccmp w8, w10, #0, ge
+00A0E968 0AB18A1A // r2 cave 0x283100: csel w10, w8, w10, lt
+00A0E96C 08010A6B // r2 cave 0x283100: subs w8, w8, w10
+00A0E970 E5D1E117 // r2 cave 0x283100: b #0x283104
+00A0E974 1F010071 // r2 cave 0x283100: cmp w8, #0
+00A0E978 08C9407A // r2 cave 0x283100: ccmp w8, #0, #8, gt
+00A0E97C E2D1E117 // r2 cave 0x283100: b #0x283104
+0028311C 192E1E14 // EXPERIMENTAL r2 +0x46AEF0 tap buffer +0x46aef0: b 0xa0e980 (was subs w8,w8,#1)
+00A0E980 4A1D00D0 // r2 cave 0x28311c: adrp x10, #0xdb8000
+00A0E984 4AD144F9 // r2 cave 0x28311c: ldr x10, [x10, #0x9a0]
+00A0E988 4AD940B9 // r2 cave 0x28311c: ldr w10, [x10, #0xd8]
+00A0E98C CA000034 // r2 cave 0x28311c: cbz w10, #0xa0e9a4
+00A0E990 1F050071 // r2 cave 0x28311c: cmp w8, #1
+00A0E994 00A14A7A // r2 cave 0x28311c: ccmp w8, w10, #0, ge
+00A0E998 0AB18A1A // r2 cave 0x28311c: csel w10, w8, w10, lt
+00A0E99C 08010A6B // r2 cave 0x28311c: subs w8, w8, w10
+00A0E9A0 E0D1E117 // r2 cave 0x28311c: b #0x283120
+00A0E9A4 1F010071 // r2 cave 0x28311c: cmp w8, #0
+00A0E9A8 08C9407A // r2 cave 0x28311c: ccmp w8, #0, #8, gt
+00A0E9AC DDD1E117 // r2 cave 0x28311c: b #0x283120
+0028759C 051D1E14 // EXPERIMENTAL r2 +0x14D4 buffer +0x14d4: b 0xa0e9b0 (was subs w8,w8,#1)
+00A0E9B0 4A1D00D0 // r2 cave 0x28759c: adrp x10, #0xdb8000
+00A0E9B4 4AD144F9 // r2 cave 0x28759c: ldr x10, [x10, #0x9a0]
+00A0E9B8 4AD940B9 // r2 cave 0x28759c: ldr w10, [x10, #0xd8]
+00A0E9BC CA000034 // r2 cave 0x28759c: cbz w10, #0xa0e9d4
+00A0E9C0 1F050071 // r2 cave 0x28759c: cmp w8, #1
+00A0E9C4 00A14A7A // r2 cave 0x28759c: ccmp w8, w10, #0, ge
+00A0E9C8 0AB18A1A // r2 cave 0x28759c: csel w10, w8, w10, lt
+00A0E9CC 08010A6B // r2 cave 0x28759c: subs w8, w8, w10
+00A0E9D0 F4E2E117 // r2 cave 0x28759c: b #0x2875a0
+00A0E9D4 1F010071 // r2 cave 0x28759c: cmp w8, #0
+00A0E9D8 08C9407A // r2 cave 0x28759c: ccmp w8, #0, #8, gt
+00A0E9DC F1E2E117 // r2 cave 0x28759c: b #0x2875a0
+002875AC 0D1D1E14 // EXPERIMENTAL r2 +0x14D8 buffer +0x14d8: b 0xa0e9e0 (was subs w8,w8,#1)
+00A0E9E0 4A1D00D0 // r2 cave 0x2875ac: adrp x10, #0xdb8000
+00A0E9E4 4AD144F9 // r2 cave 0x2875ac: ldr x10, [x10, #0x9a0]
+00A0E9E8 4AD940B9 // r2 cave 0x2875ac: ldr w10, [x10, #0xd8]
+00A0E9EC CA000034 // r2 cave 0x2875ac: cbz w10, #0xa0ea04
+00A0E9F0 1F050071 // r2 cave 0x2875ac: cmp w8, #1
+00A0E9F4 00A14A7A // r2 cave 0x2875ac: ccmp w8, w10, #0, ge
+00A0E9F8 0AB18A1A // r2 cave 0x2875ac: csel w10, w8, w10, lt
+00A0E9FC 08010A6B // r2 cave 0x2875ac: subs w8, w8, w10
+00A0EA00 ECE2E117 // r2 cave 0x2875ac: b #0x2875b0
+00A0EA04 1F010071 // r2 cave 0x2875ac: cmp w8, #0
+00A0EA08 08C9407A // r2 cave 0x2875ac: ccmp w8, #0, #8, gt
+00A0EA0C E9E2E117 // r2 cave 0x2875ac: b #0x2875b0
+002875BC 151D1E14 // EXPERIMENTAL r2 +0x1414 buffer +0x1414: b 0xa0ea10 (was subs w8,w8,#1)
+00A0EA10 4A1D00D0 // r2 cave 0x2875bc: adrp x10, #0xdb8000
+00A0EA14 4AD144F9 // r2 cave 0x2875bc: ldr x10, [x10, #0x9a0]
+00A0EA18 4AD940B9 // r2 cave 0x2875bc: ldr w10, [x10, #0xd8]
+00A0EA1C CA000034 // r2 cave 0x2875bc: cbz w10, #0xa0ea34
+00A0EA20 1F050071 // r2 cave 0x2875bc: cmp w8, #1
+00A0EA24 00A14A7A // r2 cave 0x2875bc: ccmp w8, w10, #0, ge
+00A0EA28 0AB18A1A // r2 cave 0x2875bc: csel w10, w8, w10, lt
+00A0EA2C 08010A6B // r2 cave 0x2875bc: subs w8, w8, w10
+00A0EA30 E4E2E117 // r2 cave 0x2875bc: b #0x2875c0
+00A0EA34 1F010071 // r2 cave 0x2875bc: cmp w8, #0
+00A0EA38 08C9407A // r2 cave 0x2875bc: ccmp w8, #0, #8, gt
+00A0EA3C E1E2E117 // r2 cave 0x2875bc: b #0x2875c0
+002875CC 1D1D1E14 // EXPERIMENTAL r2 +0x149C buffer +0x149c: b 0xa0ea40 (was subs w8,w8,#1)
+00A0EA40 4A1D00D0 // r2 cave 0x2875cc: adrp x10, #0xdb8000
+00A0EA44 4AD144F9 // r2 cave 0x2875cc: ldr x10, [x10, #0x9a0]
+00A0EA48 4AD940B9 // r2 cave 0x2875cc: ldr w10, [x10, #0xd8]
+00A0EA4C CA000034 // r2 cave 0x2875cc: cbz w10, #0xa0ea64
+00A0EA50 1F050071 // r2 cave 0x2875cc: cmp w8, #1
+00A0EA54 00A14A7A // r2 cave 0x2875cc: ccmp w8, w10, #0, ge
+00A0EA58 0AB18A1A // r2 cave 0x2875cc: csel w10, w8, w10, lt
+00A0EA5C 08010A6B // r2 cave 0x2875cc: subs w8, w8, w10
+00A0EA60 DCE2E117 // r2 cave 0x2875cc: b #0x2875d0
+00A0EA64 1F010071 // r2 cave 0x2875cc: cmp w8, #0
+00A0EA68 08C9407A // r2 cave 0x2875cc: ccmp w8, #0, #8, gt
+00A0EA6C D9E2E117 // r2 cave 0x2875cc: b #0x2875d0
+002875DC 251D1E14 // EXPERIMENTAL r2 +0x14DC buffer +0x14dc: b 0xa0ea70 (was subs w8,w8,#1)
+00A0EA70 4A1D00D0 // r2 cave 0x2875dc: adrp x10, #0xdb8000
+00A0EA74 4AD144F9 // r2 cave 0x2875dc: ldr x10, [x10, #0x9a0]
+00A0EA78 4AD940B9 // r2 cave 0x2875dc: ldr w10, [x10, #0xd8]
+00A0EA7C CA000034 // r2 cave 0x2875dc: cbz w10, #0xa0ea94
+00A0EA80 1F050071 // r2 cave 0x2875dc: cmp w8, #1
+00A0EA84 00A14A7A // r2 cave 0x2875dc: ccmp w8, w10, #0, ge
+00A0EA88 0AB18A1A // r2 cave 0x2875dc: csel w10, w8, w10, lt
+00A0EA8C 08010A6B // r2 cave 0x2875dc: subs w8, w8, w10
+00A0EA90 D4E2E117 // r2 cave 0x2875dc: b #0x2875e0
+00A0EA94 1F010071 // r2 cave 0x2875dc: cmp w8, #0
+00A0EA98 08C9407A // r2 cave 0x2875dc: ccmp w8, #0, #8, gt
+00A0EA9C D1E2E117 // r2 cave 0x2875dc: b #0x2875e0
+00283044 972E1E14 // EXPERIMENTAL r2 bank +0x1364 buffer +0x1364: b 0xa0eaa0 (was sub w8,w8,#1)
+00A0EAA0 4B1D00D0 // r2 cave 0x283044: adrp x11, #0xdb8000
+00A0EAA4 6BD144F9 // r2 cave 0x283044: ldr x11, [x11, #0x9a0]
+00A0EAA8 6BD940B9 // r2 cave 0x283044: ldr w11, [x11, #0xd8]
+00A0EAAC 0B010B6B // r2 cave 0x283044: subs w11, w8, w11
+00A0EAB0 6B819F1A // r2 cave 0x283044: csel w11, w11, wzr, hi
+00A0EAB4 1F010071 // r2 cave 0x283044: cmp w8, #0
+00A0EAB8 68C1881A // r2 cave 0x283044: csel w8, w11, w8, gt
+00A0EABC 63D1E117 // r2 cave 0x283044: b #0x283048
+00283054 9B2E1E14 // EXPERIMENTAL r2 bank +0x1368 buffer +0x1368: b 0xa0eac0 (was sub w8,w8,#1)
+00A0EAC0 4B1D00D0 // r2 cave 0x283054: adrp x11, #0xdb8000
+00A0EAC4 6BD144F9 // r2 cave 0x283054: ldr x11, [x11, #0x9a0]
+00A0EAC8 6BD940B9 // r2 cave 0x283054: ldr w11, [x11, #0xd8]
+00A0EACC 0B010B6B // r2 cave 0x283054: subs w11, w8, w11
+00A0EAD0 6B819F1A // r2 cave 0x283054: csel w11, w11, wzr, hi
+00A0EAD4 1F010071 // r2 cave 0x283054: cmp w8, #0
+00A0EAD8 68C1881A // r2 cave 0x283054: csel w8, w11, w8, gt
+00A0EADC 5FD1E117 // r2 cave 0x283054: b #0x283058
+00283064 9F2E1E14 // EXPERIMENTAL r2 bank +0x136c buffer +0x136c: b 0xa0eae0 (was sub w8,w8,#1)
+00A0EAE0 4B1D00D0 // r2 cave 0x283064: adrp x11, #0xdb8000
+00A0EAE4 6BD144F9 // r2 cave 0x283064: ldr x11, [x11, #0x9a0]
+00A0EAE8 6BD940B9 // r2 cave 0x283064: ldr w11, [x11, #0xd8]
+00A0EAEC 0B010B6B // r2 cave 0x283064: subs w11, w8, w11
+00A0EAF0 6B819F1A // r2 cave 0x283064: csel w11, w11, wzr, hi
+00A0EAF4 1F010071 // r2 cave 0x283064: cmp w8, #0
+00A0EAF8 68C1881A // r2 cave 0x283064: csel w8, w11, w8, gt
+00A0EAFC 5BD1E117 // r2 cave 0x283064: b #0x283068
+00283074 A32E1E14 // EXPERIMENTAL r2 bank +0x138c buffer +0x138c: b 0xa0eb00 (was sub w8,w8,#1)
+00A0EB00 4B1D00D0 // r2 cave 0x283074: adrp x11, #0xdb8000
+00A0EB04 6BD144F9 // r2 cave 0x283074: ldr x11, [x11, #0x9a0]
+00A0EB08 6BD940B9 // r2 cave 0x283074: ldr w11, [x11, #0xd8]
+00A0EB0C 0B010B6B // r2 cave 0x283074: subs w11, w8, w11
+00A0EB10 6B819F1A // r2 cave 0x283074: csel w11, w11, wzr, hi
+00A0EB14 1F010071 // r2 cave 0x283074: cmp w8, #0
+00A0EB18 68C1881A // r2 cave 0x283074: csel w8, w11, w8, gt
+00A0EB1C 57D1E117 // r2 cave 0x283074: b #0x283078
+00283084 A72E1E14 // EXPERIMENTAL r2 bank +0x1378 buffer +0x1378: b 0xa0eb20 (was sub w8,w8,#1)
+00A0EB20 4B1D00D0 // r2 cave 0x283084: adrp x11, #0xdb8000
+00A0EB24 6BD144F9 // r2 cave 0x283084: ldr x11, [x11, #0x9a0]
+00A0EB28 6BD940B9 // r2 cave 0x283084: ldr w11, [x11, #0xd8]
+00A0EB2C 0B010B6B // r2 cave 0x283084: subs w11, w8, w11
+00A0EB30 6B819F1A // r2 cave 0x283084: csel w11, w11, wzr, hi
+00A0EB34 1F010071 // r2 cave 0x283084: cmp w8, #0
+00A0EB38 68C1881A // r2 cave 0x283084: csel w8, w11, w8, gt
+00A0EB3C 53D1E117 // r2 cave 0x283084: b #0x283088
+00283094 AB2E1E14 // EXPERIMENTAL r2 bank +0x137c buffer +0x137c: b 0xa0eb40 (was sub w8,w8,#1)
+00A0EB40 4B1D00D0 // r2 cave 0x283094: adrp x11, #0xdb8000
+00A0EB44 6BD144F9 // r2 cave 0x283094: ldr x11, [x11, #0x9a0]
+00A0EB48 6BD940B9 // r2 cave 0x283094: ldr w11, [x11, #0xd8]
+00A0EB4C 0B010B6B // r2 cave 0x283094: subs w11, w8, w11
+00A0EB50 6B819F1A // r2 cave 0x283094: csel w11, w11, wzr, hi
+00A0EB54 1F010071 // r2 cave 0x283094: cmp w8, #0
+00A0EB58 68C1881A // r2 cave 0x283094: csel w8, w11, w8, gt
+00A0EB5C 4FD1E117 // r2 cave 0x283094: b #0x283098
+002830A4 AF2E1E14 // EXPERIMENTAL r2 bank +0x1390 buffer +0x1390: b 0xa0eb60 (was sub w8,w8,#1)
+00A0EB60 4B1D00D0 // r2 cave 0x2830a4: adrp x11, #0xdb8000
+00A0EB64 6BD144F9 // r2 cave 0x2830a4: ldr x11, [x11, #0x9a0]
+00A0EB68 6BD940B9 // r2 cave 0x2830a4: ldr w11, [x11, #0xd8]
+00A0EB6C 0B010B6B // r2 cave 0x2830a4: subs w11, w8, w11
+00A0EB70 6B819F1A // r2 cave 0x2830a4: csel w11, w11, wzr, hi
+00A0EB74 1F010071 // r2 cave 0x2830a4: cmp w8, #0
+00A0EB78 68C1881A // r2 cave 0x2830a4: csel w8, w11, w8, gt
+00A0EB7C 4BD1E117 // r2 cave 0x2830a4: b #0x2830a8
+002830B4 B32E1E14 // EXPERIMENTAL r2 bank +0x1370 buffer +0x1370: b 0xa0eb80 (was sub w8,w8,#1)
+00A0EB80 4B1D00D0 // r2 cave 0x2830b4: adrp x11, #0xdb8000
+00A0EB84 6BD144F9 // r2 cave 0x2830b4: ldr x11, [x11, #0x9a0]
+00A0EB88 6BD940B9 // r2 cave 0x2830b4: ldr w11, [x11, #0xd8]
+00A0EB8C 0B010B6B // r2 cave 0x2830b4: subs w11, w8, w11
+00A0EB90 6B819F1A // r2 cave 0x2830b4: csel w11, w11, wzr, hi
+00A0EB94 1F010071 // r2 cave 0x2830b4: cmp w8, #0
+00A0EB98 68C1881A // r2 cave 0x2830b4: csel w8, w11, w8, gt
+00A0EB9C 47D1E117 // r2 cave 0x2830b4: b #0x2830b8
+002830C4 B72E1E14 // EXPERIMENTAL r2 bank +0x1374 buffer +0x1374: b 0xa0eba0 (was sub w8,w8,#1)
+00A0EBA0 4B1D00D0 // r2 cave 0x2830c4: adrp x11, #0xdb8000
+00A0EBA4 6BD144F9 // r2 cave 0x2830c4: ldr x11, [x11, #0x9a0]
+00A0EBA8 6BD940B9 // r2 cave 0x2830c4: ldr w11, [x11, #0xd8]
+00A0EBAC 0B010B6B // r2 cave 0x2830c4: subs w11, w8, w11
+00A0EBB0 6B819F1A // r2 cave 0x2830c4: csel w11, w11, wzr, hi
+00A0EBB4 1F010071 // r2 cave 0x2830c4: cmp w8, #0
+00A0EBB8 68C1881A // r2 cave 0x2830c4: csel w8, w11, w8, gt
+00A0EBBC 43D1E117 // r2 cave 0x2830c4: b #0x2830c8
+002830D4 BB2E1E14 // EXPERIMENTAL r2 bank +0x13a4 buffer +0x13a4: b 0xa0ebc0 (was sub w8,w8,#1)
+00A0EBC0 4B1D00D0 // r2 cave 0x2830d4: adrp x11, #0xdb8000
+00A0EBC4 6BD144F9 // r2 cave 0x2830d4: ldr x11, [x11, #0x9a0]
+00A0EBC8 6BD940B9 // r2 cave 0x2830d4: ldr w11, [x11, #0xd8]
+00A0EBCC 0B010B6B // r2 cave 0x2830d4: subs w11, w8, w11
+00A0EBD0 6B819F1A // r2 cave 0x2830d4: csel w11, w11, wzr, hi
+00A0EBD4 1F010071 // r2 cave 0x2830d4: cmp w8, #0
+00A0EBD8 68C1881A // r2 cave 0x2830d4: csel w8, w11, w8, gt
+00A0EBDC 3FD1E117 // r2 cave 0x2830d4: b #0x2830d8
+002830E4 BF2E1E14 // EXPERIMENTAL r2 bank +0x13a8 buffer +0x13a8: b 0xa0ebe0 (was sub w8,w8,#1)
+00A0EBE0 4B1D00D0 // r2 cave 0x2830e4: adrp x11, #0xdb8000
+00A0EBE4 6BD144F9 // r2 cave 0x2830e4: ldr x11, [x11, #0x9a0]
+00A0EBE8 6BD940B9 // r2 cave 0x2830e4: ldr w11, [x11, #0xd8]
+00A0EBEC 0B010B6B // r2 cave 0x2830e4: subs w11, w8, w11
+00A0EBF0 6B819F1A // r2 cave 0x2830e4: csel w11, w11, wzr, hi
+00A0EBF4 1F010071 // r2 cave 0x2830e4: cmp w8, #0
+00A0EBF8 68C1881A // r2 cave 0x2830e4: csel w8, w11, w8, gt
+00A0EBFC 3BD1E117 // r2 cave 0x2830e4: b #0x2830e8
+002830F4 C32E1E14 // EXPERIMENTAL r2 bank +0x13cc buffer +0x13cc: b 0xa0ec00 (was sub w8,w8,#1)
+00A0EC00 4B1D00D0 // r2 cave 0x2830f4: adrp x11, #0xdb8000
+00A0EC04 6BD144F9 // r2 cave 0x2830f4: ldr x11, [x11, #0x9a0]
+00A0EC08 6BD940B9 // r2 cave 0x2830f4: ldr w11, [x11, #0xd8]
+00A0EC0C 0B010B6B // r2 cave 0x2830f4: subs w11, w8, w11
+00A0EC10 6B819F1A // r2 cave 0x2830f4: csel w11, w11, wzr, hi
+00A0EC14 1F010071 // r2 cave 0x2830f4: cmp w8, #0
+00A0EC18 68C1881A // r2 cave 0x2830f4: csel w8, w11, w8, gt
+00A0EC1C 37D1E117 // r2 cave 0x2830f4: b #0x2830f8
+00283138 BA2E1E14 // EXPERIMENTAL r2 bank +0x1470 buffer +0x1470: b 0xa0ec20 (was sub w8,w8,#1)
+00A0EC20 4B1D00D0 // r2 cave 0x283138: adrp x11, #0xdb8000
+00A0EC24 6BD144F9 // r2 cave 0x283138: ldr x11, [x11, #0x9a0]
+00A0EC28 6BD940B9 // r2 cave 0x283138: ldr w11, [x11, #0xd8]
+00A0EC2C 0B010B6B // r2 cave 0x283138: subs w11, w8, w11
+00A0EC30 6B819F1A // r2 cave 0x283138: csel w11, w11, wzr, hi
+00A0EC34 1F010071 // r2 cave 0x283138: cmp w8, #0
+00A0EC38 68C1881A // r2 cave 0x283138: csel w8, w11, w8, gt
+00A0EC3C 40D1E117 // r2 cave 0x283138: b #0x28313c
+00283148 BE2E1E14 // EXPERIMENTAL r2 bank +0x1474 buffer +0x1474: b 0xa0ec40 (was sub w8,w8,#1)
+00A0EC40 4B1D00D0 // r2 cave 0x283148: adrp x11, #0xdb8000
+00A0EC44 6BD144F9 // r2 cave 0x283148: ldr x11, [x11, #0x9a0]
+00A0EC48 6BD940B9 // r2 cave 0x283148: ldr w11, [x11, #0xd8]
+00A0EC4C 0B010B6B // r2 cave 0x283148: subs w11, w8, w11
+00A0EC50 6B819F1A // r2 cave 0x283148: csel w11, w11, wzr, hi
+00A0EC54 1F010071 // r2 cave 0x283148: cmp w8, #0
+00A0EC58 68C1881A // r2 cave 0x283148: csel w8, w11, w8, gt
+00A0EC5C 3CD1E117 // r2 cave 0x283148: b #0x28314c
+00283158 C22E1E14 // EXPERIMENTAL r2 bank +0x1478 buffer +0x1478: b 0xa0ec60 (was sub w8,w8,#1)
+00A0EC60 4B1D00D0 // r2 cave 0x283158: adrp x11, #0xdb8000
+00A0EC64 6BD144F9 // r2 cave 0x283158: ldr x11, [x11, #0x9a0]
+00A0EC68 6BD940B9 // r2 cave 0x283158: ldr w11, [x11, #0xd8]
+00A0EC6C 0B010B6B // r2 cave 0x283158: subs w11, w8, w11
+00A0EC70 6B819F1A // r2 cave 0x283158: csel w11, w11, wzr, hi
+00A0EC74 1F010071 // r2 cave 0x283158: cmp w8, #0
+00A0EC78 68C1881A // r2 cave 0x283158: csel w8, w11, w8, gt
+00A0EC7C 38D1E117 // r2 cave 0x283158: b #0x28315c
+00283168 C62E1E14 // EXPERIMENTAL r2 bank +0x147c buffer +0x147c: b 0xa0ec80 (was sub w8,w8,#1)
+00A0EC80 4B1D00D0 // r2 cave 0x283168: adrp x11, #0xdb8000
+00A0EC84 6BD144F9 // r2 cave 0x283168: ldr x11, [x11, #0x9a0]
+00A0EC88 6BD940B9 // r2 cave 0x283168: ldr w11, [x11, #0xd8]
+00A0EC8C 0B010B6B // r2 cave 0x283168: subs w11, w8, w11
+00A0EC90 6B819F1A // r2 cave 0x283168: csel w11, w11, wzr, hi
+00A0EC94 1F010071 // r2 cave 0x283168: cmp w8, #0
+00A0EC98 68C1881A // r2 cave 0x283168: csel w8, w11, w8, gt
+00A0EC9C 34D1E117 // r2 cave 0x283168: b #0x28316c
+00283178 CA2E1E14 // EXPERIMENTAL r2 bank +0x1480 buffer +0x1480: b 0xa0eca0 (was sub w8,w8,#1)
+00A0ECA0 4B1D00D0 // r2 cave 0x283178: adrp x11, #0xdb8000
+00A0ECA4 6BD144F9 // r2 cave 0x283178: ldr x11, [x11, #0x9a0]
+00A0ECA8 6BD940B9 // r2 cave 0x283178: ldr w11, [x11, #0xd8]
+00A0ECAC 0B010B6B // r2 cave 0x283178: subs w11, w8, w11
+00A0ECB0 6B819F1A // r2 cave 0x283178: csel w11, w11, wzr, hi
+00A0ECB4 1F010071 // r2 cave 0x283178: cmp w8, #0
+00A0ECB8 68C1881A // r2 cave 0x283178: csel w8, w11, w8, gt
+00A0ECBC 30D1E117 // r2 cave 0x283178: b #0x28317c
+00283188 CE2E1E14 // EXPERIMENTAL r2 bank +0x1484 buffer +0x1484: b 0xa0ecc0 (was sub w8,w8,#1)
+00A0ECC0 4B1D00D0 // r2 cave 0x283188: adrp x11, #0xdb8000
+00A0ECC4 6BD144F9 // r2 cave 0x283188: ldr x11, [x11, #0x9a0]
+00A0ECC8 6BD940B9 // r2 cave 0x283188: ldr w11, [x11, #0xd8]
+00A0ECCC 0B010B6B // r2 cave 0x283188: subs w11, w8, w11
+00A0ECD0 6B819F1A // r2 cave 0x283188: csel w11, w11, wzr, hi
+00A0ECD4 1F010071 // r2 cave 0x283188: cmp w8, #0
+00A0ECD8 68C1881A // r2 cave 0x283188: csel w8, w11, w8, gt
+00A0ECDC 2CD1E117 // r2 cave 0x283188: b #0x28318c
+00283198 D22E1E14 // EXPERIMENTAL r2 bank +0x1488 buffer +0x1488: b 0xa0ece0 (was sub w8,w8,#1)
+00A0ECE0 4B1D00D0 // r2 cave 0x283198: adrp x11, #0xdb8000
+00A0ECE4 6BD144F9 // r2 cave 0x283198: ldr x11, [x11, #0x9a0]
+00A0ECE8 6BD940B9 // r2 cave 0x283198: ldr w11, [x11, #0xd8]
+00A0ECEC 0B010B6B // r2 cave 0x283198: subs w11, w8, w11
+00A0ECF0 6B819F1A // r2 cave 0x283198: csel w11, w11, wzr, hi
+00A0ECF4 1F010071 // r2 cave 0x283198: cmp w8, #0
+00A0ECF8 68C1881A // r2 cave 0x283198: csel w8, w11, w8, gt
+00A0ECFC 28D1E117 // r2 cave 0x283198: b #0x28319c
+002831A8 D62E1E14 // EXPERIMENTAL r2 bank +0x148c buffer +0x148c: b 0xa0ed00 (was sub w8,w8,#1)
+00A0ED00 4B1D00D0 // r2 cave 0x2831a8: adrp x11, #0xdb8000
+00A0ED04 6BD144F9 // r2 cave 0x2831a8: ldr x11, [x11, #0x9a0]
+00A0ED08 6BD940B9 // r2 cave 0x2831a8: ldr w11, [x11, #0xd8]
+00A0ED0C 0B010B6B // r2 cave 0x2831a8: subs w11, w8, w11
+00A0ED10 6B819F1A // r2 cave 0x2831a8: csel w11, w11, wzr, hi
+00A0ED14 1F010071 // r2 cave 0x2831a8: cmp w8, #0
+00A0ED18 68C1881A // r2 cave 0x2831a8: csel w8, w11, w8, gt
+00A0ED1C 24D1E117 // r2 cave 0x2831a8: b #0x2831ac
+002831B8 DA2E1E14 // EXPERIMENTAL r2 bank +0x1490 buffer +0x1490: b 0xa0ed20 (was sub w8,w8,#1)
+00A0ED20 4B1D00D0 // r2 cave 0x2831b8: adrp x11, #0xdb8000
+00A0ED24 6BD144F9 // r2 cave 0x2831b8: ldr x11, [x11, #0x9a0]
+00A0ED28 6BD940B9 // r2 cave 0x2831b8: ldr w11, [x11, #0xd8]
+00A0ED2C 0B010B6B // r2 cave 0x2831b8: subs w11, w8, w11
+00A0ED30 6B819F1A // r2 cave 0x2831b8: csel w11, w11, wzr, hi
+00A0ED34 1F010071 // r2 cave 0x2831b8: cmp w8, #0
+00A0ED38 68C1881A // r2 cave 0x2831b8: csel w8, w11, w8, gt
+00A0ED3C 20D1E117 // r2 cave 0x2831b8: b #0x2831bc
+002831C8 DE2E1E14 // EXPERIMENTAL r2 bank +0x1450 buffer +0x1450: b 0xa0ed40 (was sub w8,w8,#1)
+00A0ED40 4B1D00D0 // r2 cave 0x2831c8: adrp x11, #0xdb8000
+00A0ED44 6BD144F9 // r2 cave 0x2831c8: ldr x11, [x11, #0x9a0]
+00A0ED48 6BD940B9 // r2 cave 0x2831c8: ldr w11, [x11, #0xd8]
+00A0ED4C 0B010B6B // r2 cave 0x2831c8: subs w11, w8, w11
+00A0ED50 6B819F1A // r2 cave 0x2831c8: csel w11, w11, wzr, hi
+00A0ED54 1F010071 // r2 cave 0x2831c8: cmp w8, #0
+00A0ED58 68C1881A // r2 cave 0x2831c8: csel w8, w11, w8, gt
+00A0ED5C 1CD1E117 // r2 cave 0x2831c8: b #0x2831cc
+002831DC E12E1E14 // EXPERIMENTAL r2 bank +0x1454 buffer +0x1454: b 0xa0ed60 (was sub w8,w8,#1)
+00A0ED60 4B1D00D0 // r2 cave 0x2831dc: adrp x11, #0xdb8000
+00A0ED64 6BD144F9 // r2 cave 0x2831dc: ldr x11, [x11, #0x9a0]
+00A0ED68 6BD940B9 // r2 cave 0x2831dc: ldr w11, [x11, #0xd8]
+00A0ED6C 0B010B6B // r2 cave 0x2831dc: subs w11, w8, w11
+00A0ED70 6B819F1A // r2 cave 0x2831dc: csel w11, w11, wzr, hi
+00A0ED74 1F010071 // r2 cave 0x2831dc: cmp w8, #0
+00A0ED78 68C1881A // r2 cave 0x2831dc: csel w8, w11, w8, gt
+00A0ED7C 19D1E117 // r2 cave 0x2831dc: b #0x2831e0
+000D5DD4 EBE32494 // EXPERIMENTAL r3 [hs] +0x2024 sibling path: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3D30 146C1494 // EXPERIMENTAL r3 [hs] +0x38 delay set by 0x4F27A0(w3); exact-zero -> 0x4F27A0(+0x3C,+0x40) issues the scale: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3D5C 096C1494 // EXPERIMENTAL r3 [hs] +0x34 duration of scale +0x30; exact-zero -> sound 0x8DD890 + 0x923B90(+0xE8); expiry -> +0x30=1.0: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3D98 FA6B1494 // EXPERIMENTAL r3 [hs] +0x48 duration of scale +0x44; exact-zero -> +0x14=0; expiry -> +0x44=1.0: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3E64 C76B1494 // EXPERIMENTAL r3 [hs] +0x48 sibling path after +0x34 expiry: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3DB0 F46B1494 // EXPERIMENTAL r3 [hs] +0x74 duration of scale +0x70; exact-zero -> +0x10=0, 0x923B90(+0x100); expiry -> +0x70=1.0: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3E78 C26B1494 // EXPERIMENTAL r3 [hs] +0x74 sibling path after +0x48 expiry: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3E4C CD6B1494 // EXPERIMENTAL r3 [hs] +0xA8 request suppression window: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3F04 9F6B1494 // EXPERIMENTAL r3 [hs] +0xA8 request suppression window, b.lt path: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3F14 9B6B1494 // EXPERIMENTAL r3 [hs] +0xA4 duration of scale +0xA0: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3F3C 916B1494 // EXPERIMENTAL r3 [hs] +0x54 duration of scale +0x50: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3F88 7E6B1494 // EXPERIMENTAL r3 [hs] +0x54 sibling path after +0xA4 expiry: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3F54 8B6B1494 // EXPERIMENTAL r3 [hs] +0x80 hold-request delay: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F3FB0 746B1494 // EXPERIMENTAL r3 [hs] +0x8C cue delay after request release; exact-zero -> sound 0x8DD890: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F41B0 F46A1494 // EXPERIMENTAL r3 [hs] +0xB4 window; expiry -> +0xAC=0: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F4010 986B1414 // EXPERIMENTAL r3 [clamp1] +0x8C clamped decrement: b cave 0xa0ee70 (was sub w9, w9, #1)
+004F4018 9D6B1414 // EXPERIMENTAL r3 [up] +0x84 freeze-phase count-up: b cave 0xa0ee8c (was add w8, w8, #1)
+00288F40 9F171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46a8b0: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00288F5C 98171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46a8c4: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00288F78 91171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b3a8: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00288F94 8A171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b3ac: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00288FB0 83171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b460: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00288FCC 7C171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b464: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00288FE8 75171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b490: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00289004 6E171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b49c: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00289020 67171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b638: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+0028903C 60171E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b640: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00289244 DE161E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b658: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00289260 D7161E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b664: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+0028927C D0161E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b66c: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00289298 C9161E94 // EXPERIMENTAL r3 [hs] lockout bank +0x46b39c: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00285464 47261E94 // EXPERIMENTAL r3 [hs] +0x46AE10 queue window: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+002856F8 B1251E94 // EXPERIMENTAL r3 [hs] +0x46AE14 re-injected press window: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00283360 882E1E94 // EXPERIMENTAL r3 [hs] +0x46ADAC exact-zero: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+00283A94 032D1E14 // EXPERIMENTAL r3 [isubs] +0x46B4C4 lockout: b cave 0xa0eea0 (was subs w10, w10, #1)
+002846F0 F8291E14 // EXPERIMENTAL r3 [up] +0x46B62C up-counter: b cave 0xa0eed0 (was add w10, w9, #1)
+00284AD4 AB281E94 // EXPERIMENTAL r3 [hs] +0x14E0 window: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+00286E38 D21F1E94 // EXPERIMENTAL r3 [hs] +0x14E0 window: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+00286F98 7A1F1E94 // EXPERIMENTAL r3 [hs] +0x14E0 window: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+00287044 4F1F1E94 // EXPERIMENTAL r3 [hs] +0x14E0 window: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+00284AF0 A4281E94 // EXPERIMENTAL r3 [hs] +0x46AEF8 window: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+00284BB8 72281E94 // EXPERIMENTAL r3 [hs] +0x46AF00 window: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+00284BF4 63281E94 // EXPERIMENTAL r3 [hs] +0x46AF04 window: bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+00283294 CA2E1E94 // EXPERIMENTAL r3 [hs] +0x46AE28 window: bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00286C2C AE201E14 // EXPERIMENTAL r3 [upmin1] +0xC50 tap/hold count-up: b cave 0xa0eee4 (was add w9, w9, #1)
+0091DE50 2DC40314 // EXPERIMENTAL r3 [isubs] clock +0x34 delay: b cave 0xa0ef04 (was subs w16, w16, #1)
+0091DEE8 13C40314 // EXPERIMENTAL r3 [naive] clock +0x30 duration: b cave 0xa0ef34 (was subs w16, w16, #1)
+0032CAC8 BD881B94 // EXPERIMENTAL r3 [hs] player deferred hitstop delay +0x7e88; exact-zero -> 0x91D6A0(w2=0): bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+0032CDC0 FF871B94 // EXPERIMENTAL r3 [hs] player deferred hitstop delay +0x7e94; exact-zero -> 0x91D6A0(w2=0): bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+0032D0B8 41871B94 // EXPERIMENTAL r3 [hs] player deferred hitstop delay +0x7e80; exact-zero -> 0x91D6A0(w2=0): bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+009ABF40 028C0114 // EXPERIMENTAL r3 [up] pad auto-repeat count +0x30: b cave 0xa0ef48 (was add w9, w9, #1)
+009ABC68 BD8C0114 // EXPERIMENTAL r3 [rumble] rumble channel 0 count +0x48: b stub 0xa0ef5c -> rh_w8 (was subs w9, w8, #1)
+009ABC7C BA8C0114 // EXPERIMENTAL r3 [rumble] rumble channel count +0x60: b stub 0xa0ef64 -> rh_w9 (was subs w10, w9, #1)
+009ABCC0 AB8C0114 // EXPERIMENTAL r3 [rumble] rumble channel count +0x60: b stub 0xa0ef6c -> rh_w9 (was subs w10, w9, #1)
+009ABD34 908C0114 // EXPERIMENTAL r3 [rumble] rumble channel count +0x60: b stub 0xa0ef74 -> rh_w9 (was subs w10, w9, #1)
+009ABCDC A88C0114 // EXPERIMENTAL r3 [rumble] rumble channel count +0x78: b stub 0xa0ef7c -> rh_w9 (was subs w10, w9, #1)
+009ABD50 8D8C0114 // EXPERIMENTAL r3 [rumble] rumble channel count +0x78: b stub 0xa0ef84 -> rh_w9 (was subs w10, w9, #1)
+009ABDD0 6F8C0114 // EXPERIMENTAL r3 [rumble] rumble channel count +0x78: b stub 0xa0ef8c -> rh_w9 (was subs w10, w9, #1)
+009ABD6C 8A8C0114 // EXPERIMENTAL r3 [rumble] rumble channel count +0x90: b stub 0xa0ef94 -> rh_w9 (was subs w10, w9, #1)
+009ABDEC 6C8C0114 // EXPERIMENTAL r3 [rumble] rumble channel count +0x90: b stub 0xa0ef9c -> rh_w9 (was subs w10, w9, #1)
+009ABE8C 468C0114 // EXPERIMENTAL r3 [rumble] rumble channel count +0x90: b stub 0xa0efa4 -> rh_w9 (was subs w10, w9, #1)
+00A0ED80 E90F1FF8 // r3 hs_w8: str x9, [sp, #-0x10]!
+00A0ED84 491D00D0 // r3 hs_w8: adrp x9, #0xdb8000
+00A0ED88 29D144F9 // r3 hs_w8: ldr x9, [x9, #0x9a0]
+00A0ED8C 29D940B9 // r3 hs_w8: ldr w9, [x9, #0xd8]
+00A0ED90 E9000034 // r3 hs_w8: cbz w9, #0xa0edac
+00A0ED94 1F050071 // r3 hs_w8: cmp w8, #1
+00A0ED98 00A1497A // r3 hs_w8: ccmp w8, w9, #0, ge
+00A0ED9C 09B1891A // r3 hs_w8: csel w9, w8, w9, lt
+00A0EDA0 0801096B // r3 hs_w8: subs w8, w8, w9
+00A0EDA4 E90741F8 // r3 hs_w8: ldr x9, [sp], #0x10
+00A0EDA8 C0035FD6 // r3 hs_w8: ret 
+00A0EDAC 1F010071 // r3 hs_w8: cmp w8, #0
+00A0EDB0 08C9407A // r3 hs_w8: ccmp w8, #0, #8, gt
+00A0EDB4 E90741F8 // r3 hs_w8: ldr x9, [sp], #0x10
+00A0EDB8 C0035FD6 // r3 hs_w8: ret 
+00A0EDBC EA0F1FF8 // r3 hs_w9: str x10, [sp, #-0x10]!
+00A0EDC0 4A1D00D0 // r3 hs_w9: adrp x10, #0xdb8000
+00A0EDC4 4AD144F9 // r3 hs_w9: ldr x10, [x10, #0x9a0]
+00A0EDC8 4AD940B9 // r3 hs_w9: ldr w10, [x10, #0xd8]
+00A0EDCC EA000034 // r3 hs_w9: cbz w10, #0xa0ede8
+00A0EDD0 3F050071 // r3 hs_w9: cmp w9, #1
+00A0EDD4 20A14A7A // r3 hs_w9: ccmp w9, w10, #0, ge
+00A0EDD8 2AB18A1A // r3 hs_w9: csel w10, w9, w10, lt
+00A0EDDC 29010A6B // r3 hs_w9: subs w9, w9, w10
+00A0EDE0 EA0741F8 // r3 hs_w9: ldr x10, [sp], #0x10
+00A0EDE4 C0035FD6 // r3 hs_w9: ret 
+00A0EDE8 3F010071 // r3 hs_w9: cmp w9, #0
+00A0EDEC 28C9407A // r3 hs_w9: ccmp w9, #0, #8, gt
+00A0EDF0 EA0741F8 // r3 hs_w9: ldr x10, [sp], #0x10
+00A0EDF4 C0035FD6 // r3 hs_w9: ret 
+00A0EDF8 4C1D00D0 // r3 rh_w8: adrp x12, #0xdb8000
+00A0EDFC 8CD144F9 // r3 rh_w8: ldr x12, [x12, #0x9a0]
+00A0EE00 8CD940B9 // r3 rh_w8: ldr w12, [x12, #0xd8]
+00A0EE04 1F050071 // r3 rh_w8: cmp w8, #1
+00A0EE08 8C159F1A // r3 rh_w8: csinc w12, w12, wzr, ne
+00A0EE0C CC000034 // r3 rh_w8: cbz w12, #0xa0ee24
+00A0EE10 1F050071 // r3 rh_w8: cmp w8, #1
+00A0EE14 00A14C7A // r3 rh_w8: ccmp w8, w12, #0, ge
+00A0EE18 0CB18C1A // r3 rh_w8: csel w12, w8, w12, lt
+00A0EE1C 09010C6B // r3 rh_w8: subs w9, w8, w12
+00A0EE20 60011FD6 // r3 rh_w8: br x11
+00A0EE24 E903082A // r3 rh_w8: mov w9, w8
+00A0EE28 1F010071 // r3 rh_w8: cmp w8, #0
+00A0EE2C 08C9407A // r3 rh_w8: ccmp w8, #0, #8, gt
+00A0EE30 60011FD6 // r3 rh_w8: br x11
+00A0EE34 4C1D00D0 // r3 rh_w9: adrp x12, #0xdb8000
+00A0EE38 8CD144F9 // r3 rh_w9: ldr x12, [x12, #0x9a0]
+00A0EE3C 8CD940B9 // r3 rh_w9: ldr w12, [x12, #0xd8]
+00A0EE40 3F050071 // r3 rh_w9: cmp w9, #1
+00A0EE44 8C159F1A // r3 rh_w9: csinc w12, w12, wzr, ne
+00A0EE48 CC000034 // r3 rh_w9: cbz w12, #0xa0ee60
+00A0EE4C 3F050071 // r3 rh_w9: cmp w9, #1
+00A0EE50 20A14C7A // r3 rh_w9: ccmp w9, w12, #0, ge
+00A0EE54 2CB18C1A // r3 rh_w9: csel w12, w9, w12, lt
+00A0EE58 2A010C6B // r3 rh_w9: subs w10, w9, w12
+00A0EE5C 60011FD6 // r3 rh_w9: br x11
+00A0EE60 EA03092A // r3 rh_w9: mov w10, w9
+00A0EE64 3F010071 // r3 rh_w9: cmp w9, #0
+00A0EE68 28C9407A // r3 rh_w9: ccmp w9, #0, #8, gt
+00A0EE6C 60011FD6 // r3 rh_w9: br x11
+00A0EE70 4A1D00D0 // r3 cave_4f4010: adrp x10, #0xdb8000
+00A0EE74 4AD144F9 // r3 cave_4f4010: ldr x10, [x10, #0x9a0]
+00A0EE78 4AD940B9 // r3 cave_4f4010: ldr w10, [x10, #0xd8]
+00A0EE7C 29010A4B // r3 cave_4f4010: sub w9, w9, w10
+00A0EE80 3F050071 // r3 cave_4f4010: cmp w9, #1
+00A0EE84 29A59F1A // r3 cave_4f4010: csinc w9, w9, wzr, ge
+00A0EE88 6394EB17 // r3 cave_4f4010: b #0x4f4014
+00A0EE8C 491D00D0 // r3 cave_4f4018: adrp x9, #0xdb8000
+00A0EE90 29D144F9 // r3 cave_4f4018: ldr x9, [x9, #0x9a0]
+00A0EE94 29D940B9 // r3 cave_4f4018: ldr w9, [x9, #0xd8]
+00A0EE98 0801090B // r3 cave_4f4018: add w8, w8, w9
+00A0EE9C 6094EB17 // r3 cave_4f4018: b #0x4f401c
+00A0EEA0 4B1D00D0 // r3 cave_283a94: adrp x11, #0xdb8000
+00A0EEA4 6BD144F9 // r3 cave_283a94: ldr x11, [x11, #0x9a0]
+00A0EEA8 6BD940B9 // r3 cave_283a94: ldr w11, [x11, #0xd8]
+00A0EEAC CB000034 // r3 cave_283a94: cbz w11, #0xa0eec4
+00A0EEB0 5F050071 // r3 cave_283a94: cmp w10, #1
+00A0EEB4 40A14B7A // r3 cave_283a94: ccmp w10, w11, #0, ge
+00A0EEB8 4BB18B1A // r3 cave_283a94: csel w11, w10, w11, lt
+00A0EEBC 4A010B6B // r3 cave_283a94: subs w10, w10, w11
+00A0EEC0 F6D2E117 // r3 cave_283a94: b #0x283a98
+00A0EEC4 5F010071 // r3 cave_283a94: cmp w10, #0
+00A0EEC8 48C9407A // r3 cave_283a94: ccmp w10, #0, #8, gt
+00A0EECC F3D2E117 // r3 cave_283a94: b #0x283a98
+00A0EED0 4A1D00D0 // r3 cave_2846f0: adrp x10, #0xdb8000
+00A0EED4 4AD144F9 // r3 cave_2846f0: ldr x10, [x10, #0x9a0]
+00A0EED8 4AD940B9 // r3 cave_2846f0: ldr w10, [x10, #0xd8]
+00A0EEDC 2A010A0B // r3 cave_2846f0: add w10, w9, w10
+00A0EEE0 05D6E117 // r3 cave_2846f0: b #0x2846f4
+00A0EEE4 4A1D00D0 // r3 cave_286c2c: adrp x10, #0xdb8000
+00A0EEE8 4AD144F9 // r3 cave_286c2c: ldr x10, [x10, #0x9a0]
+00A0EEEC 4AD940B9 // r3 cave_286c2c: ldr w10, [x10, #0xd8]
+00A0EEF0 3F010071 // r3 cave_286c2c: cmp w9, #0
+00A0EEF4 4009407A // r3 cave_286c2c: ccmp w10, #0, #0, eq
+00A0EEF8 4A159F1A // r3 cave_286c2c: csinc w10, w10, wzr, ne
+00A0EEFC 29010A0B // r3 cave_286c2c: add w9, w9, w10
+00A0EF00 4CDFE117 // r3 cave_286c2c: b #0x286c30
+00A0EF04 511D00D0 // r3 cave_91de50: adrp x17, #0xdb8000
+00A0EF08 31D244F9 // r3 cave_91de50: ldr x17, [x17, #0x9a0]
+00A0EF0C 31DA40B9 // r3 cave_91de50: ldr w17, [x17, #0xd8]
+00A0EF10 D1000034 // r3 cave_91de50: cbz w17, #0xa0ef28
+00A0EF14 1F060071 // r3 cave_91de50: cmp w16, #1
+00A0EF18 00A2517A // r3 cave_91de50: ccmp w16, w17, #0, ge
+00A0EF1C 11B2911A // r3 cave_91de50: csel w17, w16, w17, lt
+00A0EF20 1002116B // r3 cave_91de50: subs w16, w16, w17
+00A0EF24 CC3BFC17 // r3 cave_91de50: b #0x91de54
+00A0EF28 1F020071 // r3 cave_91de50: cmp w16, #0
+00A0EF2C 08CA407A // r3 cave_91de50: ccmp w16, #0, #8, gt
+00A0EF30 C93BFC17 // r3 cave_91de50: b #0x91de54
+00A0EF34 511D00D0 // r3 cave_91dee8: adrp x17, #0xdb8000
+00A0EF38 31D244F9 // r3 cave_91dee8: ldr x17, [x17, #0x9a0]
+00A0EF3C 31DA40B9 // r3 cave_91dee8: ldr w17, [x17, #0xd8]
+00A0EF40 1002116B // r3 cave_91dee8: subs w16, w16, w17
+00A0EF44 EA3BFC17 // r3 cave_91dee8: b #0x91deec
+00A0EF48 4B1D00D0 // r3 cave_9abf40: adrp x11, #0xdb8000
+00A0EF4C 6BD144F9 // r3 cave_9abf40: ldr x11, [x11, #0x9a0]
+00A0EF50 6BD940B9 // r3 cave_9abf40: ldr w11, [x11, #0xd8]
+00A0EF54 29010B0B // r3 cave_9abf40: add w9, w9, w11
+00A0EF58 FB73FE17 // r3 cave_9abf40: b #0x9abf44
+00A0EF5C 8B68CE10 // r3 stub_9abc68: adr x11, #0x9abc6c
+00A0EF60 A6FFFF17 // r3 stub_9abc68: b #0xa0edf8
+00A0EF64 EB68CE10 // r3 stub_9abc7c: adr x11, #0x9abc80
+00A0EF68 B3FFFF17 // r3 stub_9abc7c: b #0xa0ee34
+00A0EF6C CB6ACE10 // r3 stub_9abcc0: adr x11, #0x9abcc4
+00A0EF70 B1FFFF17 // r3 stub_9abcc0: b #0xa0ee34
+00A0EF74 2B6ECE10 // r3 stub_9abd34: adr x11, #0x9abd38
+00A0EF78 AFFFFF17 // r3 stub_9abd34: b #0xa0ee34
+00A0EF7C 2B6BCE10 // r3 stub_9abcdc: adr x11, #0x9abce0
+00A0EF80 ADFFFF17 // r3 stub_9abcdc: b #0xa0ee34
+00A0EF84 8B6ECE10 // r3 stub_9abd50: adr x11, #0x9abd54
+00A0EF88 ABFFFF17 // r3 stub_9abd50: b #0xa0ee34
+00A0EF8C 4B72CE10 // r3 stub_9abdd0: adr x11, #0x9abdd4
+00A0EF90 A9FFFF17 // r3 stub_9abdd0: b #0xa0ee34
+00A0EF94 EB6ECE10 // r3 stub_9abd6c: adr x11, #0x9abd70
+00A0EF98 A7FFFF17 // r3 stub_9abd6c: b #0xa0ee34
+00A0EF9C AB72CE10 // r3 stub_9abdec: adr x11, #0x9abdf0
+00A0EFA0 A5FFFF17 // r3 stub_9abdec: b #0xa0ee34
+00A0EFA4 6B77CE10 // r3 stub_9abe8c: adr x11, #0x9abe90
+00A0EFA8 A3FFFF17 // r3 stub_9abe8c: b #0xa0ee34
+002876D4 AB1D1E94 // EXPERIMENTAL r4 [hs] +0x14D4 r2-sibling path (shares store 0x2875A4 with r2 0x28759C): bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+004F406C D06B1414 // EXPERIMENTAL r4 [ramp] manager +0x7C ramp step c*T: b cave 0xa0efac (was ldr s0, [x19, #0x7c]; 0x4F4070 now skipped)
+00A0EFAC 001D4EBD // r4 cave_4f406c: ldr s0, [x8, #0xe1c]
+00A0EFB0 481D00D0 // r4 cave_4f406c: adrp x8, #0xdb8000
+00A0EFB4 08D144F9 // r4 cave_4f406c: ldr x8, [x8, #0x9a0]
+00A0EFB8 08D940B9 // r4 cave_4f406c: ldr w8, [x8, #0xd8]
+00A0EFBC 0101221E // r4 cave_4f406c: scvtf s1, w8
+00A0EFC0 0108211E // r4 cave_4f406c: fmul s1, s0, s1
+00A0EFC4 607E40BD // r4 cave_4f406c: ldr s0, [x19, #0x7c]
+00A0EFC8 2B94EB17 // r4 cave_4f406c: b #0x4f4074
+00287694 4E1E1E94 // EXPERIMENTAL r5 [hs] +0x13A0 second-tap window, path A (b.ge -> 0x28772C mov w10,w9; str): bl stub_w10w9 0xa0efcc (was subs w9, w10, #1)
+00287724 2A1E1E94 // EXPERIMENTAL r5 [hs] +0x13A0 second-tap window, path B (b.lt -> 0x287734): bl stub_w10w9 0xa0efcc (was subs w9, w10, #1)
+00287738 A11D1E94 // EXPERIMENTAL r5 [hs] +0x139C window (set 15 with bank +0x137C at 0x287764/0x287790): bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+0028783C 601D1E94 // EXPERIMENTAL r5 [hs] +0x13B0 window (set 15 at 0x287830 next to bank +0x13A8 = 15): bl hs_w9 0xa0edbc (was subs w9, w9, #1)
+00284B00 A0281E94 // EXPERIMENTAL r5 [hs] +0xDA4 window (set 15 at 0x325300; next to r3 0x284AD4/0x284AF0): bl hs_w8 0xa0ed80 (was subs w8, w8, #1)
+00A0EFCC E9030A2A // r5 stub_w10w9: mov w9, w10
+00A0EFD0 7BFFFF17 // r5 stub_w10w9: b #0xa0edbc
+003A2D40 A94D0794 // was fmin s8,s0,s10 -> bl 0x5763E4
+003A2D80 9B4D0794 // was fmin s8,s1,s10 -> bl 0x5763EC
+003A2DC0 8D4D0794 // was fcsel s8,s10,s9,gt -> bl 0x5763F4
+005763E4 00582A1E // fmin s0,s0,s10: entry1 (eye): a = min(w*rate, 1)
+005763E8 D5E80E14 // b 0x93073C [relocated]
+005763EC 20582A1E // fmin s0,s1,s10: entry2 (look-at): a = min(w*rate, 1)
+005763F0 D3E80E14 // b 0x93073C [relocated]
+005763F4 FD7BBFA9 // stp x29,x30,[sp,#-0x10]!: entry3 (up + scalar blend)
+005763F8 FD030091 // mov x29,sp
+005763FC 2041201E // fmov s0,s9
+00576400 CFE80E94 // bl 0x93073C [relocated]
+00576404 0941201E // fmov s9,s8: w for +0x100/+0x108 blend (0x3A2E04/0x3A2E0C)
+00576408 601642BD // ldr s0,[x19,0x214]: re-test [cam+0x214] > 0
+0057640C 0820201E // fcmp s0,#0.0
+00576410 48CD291E // fcsel s8,s10,s9,gt
+00576414 FD7BC1A8 // ldp x29,x30,[sp],0x10
+00576418 C0035FD6 // ret
+0093073C 0840201E // fmov s8,s0: common: s8 = 1-powf(1-a, clamp(step,0,4))
+00930740 FD7BBDA9 // stp x29,x30,[sp,#-0x30]!
+00930744 FD030091 // mov x29,sp
+00930748 E00701A9 // stp x0,x1,[sp,0x10]
+0093074C E21300F9 // str x2,[sp,0x20]
+00930750 50240090 // adrp x16,0xdb8000: timer object via GOT 0xDB89A0 [relocated]
+00930754 10D244F9 // ldr x16,[x16,0x9a0]
+00930758 300200B4 // cbz x16,0xa0e8d8
+0093075C 01D240BD // ldr s1,[x16,0xd0]: v2 step [timer+0xD0]
+00930760 02102E1E // fmov s2,#1.00000000
+00930764 2020221E // fcmp s1,s2
+00930768 A0010054 // b.eq 0xa0e8d8: step == 1.0: exact passthrough
+0093076C 0820201E // fcmp s0,#0.0
+00930770 6D010054 // b.le 0xa0e8d8: a <= 0 or NaN: passthrough
+00930774 0020221E // fcmp s0,s2
+00930778 2A010054 // b.ge 0xa0e8d8: a >= 1: passthrough
+0093077C 03E4002F // movi d3,#0000000000000000
+00930780 2168231E // fmaxnm s1,s1,s3
+00930784 0310221E // fmov s3,#4.00000000
+00930788 2178231E // fminnm s1,s1,s3
+0093078C 4038201E // fsub s0,s2,s0
+00930790 A0730394 // bl 0xa0d610: powf PLT [relocated]
+00930794 02102E1E // fmov s2,#1.00000000
+00930798 4838201E // fsub s8,s2,s0
+0093079C E00741A9 // ldp x0,x1,[sp,0x10]
+009307A0 E21340F9 // ldr x2,[sp,0x20]
+009307A4 FD7BC3A8 // ldp x29,x30,[sp],0x30
+009307A8 C0035FD6 // ret
+@stop

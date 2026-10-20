@@ -1,0 +1,1247 @@
+#include <windows.h>
+#include <bcrypt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include "cpu.h"
+#include "simd.h"
+#include "ipc.h"
+/* Per-call log lines (SVC, IPC, audio and HID traffic): ~300 MB an hour of play. Off in lean (play) builds unless
+ * AC_TRACE_CALLS is set; AC_QUIET=1 turns them off in the others. */
+#ifndef LEAN_PAGES
+#define LEAN_PAGES 0
+#endif
+static int hot_log_on(void) {
+ static int on=-1;
+ if(on<0) on=GetEnvironmentVariableA("AC_TRACE_CALLS",NULL,0)!=0 ||
+  (!LEAN_PAGES && GetEnvironmentVariableA("AC_QUIET",NULL,0)==0);
+ return on;
+}
+#define HOT_LOG(...) do{if(hot_log_on())printf(__VA_ARGS__);}while(0)
+#ifndef CALL_LIMIT
+#define CALL_LIMIT 1000000
+#endif
+#ifndef SYSCALL_LIMIT
+#define SYSCALL_LIMIT 100000u
+#endif
+#ifndef APPLICATION_LANGUAGE
+#define APPLICATION_LANGUAGE 0ull
+#endif
+#ifndef SYSTEM_LANGUAGE
+#define SYSTEM_LANGUAGE 0ull
+#endif
+static __thread unsigned calls;  /* per host thread: shared counters bounced between cores in parallel mode */
+static unsigned syscalls;
+static __thread struct { uint64_t from,target; } recent_calls[64];
+/* `state` is the calling host thread's guest context. Serialized mode (default): one host thread, contexts are
+ * swapped into it by the scheduler. Parallel mode (AC_PARALLEL=1): every guest thread runs on its own host thread
+ * in that thread's `state`; live_cpu[i] points at guest thread i's. Host services run under the kernel lock
+ * (klock), guest code runs unlocked. */
+static __thread Cpu state;
+static Cpu *live_cpu[33];
+static int parallel_mode;
+static SRWLOCK klock_srw=SRWLOCK_INIT;
+static volatile DWORD klock_owner;
+static unsigned klock_depth;
+static uint64_t klock_contended,klock_contended_qpc;  /* (updated under the lock) */
+static uint64_t nvn_contended,nvn_contended_qpc;  /* (nvn_hle.h nvn_lock; parallel stats) */
+static uint64_t nvn_thread_qpc[33],nvn_thread_calls[33];  /* host time in NVN calls per guest thread (parallel stats) */
+static void klock(void) {
+ if(!parallel_mode) return;
+ DWORD me=GetCurrentThreadId();
+ if(klock_owner==me) {klock_depth++;return;}
+ if(!TryAcquireSRWLockExclusive(&klock_srw)) {  /* contended: count the time (parallel stats) */
+  LARGE_INTEGER a,b;QueryPerformanceCounter(&a);
+  AcquireSRWLockExclusive(&klock_srw);
+  QueryPerformanceCounter(&b);klock_contended_qpc+=(uint64_t)(b.QuadPart-a.QuadPart);klock_contended++;
+ }
+ klock_owner=me;klock_depth=1;
+}
+static void kunlock(void) {
+ if(!parallel_mode) return;
+ if(--klock_depth==0) {klock_owner=0;ReleaseSRWLockExclusive(&klock_srw);}
+}
+/* Per guest thread: signaled when another thread makes it runnable (parallel_wake). A broadcast to every waiter
+ * after each call woke ~15 sleeping threads thousands of times a frame (95k lock contentions per 2 s, run 421). */
+static CONDITION_VARIABLE thread_cv[33];
+/* Wait on the calling guest thread's condition with the lock fully released. */
+static void klock_wait(unsigned self,DWORD ms) {
+ unsigned depth=klock_depth;klock_owner=0;klock_depth=0;
+ SleepConditionVariableSRW(&thread_cv[self],&klock_srw,ms,0);
+ klock_owner=GetCurrentThreadId();klock_depth=depth;
+}
+static void parallel_wake(unsigned i) {if(parallel_mode && i<33) WakeConditionVariable(&thread_cv[i]);}
+/* Run host code that blocks (sleeps, GPU waits) without holding the lock. */
+static unsigned klock_release_all(void) {
+ if(!parallel_mode || klock_owner!=GetCurrentThreadId()) return 0;
+ unsigned depth=klock_depth;klock_owner=0;klock_depth=0;ReleaseSRWLockExclusive(&klock_srw);return depth;
+}
+static void klock_reacquire(unsigned depth) {
+ if(!depth) return;
+ AcquireSRWLockExclusive(&klock_srw);klock_owner=GetCurrentThreadId();klock_depth=depth;
+}
+static uint32_t application_terminate_result;
+static int application_terminate_result_set;
+static const char *snapshot_path;
+static uint64_t entropy[4];
+static uint64_t heap_base=0x7200000000ull;
+/* Set once the heap is imported for Vulkan: its pages must stay CPU read-write. */
+static int heap_gpu_pinned;
+#define HEAP_BASE heap_base
+#define HEAP_LIMIT 0x100000000ull
+#define MEMORY_BUDGET (3ull*1024*1024*1024)
+static uint64_t heap_size;
+static int heap_reserved;
+enum { SESSION_SM=1, SESSION_LM, SESSION_LOGGER, SESSION_APM,
+ SESSION_APPLET_OE, SESSION_APPLICATION_PROXY, SESSION_COMMON_STATE, SESSION_SELF_CONTROLLER,
+ SESSION_WINDOW_CONTROLLER, SESSION_AUDIO_CONTROLLER, SESSION_DISPLAY_CONTROLLER,
+ SESSION_LIBRARY_CREATOR, SESSION_APPLICATION_FUNCTIONS, SESSION_DEBUG_FUNCTIONS, SESSION_AOC,
+ SESSION_PCTL_ROOT, SESSION_PCTL, SESSION_TIME_ROOT, SESSION_TIME_USER,
+ SESSION_TIME_NETWORK, SESSION_TIME_STEADY, SESSION_TIME_ZONE, SESSION_TIME_LOCAL, SESSION_APM_SESSION, SESSION_SETTINGS,
+ SESSION_HID, SESSION_HID_RESOURCE, SESSION_CONTROLLER_APPLET, SESSION_STORAGE, SESSION_STORAGE_ACCESSOR,
+ SESSION_VIBRATION_LIST, SESSION_FS_PROXY, SESSION_ROMFS_STORAGE, SESSION_NVDRV,
+ SESSION_VI_ROOT, SESSION_VI_APPLICATION, SESSION_VI_RELAY, SESSION_VI_SYSTEM, SESSION_VI_MANAGER, SESSION_VI_INDIRECT,
+ SESSION_HWOPUS, SESSION_AUDREN_MANAGER, SESSION_AUDIO_DEVICE, SESSION_AUDOUT_MANAGER, SESSION_AUDIO_OUTPUT, SESSION_NIFM_ROOT, SESSION_NIFM_GENERAL, SESSION_ACCOUNT, SESSION_ACCOUNT_MANAGER, SESSION_SAVE_FILESYSTEM, SESSION_SAVE_FILE, SESSION_PREPO };
+typedef struct { uint32_t revision; uint64_t aruid; } AudioDeviceState;
+typedef struct { int initialized,restrictions_enabled,paired; } PctlState;
+static struct { int active,initialized,kind,domain; int objects[32]; unsigned destination;
+ PctlState policy,object_policy[32]; unsigned storage,object_storage[32];
+ uint64_t vibration[2],object_vibration[32][2]; unsigned nv_transfer; uint64_t nv_aruid,nv_margin_requested;
+ unsigned vi_policy,object_vi_policy[32],vi_level,object_vi_level[32],vi_displays,object_vi_displays[32];
+ uint32_t account_pid,object_account_pid[32];
+ uint8_t account_user[16],object_account_user[32][16];
+ HANDLE save_file,object_save_file[32];
+ unsigned audio_output,object_audio_output[32];
+ AudioDeviceState audio_device,object_audio_device[32]; } sessions[64];
+/* Handle slots and shared server objects have independent lifetimes. */
+static unsigned session_handles[64],session_refs[64],session_peer_closed[64];
+static size_t log_bytes;
+/* Requested console profiles are application state, not Windows clock rates.
+ * No default configuration is invented before the application selects one. */
+static uint32_t performance_configuration[2];
+static unsigned performance_configuration_set[2];
+static struct { HANDLE handle; unsigned access; } events[64];
+static HANDLE app_suspend_event;
+static HANDLE library_launch_event;
+static int library_applet_running;
+static int library_applet_created;
+static uint32_t library_applet_id;
+static HANDLE library_state_event;
+static unsigned library_inputs[4],library_input_count;
+static unsigned library_output;
+static int library_completed;
+static HANDLE app_message_event;
+static HANDLE addon_change_event;
+static void snapshot(void);
+static void app_snapshot_frame(const char *path);
+static void nvn_dump_recent(void);
+static void stop_dump(Cpu *c);
+static LONG CALLBACK fatal_fault_handler(PEXCEPTION_POINTERS info) {
+ fflush(stdout);
+ nvn_dump_recent();
+ /* Host location: module + offset, and the faulting host thread (backend workers fault too). */
+ HMODULE module=NULL;char name[MAX_PATH]="?";uintptr_t at=(uintptr_t)info->ExceptionRecord->ExceptionAddress;
+ if(GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCSTR)at,&module))
+  GetModuleFileNameA(module,name,sizeof(name));
+ fprintf(stderr,"FAULT code=0x%lx guest_pc=0x%llx address=0x%llx host=%s+0x%llx thread=%lu\n",
+ info->ExceptionRecord->ExceptionCode,(unsigned long long)state.pc,
+ (unsigned long long)(info->ExceptionRecord->NumberParameters>1 ? info->ExceptionRecord->ExceptionInformation[1] : 0),
+ strrchr(name,'\\') ? strrchr(name,'\\')+1 : name,(unsigned long long)(at-(uintptr_t)module),GetCurrentThreadId());
+ fflush(stderr); ExitProcess(32);
+}
+__attribute__((noreturn)) static void boundary(const char *kind, Cpu *c, uint64_t pc) {
+ snapshot();
+ if(application_terminate_result_set) printf("APPLICATION_TERMINATE_RESULT 0x%x\n",application_terminate_result);
+ printf("COUNTERS calls=%u syscalls=%u\n",calls,syscalls);
+ unsigned count=calls<64 ? calls : 64;
+ for(unsigned i=0;i<count;i++) {
+  unsigned slot=(calls-count+i)%64;
+  printf("RECENT_CALL 0x%llx 0x%llx\n",(unsigned long long)recent_calls[slot].from,(unsigned long long)recent_calls[slot].target);
+ }
+ nvn_dump_recent();
+ stop_dump(c);
+ printf("STOP %s pc=0x%llx",kind,(unsigned long long)pc);
+ for(unsigned i=0;i<8;i++) printf(" x%u=0x%llx",i,(unsigned long long)c->x[i]);
+ printf("\n"); fflush(stdout); exit(20);
+}
+static void trace_call(uint64_t from,uint64_t target) {
+ recent_calls[calls%64].from=from;recent_calls[calls%64].target=target;
+ if(++calls>CALL_LIMIT) boundary("call-budget",&state,from);
+ if(calls>10000) { if(calls==10001) puts("TRACE call lines capped at 10000; execution continues within step budget"); return; }
+ printf("CALL 0x%llx 0x%llx\n",(unsigned long long)from,(unsigned long long)target);
+}
+/*MEMORY_TABLE*/
+static struct { uint64_t address,size; HANDLE source; unsigned permission; } shared_views[64];
+static struct { uint64_t source,destination,size; HANDLE backing; unsigned handle; } stack_maps[64];
+static uint64_t thread_tls[32];
+static struct { uint64_t address,size; void *data; unsigned refs,handle_open; } transfer_memory[32];
+#include "nvmap_memory.h"
+#include "memory_attributes.h"
+static void snapshot(void) {
+ if(!snapshot_path) return;
+ app_snapshot_frame(snapshot_path);
+ FILE *input=fopen("relocation-targets.bin","rb"), *output=fopen(snapshot_path,"wb");
+ if(!input || !output) {fputs("Snapshot file failure\n",stderr); ExitProcess(33);}
+ uint64_t address; unsigned count=0;
+ while(fread(&address,8,1,input)==1) {
+  if(++count>1000000) ExitProcess(33);
+  uint64_t value=LD64(address);
+  if(fwrite(&value,8,1,output)!=1) ExitProcess(33);
+ }
+ fclose(input); fclose(output);
+ char cpu_path[1024];
+ if(snprintf(cpu_path,sizeof(cpu_path),"%s.cpu",snapshot_path)>=(int)sizeof(cpu_path)) ExitProcess(33);
+ output=fopen(cpu_path,"wb");
+ if(!output || fwrite(&state,1,sizeof(state),output)!=sizeof(state)) ExitProcess(33);
+ fclose(output);
+ /* Bounded diagnostic stack for reconstructing abort arguments. Never dump
+  * arbitrary guest pointers or the multi-gigabyte heap. */
+ MEMORY_BASIC_INFORMATION stack_info;
+ if(STACK_SIZE<=8*1024*1024 && state.sp>=STACK_BASE && state.sp<=STACK_BASE+STACK_SIZE &&
+    VirtualQuery((void*)(uintptr_t)STACK_BASE,&stack_info,sizeof(stack_info)) && stack_info.State==MEM_COMMIT &&
+    stack_info.Protect==PAGE_READWRITE && (uintptr_t)stack_info.BaseAddress<=STACK_BASE &&
+    stack_info.RegionSize>=STACK_BASE-(uintptr_t)stack_info.BaseAddress+STACK_SIZE) {
+  if(snprintf(cpu_path,sizeof(cpu_path),"%s.stack",snapshot_path)>=(int)sizeof(cpu_path)) ExitProcess(33);
+  output=fopen(cpu_path,"wb");
+  if(!output || fwrite((void*)(uintptr_t)STACK_BASE,1,STACK_SIZE,output)!=STACK_SIZE) ExitProcess(33);
+  fclose(output);
+ }
+}
+static Region query(uint64_t address) {
+ uint64_t low=0,high=1ull<<39;
+ if(address >= (1ull<<39)) return (Region){1ull<<39,0ull-(1ull<<39),16,0};
+ for(unsigned i=0;i<32;i++) if(transfer_memory[i].size && address>=transfer_memory[i].address && address-transfer_memory[i].address<transfer_memory[i].size)
+  return (Region){transfer_memory[i].address,transfer_memory[i].size,5,0};
+ for(unsigned i=0;i<64;i++) if(stack_maps[i].size) {
+  if(address>=stack_maps[i].source && address-stack_maps[i].source<stack_maps[i].size)
+   return (Region){stack_maps[i].source,stack_maps[i].size,5,0};
+  if(address>=stack_maps[i].destination && address-stack_maps[i].destination<stack_maps[i].size)
+   return (Region){stack_maps[i].destination,stack_maps[i].size,11,3};
+ }
+ size_t count=sizeof(regions)/sizeof(regions[0]);
+ for(size_t i=0;i<count+97;i++) {
+  Region r;
+  if(i<count) r=regions[i];
+  else if(i==count) {
+   uint64_t start=HEAP_BASE,end=HEAP_BASE+heap_size;
+   for(unsigned j=0;j<64;j++) if(stack_maps[j].size) {
+    uint64_t s=stack_maps[j].source,e=s+stack_maps[j].size;
+    if(address<s && s<end) end=s;
+    if(address>=e && e>start) start=e;
+   }
+   for(unsigned j=0;j<32;j++) if(transfer_memory[j].size) {
+    uint64_t s=transfer_memory[j].address,e=s+transfer_memory[j].size;
+    if(address<s && s<end) end=s;
+    if(address>=e && e>start) start=e;
+   }
+   r=(Region){start,end-start,5,3};
+   if(address>=start && address<end) r=attribute_clip(r,address);
+  }
+  else if(i<count+65) {unsigned view=i-count-1;r=(Region){shared_views[view].address,shared_views[view].size,6,shared_views[view].permission};}
+  else {unsigned slot=i-count-65;r=(Region){thread_tls[slot],thread_tls[slot] ? 65536 : 0,12,3};}
+  if(!r.size) continue;
+  if(address>=r.base && address-r.base<r.size) return r;
+  if(address<r.base && r.base<high) high=r.base;
+  if(address>=r.base+r.size && r.base+r.size>low) low=r.base+r.size;
+ }
+ return (Region){low,high-low,0,0};
+}
+static void stop_dump(Cpu *c) {
+ /* Diagnostic: AC_STOP_DUMP=x<reg>+<offset>:<bytes> dumps readable guest memory. */
+ char dump[64];DWORD dump_n=GetEnvironmentVariableA("AC_STOP_DUMP",dump,sizeof(dump));
+ unsigned dump_reg;unsigned long long dump_offset,dump_size;
+ if(dump_n && dump_n<sizeof(dump) && sscanf(dump,"x%u+%lli:%lli",&dump_reg,&dump_offset,&dump_size)==3 && dump_reg<31 && dump_size<=4096) {
+  uint64_t at=c->x[dump_reg]+dump_offset;Region r=query(at);
+  if((r.permission&1) && at>=r.base && at-r.base<r.size && dump_size<=r.size-(at-r.base)) {
+   printf("STOP_DUMP 0x%llx",(unsigned long long)at);
+   for(unsigned long long i=0;i<dump_size;i++)printf("%s%02x",i%16?"":"\n ",((uint8_t*)(uintptr_t)at)[i]);
+   printf("\n");
+  } else printf("STOP_DUMP unavailable 0x%llx\n",(unsigned long long)at);
+ }
+}
+static uint64_t static_memory_size(void) {
+ uint64_t size=0;
+ for(size_t i=0;i<sizeof(regions)/sizeof(regions[0]);i++) size+=regions[i].size;
+ return size;
+}
+/* Lazy GPU write-back (Vulkan backend, exec.c): guest heap pages holding GPU results that the CPU has not read
+ * yet are PAGE_NOACCESS. A CPU access faults; the vectored handler asks the backend to copy the results in and
+ * lift the protection. Kernel I/O does not fault on such pages (it fails), so file reads/writes of guest buffers
+ * prepare the range first. The hooks stay null with other backends. */
+void (*nvn_lazy_flush_hook)(uint64_t addr,uint64_t size);
+int (*nvn_lazy_fault_hook)(uint64_t addr);
+static LONG CALLBACK nvn_lazy_vectored(PEXCEPTION_POINTERS info) {
+ if(info->ExceptionRecord->ExceptionCode!=EXCEPTION_ACCESS_VIOLATION || info->ExceptionRecord->NumberParameters<2 || !nvn_lazy_fault_hook)
+  return EXCEPTION_CONTINUE_SEARCH;
+ return nvn_lazy_fault_hook((uint64_t)info->ExceptionRecord->ExceptionInformation[1]) ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+}
+int nvn_page_protect(uint64_t addr,uint64_t size,int noaccess) {
+ static int installed;
+ if(!installed) {installed=1;if(!AddVectoredExceptionHandler(1,nvn_lazy_vectored)) return 0;}
+ DWORD old;
+ return VirtualProtect((void*)(uintptr_t)addr,(SIZE_T)size,noaccess ? PAGE_NOACCESS : PAGE_READWRITE,&old)!=0;
+}
+static void guest_io_prepare(uint64_t addr,uint64_t size) {if(nvn_lazy_flush_hook && size) nvn_lazy_flush_hook(addr,size);}
+#include "exclusive_pair.h"
+static int reserve_heap_range(void) {
+ if(heap_reserved) return 1;
+ /* Choose the range before guest execution/GetInfo. Windows ASLR can occupy
+  * the preferred virtual range; only probe otherwise unused host addresses. */
+ for(uint64_t candidate=heap_base;candidate+HEAP_LIMIT<=(1ull<<39);candidate+=HEAP_LIMIT) {
+  /* Write-watched: the NVN backend re-uploads only pages the CPU wrote (plat_written_pages). */
+  void *allocation=VirtualAlloc((void*)(uintptr_t)candidate,HEAP_LIMIT,MEM_RESERVE|MEM_WRITE_WATCH,PAGE_NOACCESS);
+  if(allocation==(void*)(uintptr_t)candidate) {
+   heap_base=candidate;heap_reserved=1;return 1;
+  }
+  DWORD error=GetLastError();
+  if(allocation) VirtualFree(allocation,0,MEM_RELEASE);
+  fprintf(stderr,"HOST heap reservation unavailable at 0x%llx (Windows error %lu)\n",(unsigned long long)candidate,(unsigned long)error);
+ }
+ return 0;
+}
+static uint32_t resize_heap(uint64_t size) {
+ if(size%0x200000 || size>HEAP_LIMIT) boundary("invalid-heap-size",&state,state.pc);
+ if(nvmap_above(HEAP_BASE+size)) boundary("heap-shrink-nvmap",&state,state.pc);
+ for(unsigned i=0;i<64;i++) if(stack_maps[i].size && stack_maps[i].source+stack_maps[i].size>HEAP_BASE+size)
+  boundary("heap-shrink-borrowed-stack",&state,state.pc);
+ for(unsigned i=0;i<32;i++) if(transfer_memory[i].size && transfer_memory[i].address+transfer_memory[i].size>HEAP_BASE+size)
+  boundary("heap-shrink-transfer-memory",&state,state.pc);
+ uint64_t used=static_memory_size();
+ if(used>MEMORY_BUDGET || size>MEMORY_BUDGET-used) return 0xd001;
+ for(size_t i=0;i<sizeof(regions)/sizeof(regions[0]);i++)
+  if(regions[i].base+regions[i].size>HEAP_BASE) boundary("heap-layout-overlap",&state,state.pc);
+ if(size && !reserve_heap_range()) return 0xd001;
+ if(size>heap_size && !VirtualAlloc((void*)(uintptr_t)(HEAP_BASE+heap_size),size-heap_size,MEM_COMMIT,PAGE_READWRITE)) {
+  fprintf(stderr,"HOST heap commit failed (Windows error %lu)\n",(unsigned long)GetLastError());return 0xd001;
+ }
+ if(size<heap_size && !VirtualFree((void*)(uintptr_t)(HEAP_BASE+size),heap_size-size,MEM_DECOMMIT))
+  boundary("host-heap-decommit",&state,state.pc);
+ if(size<heap_size && update_uncached(HEAP_BASE+size,HEAP_BASE+heap_size,0)) boundary("heap-attribute-cleanup",&state,state.pc);
+ heap_size=size;return 0;
+}
+static unsigned session_index(uint32_t handle) {
+ if(handle<0x2000 || handle>=0x2040 || !session_handles[handle-0x2000]) boundary("invalid-session-handle",&state,state.pc);
+ return session_handles[handle-0x2000]-1;
+}
+static uint32_t clone_session(unsigned session) {
+ for(unsigned h=0;h<64;h++) if(!session_handles[h]) {
+  session_handles[h]=session+1;session_peer_closed[h]=0;session_refs[session]++;return 0x2000+h;
+ }
+ boundary("session-handle-limit",&state,state.pc);
+}
+static uint32_t new_session(int kind) {
+ for(unsigned i=0;i<64;i++) if(!session_refs[i]) {
+  memset(&sessions[i],0,sizeof(sessions[i]));
+  sessions[i].active=1; sessions[i].initialized=0; sessions[i].kind=kind; sessions[i].destination=1;
+  sessions[i].domain=0; memset(sessions[i].objects,0,sizeof(sessions[i].objects));
+  return clone_session(i);
+ }
+ boundary("session-limit",&state,state.pc);
+}
+static uint32_t copy_event(HANDLE *server_event) {
+ if(!*server_event) {
+  *server_event=CreateEventW(NULL,TRUE,FALSE,NULL);
+  if(!*server_event) boundary("host-event-create",&state,state.pc);
+ }
+ for(unsigned i=0;i<64;i++) if(!events[i].handle) {
+  if(!DuplicateHandle(GetCurrentProcess(),*server_event,GetCurrentProcess(),&events[i].handle,0,FALSE,DUPLICATE_SAME_ACCESS)) boundary("host-event-copy",&state,state.pc);
+  events[i].access=1;return 0x3000+i;
+ }
+ boundary("event-handle-limit",&state,state.pc);
+}
+#include "applet_storage.h"
+static void close_library_applet(void) {
+ if(library_applet_running) boundary("close-running-library-applet",&state,state.pc);
+ library_applet_created=0;
+ library_completed=0;
+ if(library_output) storage_release(library_output);
+ library_output=0;
+ for(unsigned i=0;i<library_input_count;i++) storage_release(library_inputs[i]);
+ memset(library_inputs,0,sizeof(library_inputs));library_input_count=0;
+ if(library_state_event && !CloseHandle(library_state_event)) boundary("library-event-close",&state,state.pc);
+ library_state_event=NULL;
+}
+#include "shared_memory.h"
+#include "stack_memory.h"
+#include "transfer_memory.h"
+#include "hid_service.h"
+#include "time_service.h"
+#include "app_window.h"
+#include "guest_threads.h"
+#include "controller_applet.h"
+#include "swkbd_applet.h"
+#include "romfs_storage.h"
+static unsigned reply_object(unsigned session,uint8_t *buffer,const IpcRequest *request,int kind) {
+ if(request->domain) {
+  for(unsigned i=0;i<32;i++) if(!sessions[session].objects[i]) {
+   sessions[session].objects[i]=kind;
+   memset(&sessions[session].object_policy[i],0,sizeof(PctlState));
+   sessions[session].object_save_file[i]=NULL;
+   sessions[session].object_storage[i]=0;
+   sessions[session].object_audio_output[i]=0;
+   sessions[session].object_account_pid[i]=0;
+   memset(sessions[session].object_account_user[i],0,16);
+   memset(sessions[session].object_vibration[i],0,sizeof(sessions[session].object_vibration[i]));
+   sessions[session].object_vi_policy[i]=0;sessions[session].object_vi_level[i]=0;
+   sessions[session].object_vi_displays[i]=0;
+   memset(&sessions[session].object_audio_device[i],0,sizeof(AudioDeviceState));
+   ipc_reply_domain(buffer,256,0,request->token,NULL,0,i+1);return i+1;
+  }
+  boundary("domain-object-limit",&state,state.pc);
+ }
+ unsigned handle=new_session(kind);ipc_reply_handle(buffer,256,handle,request->token);return handle;
+}
+static void reply_storage(unsigned session,uint8_t *buffer,const IpcRequest *request,int kind,unsigned storage) {
+ storage_retain(storage);
+ unsigned object=reply_object(session,buffer,request,kind);
+ if(request->domain) sessions[session].object_storage[object-1]=storage;
+ else sessions[session_index(object)].storage=storage;
+}
+static void reply_result(uint8_t *buffer,const IpcRequest *request,uint32_t result) {
+ if(request->domain) ipc_reply_domain(buffer,256,result,request->token,NULL,0,0);
+ else ipc_reply(buffer,256,result,request->token);
+}
+static void reply_value(uint8_t *buffer,const IpcRequest *request,uint32_t value) {
+ if(request->domain) ipc_reply_domain(buffer,256,0,request->token,&value,4,0);
+ else ipc_reply_u32(buffer,256,value,request->token);
+}
+static void reply_wide_value(uint8_t *buffer,const IpcRequest *request,uint64_t value) {
+ if(request->domain) ipc_reply_domain(buffer,256,0,request->token,&value,8,0);
+ else ipc_reply_u64(buffer,256,value,request->token);
+}
+#include "nv_driver.h"
+#include "nvn_hle.h"
+#include "vi_service.h"
+#include "hwopus_service.h"
+#include "audren_service.h"
+#include "audout_service.h"
+#include "nifm_service.h"
+#include "prepo_service.h"
+#include "time_zone_service.h"
+#include "account_service.h"
+#include "save_service.h"
+static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc);
+/* Parallel mode: supervisor calls run under the kernel lock; any state change may wake other guest threads; a call
+ * that leaves this thread waiting blocks its host thread (lock released while asleep); an exited thread ends. */
+void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
+ if(!parallel_mode) {rt_svc_body(c,imm,pc);return;}
+ if(imm==0xb) {
+  /* SleepThread / yield: nothing else can end it early, so no kernel state is involved (the most frequent call:
+   * worker threads poll in sleep loops). */
+  int64_t ns=(int64_t)c->x[0];
+  if(ns<-2) boundary("thread-yield-mode",c,pc);
+  if(ns<=0) SwitchToThread();
+  else {
+   uint64_t until=rt_ticks()+(uint64_t)(((__uint128_t)(uint64_t)ns*19200000+999999999)/1000000000);
+   for(uint64_t now=rt_ticks();now<until;now=rt_ticks()) {
+    uint64_t left_ms=(until-now)/19200;
+    if(left_ms>=2) Sleep((DWORD)(left_ms-1)); else SwitchToThread();
+   }
+  }
+  c->x[0]=0;return;
+ }
+ klock();threads_initialize();
+ rt_svc_body(c,imm,pc);
+ if(guest_threads[current_thread].status!=THREAD_RUNNABLE) parallel_block();
+ if(guest_threads[current_thread].status==THREAD_EXITED) {
+  printf("PARALLEL guest thread %u exited\n",current_thread);fflush(stdout);
+  klock_release_all();ExitThread(0);
+ }
+ kunlock();
+}
+static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
+ app_pump();
+ if(++syscalls>SYSCALL_LIMIT) boundary("svc-budget",c,pc);
+ HOT_LOG("SVC 0x%x\n",imm);
+ if(STOP_FIRST_SVC) boundary("svc-test-boundary",c,pc);
+ if(imm==1) {
+  uint32_t result=resize_heap(c->x[1]);c->x[0]=result;c->x[1]=result ? 0 : HEAP_BASE;return;
+ }
+ if(imm==0x15) {
+  uint32_t handle=transfer_create(c->x[1],c->x[2],c->x[3]);
+  c->x[0]=handle ? 0 : 0xd001;c->x[1]=handle;return;
+ }
+ if(imm==0x16 && c->x[0]>=0x6000 && c->x[0]<0x6020) {
+  transfer_close((uint32_t)c->x[0]);c->x[0]=0;return;
+ }
+ if(imm==0x1e) {c->x[0]=rt_ticks(); return;}
+ if(imm==4 || imm==5) {
+  if(imm==4) stack_map(c->x[0],c->x[1],c->x[2]);else stack_unmap(c->x[0],c->x[1],c->x[2]);
+  c->x[0]=0;return;
+ }
+ if(imm==0x13) {shared_map(c->x[0],c->x[1],c->x[2],c->x[3]);c->x[0]=0;return;}
+ if(imm==0x14) {shared_unmap(c->x[0],c->x[1],c->x[2]);c->x[0]=0;return;}
+ if(imm==0x16 && c->x[0]>=0x4000 && c->x[0]<0x4040 && shared_handles[c->x[0]-0x4000]) {
+  unsigned slot=c->x[0]-0x4000;
+  if(!CloseHandle(shared_handles[slot])) boundary("host-shared-handle-close",c,pc);
+  shared_handles[slot]=NULL;shared_sources[slot]=NULL;shared_permissions[slot]=0;shared_sizes[slot]=0;c->x[0]=0;return;
+ }
+ if((imm==0x16 || imm==0x17) && c->x[0]>=0x3000 && c->x[0]<0x3040 && events[c->x[0]-0x3000].handle) {
+  unsigned event=c->x[0]-0x3000;
+  if(imm==0x16) {
+   if(!CloseHandle(events[event].handle)) boundary("host-event-close",c,pc);
+   events[event].handle=NULL;events[event].access=0;
+  } else if(!ResetEvent(events[event].handle)) boundary("host-event-reset",c,pc);
+  c->x[0]=0;return;
+ }
+ if(imm==0x18) {
+  uint64_t count=c->x[2],address=c->x[1];Region r=query(address);
+  if(count<1 || count>64 || !(r.permission&1) || count*4>r.size-(address-r.base)) boundary("wait-handle-list",c,pc);
+  uint32_t list[64];unsigned threads_waited=0;
+  for(unsigned i=0;i<count;i++) {
+   list[i]=LD32(address+4*i);uint32_t h=list[i];
+   if(h==0x1000 || (h>=0x5000 && h<0x5020)) {thread_index(h);threads_waited++;}
+   else if(h<0x3000 || h>=0x3040 || !events[h-0x3000].handle) {
+    printf("WAIT handle=0x%x index=%u count=%llu\n",h,i,(unsigned long long)count);boundary("wait-object-unimplemented",c,pc);
+   }
+  }
+  threads_initialize();
+  int ready=thread_objects_ready(list,(unsigned)count);
+  if(ready>=0) {c->x[0]=0;c->x[1]=(uint64_t)ready;return;}
+  int64_t ns=(int64_t)c->x[3];
+  if(ns==0) {c->x[0]=0xea01;c->x[1]=0xffffffff;return;}
+  if(ns<-1) {c->x[0]=0xee01;return;}
+  unsigned others=0;
+  for(unsigned i=0;i<33;i++) if(i!=current_thread && guest_threads[i].status!=THREAD_UNUSED &&
+     guest_threads[i].status!=THREAD_CREATED && guest_threads[i].status!=THREAD_EXITED) others++;
+  if(others) {
+   /* Cooperative wait: park this context; thread_checkpoint polls the list and
+    * writes the result (x0, x1) when a handle signals or the deadline passes. */
+   guest_threads[current_thread].status=THREAD_WAIT_OBJECTS;
+   guest_threads[current_thread].wait_count=(unsigned)count;
+   memcpy(guest_threads[current_thread].wait_handles,list,count*4);
+   guest_threads[current_thread].wait_deadline=ns==-1 ? 0 : thread_deadline(ns);
+   (parallel_mode ? 0 : (thread_reschedule=1));return;
+  }
+  if(threads_waited) boundary("thread-wait-without-other-context",c,pc);
+  HANDLE handles[64];for(unsigned i=0;i<count;i++)handles[i]=events[list[i]-0x3000].handle;
+  DWORD timeout;
+  /* The window pump supplies applet events. Without a window, report pending
+   * infinite waits as a diagnostic boundary. */
+  if(ns==-1) timeout=app_window ? INFINITE : 0;
+  else {uint64_t ms=((uint64_t)ns+999999)/1000000;timeout=ms>=INFINITE ? INFINITE-1 : (DWORD)ms;}
+  DWORD result=app_wait((DWORD)count,handles,timeout);
+  if(result>=WAIT_OBJECT_0 && result<WAIT_OBJECT_0+count) {c->x[0]=0;c->x[1]=result-WAIT_OBJECT_0;return;}
+  if(result==WAIT_TIMEOUT) {
+   if(ns==-1) boundary("event-wait-needs-producer",c,pc);
+   c->x[0]=0xea01;c->x[1]=0xffffffff;return;
+  }
+  boundary("host-event-wait",c,pc);
+ }
+ if(imm==0x1f) {
+  Region r=query(c->x[1]);
+  if(!(r.permission&1) || r.size-(c->x[1]-r.base)<4) boundary("port-name-memory",c,pc);
+  if(memcmp((void*)(uintptr_t)c->x[1],"sm:",4)) boundary("unsupported-named-port",c,pc);
+  c->x[1]=new_session(SESSION_SM); c->x[0]=0; puts("PORT sm: opened"); return;
+ }
+ if(imm==0x16 && c->x[0]>=0x2000 && c->x[0]<0x2040 && session_handles[c->x[0]-0x2000]) {
+  unsigned handle=c->x[0]-0x2000,closing=session_index((uint32_t)c->x[0]);
+  session_handles[handle]=0;session_peer_closed[handle]=0;
+  if(--session_refs[closing]) {c->x[0]=0;return;}
+  save_file_release(&sessions[closing].save_file);
+  for(unsigned i=0;i<32;i++)save_file_release(&sessions[closing].object_save_file[i]);
+  audout_release(&sessions[closing].audio_output);
+  for(unsigned i=0;i<32;i++) audout_release(&sessions[closing].object_audio_output[i]);
+  vi_release_displays(&sessions[closing].vi_displays);
+  for(unsigned i=0;i<33;i++) vi_release_layers(closing,i);
+  for(unsigned i=0;i<32;i++) vi_release_displays(&sessions[closing].object_vi_displays[i]);
+  nv_release_devices(closing);
+  if(sessions[closing].nv_transfer) {transfer_release(sessions[closing].nv_transfer);sessions[closing].nv_transfer=0;}
+  if(sessions[closing].storage) storage_release(sessions[closing].storage);
+  for(unsigned i=0;i<32;i++) if(sessions[closing].object_storage[i]) storage_release(sessions[closing].object_storage[i]);
+  if(!sessions[closing].domain && sessions[closing].kind==SESSION_CONTROLLER_APPLET) close_library_applet();
+  for(unsigned i=0;i<32;i++) if(sessions[closing].objects[i]==SESSION_CONTROLLER_APPLET) close_library_applet();
+  sessions[closing].active=0; c->x[0]=0; return;
+ }
+ if(imm==0x21 && c->x[0]>=0x2000 && c->x[0]<0x2040 && session_handles[c->x[0]-0x2000]) {
+  unsigned handle=c->x[0]-0x2000,session=session_index((uint32_t)c->x[0]);
+  Region tls=query(c->tpidrro);
+  if(tls.permission!=3 || tls.size-(c->tpidrro-tls.base)<256) boundary("ipc-tls-memory",c,pc);
+  uint8_t *buffer=(uint8_t*)(uintptr_t)c->tpidrro;
+  if(session_peer_closed[handle]) { c->x[0]=0xf601; return; }
+  if(ipc_u32(buffer)==2 && ipc_u32(buffer+4)==0) {
+   session_peer_closed[handle]=1; c->x[0]=0xf601; puts("IPC session peer closed"); return;
+  }
+  IpcRequest request;
+  const char *error=ipc_parse_mode(buffer,256,sessions[session].domain,&request);
+  if(error) {
+   printf("IPC parse: %s; first 64 bytes:",error);
+   for(unsigned i=0;i<16;i++) printf(" %08x",ipc_u32(buffer+i*4)); puts("");
+   boundary("ipc-layout",c,pc);
+  }
+  int kind=sessions[session].kind;
+  if(request.ambiguous_inputs && kind!=SESSION_PREPO) {
+   puts("IPC parse: ambiguous input buffers");boundary("ipc-layout",c,pc);
+  }
+  /* Synchronous server-side pointer-buffer copy. Alias buffers retain their
+   * guest mapping; pointer inputs are snapshotted before service dispatch. */
+  uint8_t pointer_buffer[4096];
+  const uint8_t *input=(const uint8_t*)(uintptr_t)request.send_address;
+  if(request.send_is_pointer) {
+   Region source=query(request.send_address);
+   if(request.send_size>sizeof(pointer_buffer)) boundary("ipc-pointer-buffer-size",c,pc);
+   if(request.send_size && (!(source.permission&1) || request.send_size>source.size-(request.send_address-source.base)))
+    boundary("ipc-pointer-buffer-memory",c,pc);
+   if(request.send_size) memcpy(pointer_buffer,input,(size_t)request.send_size);
+   input=pointer_buffer;
+  }
+  if(request.domain) {
+   if(!request.object_id || request.object_id>32 || !sessions[session].objects[request.object_id-1]) boundary("invalid-domain-object",c,pc);
+   kind=sessions[session].objects[request.object_id-1];
+   if(request.domain_command==2) {
+    save_file_release(&sessions[session].object_save_file[request.object_id-1]);
+    audout_release(&sessions[session].object_audio_output[request.object_id-1]);
+    vi_release_layers(session,request.object_id);
+    vi_release_displays(&sessions[session].object_vi_displays[request.object_id-1]);
+    if(kind==SESSION_CONTROLLER_APPLET) close_library_applet();
+    unsigned storage=sessions[session].object_storage[request.object_id-1];
+    if(storage) storage_release(storage);
+    sessions[session].object_storage[request.object_id-1]=0;
+    sessions[session].objects[request.object_id-1]=0;
+    sessions[session].object_account_pid[request.object_id-1]=0;
+    memset(sessions[session].object_account_user[request.object_id-1],0,16);
+    memset(&sessions[session].object_policy[request.object_id-1],0,sizeof(PctlState));
+    memset(sessions[session].object_vibration[request.object_id-1],0,sizeof(sessions[session].object_vibration[0]));
+    memset(&sessions[session].object_audio_device[request.object_id-1],0,sizeof(AudioDeviceState));
+    reply_result(buffer,&request,0);c->x[0]=0;return;
+   }
+  }
+  HOT_LOG("IPC kind=%d type=%u command=%u size=%zu pid=%u domain=%u object=%u\n",kind,request.type,request.command,request.argument_size,request.send_pid,request.domain,request.object_id);
+  if(kind==SESSION_SAVE_FILESYSTEM && (request.type==4 || request.type==6)) {
+   save_filesystem_dispatch(session,buffer,&request,input);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SAVE_FILE && (request.type==4 || request.type==6)) {
+   save_file_dispatch(session,buffer,&request);c->x[0]=0;return;
+  }
+  if(kind==SESSION_ACCOUNT_MANAGER && (request.type==4 || request.type==6)) {
+   account_manager_dispatch(session,buffer,&request);c->x[0]=0;return;
+  }
+  if(kind==SESSION_ACCOUNT && (request.type==4 || request.type==6)) {
+   account_dispatch(session,buffer,&request);c->x[0]=0;return;
+  }
+  if(kind==SESSION_TIME_ZONE && (request.type==4 || request.type==6)) {
+   time_zone_dispatch(buffer,&request);c->x[0]=0;return;
+  }
+  if(kind==SESSION_PREPO && (request.type==4 || request.type==6)) {
+   prepo_dispatch(buffer,&request);c->x[0]=0;return;
+  }
+  if((kind==SESSION_NIFM_ROOT || kind==SESSION_NIFM_GENERAL) && (request.type==4 || request.type==6)) {
+   nifm_dispatch(session,kind,buffer,&request);c->x[0]=0;return;
+  }
+  if(kind==SESSION_AUDOUT_MANAGER && (request.type==4 || request.type==6)) {
+   audout_dispatch(session,buffer,&request);c->x[0]=0;return;
+  }
+  if(kind==SESSION_AUDIO_OUTPUT && (request.type==4 || request.type==6)) {
+   audout_stream_dispatch(session,buffer,&request);c->x[0]=0;return;
+  }
+  if(request.send_count>1 && !(kind==SESSION_NVDRV && request.command==11 && (request.type==4 || request.type==6))) boundary("unsupported-service-second-input",c,pc);
+  if(request.send_is_pointer2 && request.send_size2>4096-request.send_size*(request.send_is_pointer!=0)) boundary("ipc-pointer-buffer-size",c,pc);
+  if(request.copy_count==2 && !(kind==SESSION_NVDRV && request.command==3 && (request.type==4 || request.type==6)))
+   boundary("unsupported-service-copy-handles",c,pc);
+  if(request.input_object_count && !(kind==SESSION_CONTROLLER_APPLET && request.command==100 && request.domain))
+   boundary("unsupported-service-input-object",c,pc);
+  if(request.receive_count && !((kind==SESSION_SETTINGS && request.command==5 || kind==SESSION_AUDIO_DEVICE && (request.command==0 || request.command==6) || kind==SESSION_STORAGE_ACCESSOR && request.command==11 || kind==SESSION_ROMFS_STORAGE && request.command==0 || kind==SESSION_NVDRV && (request.command==1 || request.command==11) || kind==SESSION_VI_APPLICATION && request.command==2020 || kind==SESSION_VI_RELAY && (request.command==0 || request.command==3)) && (request.type==4 || request.type==6)))
+   boundary("unsupported-service-output-buffer",c,pc);
+  if(request.receive_is_pointer && request.receive_size>4096) boundary("output-pointer-buffer-capacity",c,pc);
+  if(request.receive_mode && kind!=SESSION_ROMFS_STORAGE && !(kind==SESSION_AUDIO_DEVICE && request.command==6)) boundary("unsupported-service-output-mode",c,pc);
+  if(request.type==5 || request.type==7) {
+   if(request.command==2 || (request.command==4 && kind==SESSION_NVDRV)) {
+    if(!sessions[session].domain && kind!=SESSION_NVDRV) boundary("unsupported-nondomain-session-clone",c,pc);
+    if(request.command==4 && (request.argument_size<4 || ipc_u32(request.arguments)>1)) boundary("nv-clone-tag",c,pc);
+    ipc_reply_handle(buffer,256,clone_session(session),request.token);c->x[0]=0;return;
+   }
+   if(request.command==3) {
+    ipc_reply_u32(buffer,256,sizeof(pointer_buffer),request.token); c->x[0]=0; return;
+   }
+   if(request.command==0 && !sessions[session].domain) {
+    if(kind==SESSION_NVDRV) boundary("nv-domain-conversion",c,pc);
+    vi_convert_layers(session);
+    sessions[session].domain=1;sessions[session].objects[0]=sessions[session].kind;
+    sessions[session].object_policy[0]=sessions[session].policy;
+    memcpy(sessions[session].object_account_user[0],sessions[session].account_user,16);memset(sessions[session].account_user,0,16);
+    sessions[session].object_account_pid[0]=sessions[session].account_pid;sessions[session].account_pid=0;
+    sessions[session].object_audio_device[0]=sessions[session].audio_device;
+    sessions[session].object_save_file[0]=sessions[session].save_file;sessions[session].save_file=NULL;
+    sessions[session].object_audio_output[0]=sessions[session].audio_output;sessions[session].audio_output=0;
+    sessions[session].object_vi_policy[0]=sessions[session].vi_policy;
+    sessions[session].object_vi_level[0]=sessions[session].vi_level;
+    sessions[session].object_vi_displays[0]=sessions[session].vi_displays;sessions[session].vi_displays=0;
+    sessions[session].object_storage[0]=sessions[session].storage;sessions[session].storage=0;
+    memcpy(sessions[session].object_vibration[0],sessions[session].vibration,sizeof(sessions[session].vibration));
+    memset(sessions[session].vibration,0,sizeof(sessions[session].vibration));
+    ipc_reply_u32(buffer,256,1,request.token);c->x[0]=0;return;
+   }
+   boundary("ipc-control",c,pc);
+  }
+  if(kind==SESSION_SM && request.command==0 && request.send_pid && !sessions[session].initialized) {
+   sessions[session].initialized=1;
+   reply_result(buffer,&request,0);
+   c->x[0]=0; return;
+  }
+  if(kind==SESSION_SM && request.command==1 && sessions[session].initialized && request.argument_size>=8) {
+   printf("SERVICE requested: ");
+   for(unsigned i=0;i<8 && request.arguments[i];i++) printf("%c",request.arguments[i]>=32 && request.arguments[i]<127 ? request.arguments[i] : '?');
+   puts("");
+   if(!memcmp(request.arguments,"lm\0\0\0\0\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_LM); c->x[0]=0; return;
+   }
+   if(!memcmp(request.arguments,"apm\0\0\0\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_APM); c->x[0]=0; return;
+   }
+   if(!memcmp(request.arguments,"appletOE",8)) {
+    reply_object(session,buffer,&request,SESSION_APPLET_OE); c->x[0]=0; return;
+   }
+   if(!memcmp(request.arguments,"aoc:u\0\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_AOC);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"time:u\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_TIME_ROOT);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"set\0\0\0\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_SETTINGS);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"hid\0\0\0\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_HID);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"hwopus\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_HWOPUS);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"audren:u",8)) {
+    reply_object(session,buffer,&request,SESSION_AUDREN_MANAGER);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"prepo:u\0",8)) {
+    reply_object(session,buffer,&request,SESSION_PREPO);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"nifm:u\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_NIFM_ROOT);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"acc:u0\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_ACCOUNT);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"audout:u",8)) {
+    reply_object(session,buffer,&request,SESSION_AUDOUT_MANAGER);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"fsp-srv\0",8)) {
+    reply_object(session,buffer,&request,SESSION_FS_PROXY);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"nvdrv\0\0\0",8)) {
+    if(request.domain) boundary("nv-domain-service",c,pc);
+    reply_object(session,buffer,&request,SESSION_NVDRV);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"vi:m\0\0\0\0",8) || !memcmp(request.arguments,"vi:s\0\0\0\0",8) || !memcmp(request.arguments,"vi:u\0\0\0\0",8)) {
+    unsigned level=request.arguments[3]=='m' ? 2 : request.arguments[3]=='s' ? 1 : 0;
+    vi_reply_object(session,buffer,&request,SESSION_VI_ROOT,0,level);c->x[0]=0;return;
+   }
+   if(!memcmp(request.arguments,"pctl\0\0\0\0",8) || !memcmp(request.arguments,"pctl:s\0\0",8) ||
+      !memcmp(request.arguments,"pctl:a\0\0",8) || !memcmp(request.arguments,"pctl:r\0\0",8)) {
+    reply_object(session,buffer,&request,SESSION_PCTL_ROOT);c->x[0]=0;return;
+   }
+  }
+  if(kind==SESSION_NVDRV) {nv_dispatch(session,buffer,&request);c->x[0]=0;return;}
+  if(kind==SESSION_HWOPUS) {hwopus_dispatch(buffer,&request);c->x[0]=0;return;}
+  if(kind==SESSION_AUDREN_MANAGER) {audren_dispatch(session,buffer,&request);c->x[0]=0;return;}
+  if(kind==SESSION_AUDIO_DEVICE) {audio_device_dispatch(session,buffer,&request);c->x[0]=0;return;}
+  if(kind>=SESSION_VI_ROOT && kind<=SESSION_VI_INDIRECT) {vi_dispatch(session,kind,buffer,&request);c->x[0]=0;return;}
+  if(kind==SESSION_APPLET_OE && request.command==0 && request.send_pid && request.copy_count==1 && request.copy_handle==0xffff8001 && request.argument_size>=8) {
+   reply_object(session,buffer,&request,SESSION_APPLICATION_PROXY); c->x[0]=0; return;
+  }
+  if(kind==SESSION_FS_PROXY && request.command==1 && request.send_pid && request.argument_size>=8) {
+   /* PID is supplied by this process-local transport, not trusted from the
+    * client's placeholder argument. Filesystem operations remain explicit. */
+   sessions[session].initialized=1;
+   printf("FILESYSTEM registered process=%lu\n",GetCurrentProcessId());
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_FS_PROXY && request.command==1005) {
+   if(!sessions[session].initialized) boundary("filesystem-process-not-registered",c,pc);
+   /* File-access logging is disabled in this host profile. Diagnostic IPC
+    * tracing is separate and does not advertise an SD-card log sink. */
+   reply_value(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_FS_PROXY && request.command==51) {
+   application_mount_save(session,buffer,&request);c->x[0]=0;return;
+  }
+  if(kind==SESSION_FS_PROXY && request.command==200) {
+   if(!sessions[session].initialized) boundary("filesystem-process-not-registered",c,pc);
+   romfs_open();reply_object(session,buffer,&request,SESSION_ROMFS_STORAGE);c->x[0]=0;return;
+  }
+  if(kind==SESSION_ROMFS_STORAGE && request.command==4) {
+   romfs_open();reply_wide_value(buffer,&request,romfs_size);c->x[0]=0;return;
+  }
+  if(kind==SESSION_ROMFS_STORAGE && request.command==0 && request.argument_size>=16) {
+   uint64_t offset,length;memcpy(&offset,request.arguments,8);memcpy(&length,request.arguments+8,8);
+   if(request.receive_count!=1 || length>request.receive_size) boundary("romfs-read-output-descriptor",c,pc);
+   romfs_read(offset,length,request.receive_address);reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==0 && request.send_pid && request.argument_size>=8) {
+   uint64_t aruid;memcpy(&aruid,request.arguments,8);
+   if(aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   hid_initialize();reply_object(session,buffer,&request,SESSION_HID_RESOURCE);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID_RESOURCE && request.command==0) {
+   if(!hid_page) boundary("hid-resource-not-initialized",c,pc);
+   uint32_t handle=copy_shared_object(hid_memory,1,HID_MEMORY_SIZE);
+   ipc_reply_copy(buffer,256,handle,request.domain,request.token);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==203) {
+   reply_object(session,buffer,&request,SESSION_VIBRATION_LIST);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==11 && request.send_pid && request.argument_size>=8) {
+   uint64_t aruid;memcpy(&aruid,request.arguments,8);
+   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   hid_touch_active=1;hid_touch_publish(rt_ticks());reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==31 && request.send_pid && request.argument_size>=8) {
+   uint64_t aruid;memcpy(&aruid,request.arguments,8);
+   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   keyboard_active=1;keyboard_publish(rt_ticks(),app_input_focus && app_focus==1 && !app_exit_requested);
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==21 && request.send_pid && request.argument_size>=8) {
+   uint64_t aruid;memcpy(&aruid,request.arguments,8);
+   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   mouse_active=1;mouse_publish(rt_ticks(),app_input_focus && app_focus==1 && !app_exit_requested);
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && (request.command==66 || request.command==67) && request.send_pid && request.argument_size>=16) {
+   uint64_t aruid;memcpy(&aruid,request.arguments+8,8);
+   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   unsigned handle=ipc_u32(request.arguments),index=hid_sensor_index(handle);
+   if(request.command==66) hid_sensor_started[index/64]|=1ull<<(index%64);
+   else hid_sensor_started[index/64]&=~(1ull<<(index%64));
+   /* Starting a subscription does not attach a sensor. Keyboard has none;
+    * its six-axis rings remain empty with no connected attributes. */
+   printf("HID sixaxis handle=0x%x started=%u (no host sensor)\n",handle,request.command==66);
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_VIBRATION_LIST && request.command==0 && request.argument_size>=4) {
+   uint32_t handle=ipc_u32(request.arguments);unsigned index=hid_vibration_index(handle);
+   uint64_t *registered=request.domain ? sessions[session].object_vibration[request.object_id-1] : sessions[session].vibration;
+   registered[index/64]|=1ull<<(index%64);
+   printf("HID vibration registered handle=0x%x (no host actuator)\n",handle);
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==200 && request.argument_size>=4) {
+   hid_vibration_index(ipc_u32(request.arguments));
+   /* Keyboard devices have no actuator: Unknown type, None position. */
+   reply_wide_value(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==201) {
+   hid_accept_vibration(&request);reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==109 && request.send_pid && request.argument_size>=16) {
+   uint64_t aruid;memcpy(&aruid,request.arguments+8,8);
+   unsigned revision=ipc_u32(request.arguments);
+   printf("HID activate revision=%u\n",revision);
+   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(revision!=2) boundary("unsupported-hid-revision",c,pc);
+   hid_revision=revision;hid_active=1;hid_publish(rt_ticks(),app_input_focus);
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==100 && request.send_pid && request.argument_size>=16) {
+   uint64_t aruid;memcpy(&aruid,request.arguments+8,8);
+   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   unsigned styles=ipc_u32(request.arguments);
+   if(styles&~0x7fu) boundary("unsupported-npad-style-mask",c,pc);
+   hid_styles=styles;hid_publish(rt_ticks(),app_input_focus);
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==101 && request.send_pid && request.argument_size>=8) {
+   uint64_t aruid;memcpy(&aruid,request.arguments,8);
+   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   reply_value(buffer,&request,hid_styles);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && request.command==102 && request.send_pid && request.argument_size>=8) {
+   uint64_t aruid;memcpy(&aruid,request.arguments,8);
+   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!request.send_is_pointer || request.send_size%4 || request.send_size>40)
+    boundary("invalid-npad-id-buffer",c,pc);
+   unsigned ids=0;
+   for(unsigned i=0;i<request.send_size/4;i++) ids|=1u<<hid_slot(ipc_u32(input+i*4));
+   hid_ids=ids;hid_publish(rt_ticks(),app_input_focus);
+   printf("HID supported id mask=0x%x\n",ids);
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_HID && (request.command==120 || request.command==121 || request.command==128 || request.command==129) && request.send_pid && request.argument_size>=8) {
+   uint64_t aruid;memcpy(&aruid,request.arguments,8);
+   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   uint64_t *policy=request.command<128 ? &hid_joy_hold_type : &hid_handheld_mode;
+   if(!(request.command&1)) {
+    if(request.argument_size<16) boundary("short-controller-policy",c,pc);
+    uint64_t mode;memcpy(&mode,request.arguments+8,8);
+    if(mode>(request.command==128 ? 2u : 1u)) boundary("invalid-controller-policy",c,pc);
+    *policy=mode;printf("HID policy command=%u value=%llu\n",request.command,(unsigned long long)mode);
+    reply_result(buffer,&request,0);
+   } else reply_wide_value(buffer,&request,*policy);
+   c->x[0]=0;return;
+  }
+  if(kind==SESSION_TIME_ROOT && request.command<=4 && !request.send_pid && !request.copy_count) {
+   static const int clocks[]={SESSION_TIME_USER,SESSION_TIME_NETWORK,SESSION_TIME_STEADY,SESSION_TIME_ZONE,SESSION_TIME_LOCAL};
+   reply_object(session,buffer,&request,clocks[request.command]);c->x[0]=0;return;
+  }
+  if(kind==SESSION_TIME_ROOT && request.command==20 && !request.send_pid && !request.copy_count) {
+   clock_initialize();
+   uint32_t handle=copy_shared_handle(clock_memory,1);
+   if(!ipc_reply_copy(buffer,256,handle,request.domain,request.token)) boundary("clock-handle-reply",c,pc);
+   c->x[0]=0;return;
+  }
+  if(kind==SESSION_PCTL_ROOT && (request.command==0 || request.command==1) && request.send_pid && request.argument_size>=8) {
+   reply_object(session,buffer,&request,SESSION_PCTL);c->x[0]=0;return;
+  }
+  if(kind==SESSION_PCTL) {
+   PctlState *policy=request.domain ? &sessions[session].object_policy[request.object_id-1] : &sessions[session].policy;
+   if(request.command==1) {
+    /* Local desktop profile: no console account pairing or restrictions are
+     * configured. This does not inspect or override Windows family settings. */
+    *policy=(PctlState){1,0,0};
+    reply_result(buffer,&request,0);c->x[0]=0;return;
+   }
+   if(!policy->initialized) boundary("parental-policy-not-initialized",c,pc);
+   if(request.command==1031 || request.command==1403) {
+    reply_value(buffer,&request,request.command==1031 ? policy->restrictions_enabled : policy->paired);
+    c->x[0]=0;return;
+   }
+  }
+  if(kind==SESSION_APPLICATION_PROXY) {
+   int child=0;
+   switch(request.command) {
+    case 0: child=SESSION_COMMON_STATE; break;
+    case 1: child=SESSION_SELF_CONTROLLER; break;
+    case 2: child=SESSION_WINDOW_CONTROLLER; break;
+    case 3: child=SESSION_AUDIO_CONTROLLER; break;
+    case 4: child=SESSION_DISPLAY_CONTROLLER; break;
+    case 11: child=SESSION_LIBRARY_CREATOR; break;
+    case 20: child=SESSION_APPLICATION_FUNCTIONS; break;
+    case 1000: child=SESSION_DEBUG_FUNCTIONS; break;
+   }
+   if(child) {reply_object(session,buffer,&request,child); c->x[0]=0; return;}
+  }
+  if(kind==SESSION_APM && request.command==0) {
+   reply_object(session,buffer,&request,SESSION_APM_SESSION);c->x[0]=0;return;
+  }
+  if(kind==SESSION_APPLICATION_FUNCTIONS && request.command==1) {
+   account_launch_parameter(session,buffer,&request);c->x[0]=0;return;
+  }
+  if(kind==SESSION_APPLICATION_FUNCTIONS && request.command==20) {
+   application_ensure_save(buffer,&request);c->x[0]=0;return;
+  }
+  if(kind==SESSION_APPLICATION_FUNCTIONS && request.command==21) {
+   if(!APPLICATION_LANGUAGE) boundary("missing-application-language-metadata",c,pc);
+   reply_wide_value(buffer,&request,APPLICATION_LANGUAGE);c->x[0]=0;return;
+  }
+  if(kind==SESSION_APPLICATION_FUNCTIONS && request.command==22 && request.argument_size>=4) {
+   application_terminate_result=ipc_u32(request.arguments);application_terminate_result_set=1;
+   printf("APPLICATION terminate result set=0x%x\n",application_terminate_result);
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SELF_CONTROLLER && request.command==40) {
+   if(request.copy_count || request.send_pid || request.send_size || request.receive_count || request.input_object_count)
+    boundary("vi-managed-layer-layout",c,pc);
+   reply_wide_value(buffer,&request,vi_create_managed_layer());c->x[0]=0;return;
+  }
+  if(kind==SESSION_SELF_CONTROLLER && request.command==9) {
+   uint32_t handle=copy_event(&library_launch_event);
+   if(!(library_applet_running ? ResetEvent(library_launch_event) : SetEvent(library_launch_event)))
+    boundary("library-launch-event",c,pc);
+   ipc_reply_copy(buffer,256,handle,request.domain,request.token);c->x[0]=0;return;
+  }
+  if(kind==SESSION_LIBRARY_CREATOR && request.command==0 && request.argument_size>=8) {
+   printf("LIBRARY requested id=0x%x mode=%u\n",ipc_u32(request.arguments),ipc_u32(request.arguments+4));
+   /* 0xc controller support, 0x11 software keyboard; both in all-foreground mode. */
+   if((ipc_u32(request.arguments)!=0xc && ipc_u32(request.arguments)!=0x11) || ipc_u32(request.arguments+4)!=0)
+    boundary("unsupported-library-applet",c,pc);
+   if(library_applet_created) boundary("library-applet-slot-occupied",c,pc);
+   library_applet_created=1;library_applet_id=ipc_u32(request.arguments);
+   reply_object(session,buffer,&request,SESSION_CONTROLLER_APPLET);c->x[0]=0;return;
+  }
+  if(kind==SESSION_LIBRARY_CREATOR && request.command==10 && request.argument_size>=8) {
+   uint64_t size;memcpy(&size,request.arguments,8);
+   printf("LIBRARY storage size=%llu\n",(unsigned long long)size);
+   reply_storage(session,buffer,&request,SESSION_STORAGE,storage_create(size));c->x[0]=0;return;
+  }
+  if(kind==SESSION_LIBRARY_CREATOR && request.command==11 && request.argument_size>=16 && request.copy_count==1) {
+   /* CreateTransferMemoryStorage(writable u8, size u64, handle): the software keyboard's work buffer. The
+    * applet only reads it here (initial string), so the storage holds a copy of the transfer memory. */
+   uint64_t size;memcpy(&size,request.arguments+8,8);
+   unsigned i=transfer_index(request.copy_handle);
+   if(!size || size>transfer_memory[i].size) boundary("transfer-storage-size",c,pc);
+   unsigned storage=storage_create(size);
+   memcpy(applet_storage[storage-1].data,transfer_memory[i].data,(size_t)size);
+   printf("LIBRARY transfer storage size=%llu writable=%u\n",(unsigned long long)size,request.arguments[0]);
+   reply_storage(session,buffer,&request,SESSION_STORAGE,storage);c->x[0]=0;return;
+  }
+  if(kind==SESSION_STORAGE || kind==SESSION_STORAGE_ACCESSOR) {
+   unsigned storage=request.domain ? sessions[session].object_storage[request.object_id-1] : sessions[session].storage;
+   storage_validate(storage);
+   if(kind==SESSION_STORAGE && request.command==0) {
+    reply_storage(session,buffer,&request,SESSION_STORAGE_ACCESSOR,storage);c->x[0]=0;return;
+   }
+   if(kind==SESSION_STORAGE_ACCESSOR && request.command==0) {
+    reply_wide_value(buffer,&request,applet_storage[storage-1].size);c->x[0]=0;return;
+   }
+   if(kind==SESSION_STORAGE_ACCESSOR && (request.command==10 || request.command==11) && request.argument_size>=8) {
+    uint64_t offset;memcpy(&offset,request.arguments,8);
+    int writing=request.command==10;
+    uint64_t length=writing ? request.send_size : request.receive_size;
+    uint64_t address=writing ? request.send_address : request.receive_address;
+    if(!writing && request.receive_count!=1) boundary("storage-read-output-descriptor",c,pc);
+    uint64_t size=applet_storage[storage-1].size;
+    if(offset>size || length>size-offset) boundary("applet-storage-transfer-extent",c,pc);
+    Region memory=query(address);
+    if(length && (!(memory.permission&(writing ? 1 : 2)) || length>memory.size-(address-memory.base)))
+     boundary("applet-storage-transfer-memory",c,pc);
+    if(length) {
+     if(writing) memcpy(applet_storage[storage-1].data+offset,input,(size_t)length);
+     else memcpy((void*)(uintptr_t)address,applet_storage[storage-1].data+offset,(size_t)length);
+    }
+    reply_result(buffer,&request,0);c->x[0]=0;return;
+   }
+  }
+  if(kind==SESSION_CONTROLLER_APPLET && request.command==0) {
+   if(!library_applet_created) boundary("library-applet-not-created",c,pc);
+   ipc_reply_copy(buffer,256,copy_event(&library_state_event),request.domain,request.token);c->x[0]=0;return;
+  }
+  if(kind==SESSION_CONTROLLER_APPLET && request.command==10) {
+   if(library_applet_id==0x11) swkbd_applet_start(); else controller_applet_start();
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_CONTROLLER_APPLET && request.command==1) {  /* IsCompleted */
+   if(!library_applet_created) boundary("library-applet-not-created",c,pc);
+   reply_value(buffer,&request,library_completed ? 1 : 0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_CONTROLLER_APPLET && (request.command==105 || request.command==106)) {
+   /* GetPopOutDataEvent: signalled with the output at completion (the applets here complete in Start).
+    * GetPopInteractiveOutDataEvent: these applets never send interactive data; the event stays clear. */
+   static HANDLE interactive_event;
+   if(!library_applet_created) boundary("library-applet-not-created",c,pc);
+   uint32_t handle=copy_event(request.command==105 ? &library_state_event : &interactive_event);
+   ipc_reply_copy(buffer,256,handle,request.domain,request.token);c->x[0]=0;return;
+  }
+  if(kind==SESSION_CONTROLLER_APPLET && request.command==30) {
+   if(!library_completed) boundary("library-result-before-completion",c,pc);
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_CONTROLLER_APPLET && request.command==101) {
+   if(!library_completed || !library_output) boundary("library-output-unavailable",c,pc);
+   reply_storage(session,buffer,&request,SESSION_STORAGE,library_output);
+   storage_release(library_output);library_output=0;c->x[0]=0;return;
+  }
+  if(kind==SESSION_CONTROLLER_APPLET && request.command==100 && request.domain && request.input_object_count==1) {
+   unsigned object=request.input_object;
+   if(!library_applet_created || library_applet_running || library_completed || library_input_count==4) boundary("library-input-state",c,pc);
+   if(object>32 || sessions[session].objects[object-1]!=SESSION_STORAGE) boundary("library-input-storage-object",c,pc);
+   unsigned storage=sessions[session].object_storage[object-1];storage_retain(storage);
+   library_inputs[library_input_count++]=storage;
+   printf("LIBRARY input %u size=%llu prefix=",library_input_count,(unsigned long long)applet_storage[storage-1].size);
+   for(unsigned i=0;i<32 && i<applet_storage[storage-1].size;i++) printf("%02x",applet_storage[storage-1].data[i]);
+   puts("");reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SETTINGS && request.command==0) {
+   if(!SYSTEM_LANGUAGE) boundary("missing-system-language",c,pc);
+   reply_wide_value(buffer,&request,SYSTEM_LANGUAGE);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SETTINGS && (request.command==5 || request.command==6)) {
+   /* System locale identifiers, independent of this game's supported languages. */
+   static const char languages[][8]={"ja","en-US","fr","de","it","es","zh-CN","ko","nl","pt","ru","zh-TW","en-GB","fr-CA","es-419","zh-Hans","zh-Hant","pt-BR"};
+   unsigned count=sizeof(languages)/sizeof(languages[0]);
+   if(request.command==5) {
+    if(request.receive_count!=1 || request.send_size || request.receive_size>1024*1024 || request.receive_size%8)
+     boundary("invalid-language-output-buffer",c,pc);
+    if(request.receive_size) {
+     Region output=query(request.receive_address);
+     if(!(output.permission&2) || request.receive_size>output.size-(request.receive_address-output.base))
+      boundary("language-output-not-writable",c,pc);
+    }
+    if(count>request.receive_size/8) count=(unsigned)(request.receive_size/8);
+    if(count) memcpy((void*)(uintptr_t)request.receive_address,languages,count*8);
+   }
+   reply_value(buffer,&request,count);c->x[0]=0;return;
+  }
+  if(kind==SESSION_APM && request.command==1) {
+   reply_value(buffer,&request,app_performance_mode); c->x[0]=0; return;
+  }
+  if(kind==SESSION_APM_SESSION && request.command<=1 && request.argument_size>=4) {
+   unsigned mode=ipc_u32(request.arguments);
+   if(mode>1) boundary("invalid-performance-mode",c,pc);
+   if(request.command==0) {
+    if(request.argument_size<8) boundary("short-performance-configuration",c,pc);
+    uint32_t configuration=ipc_u32(request.arguments+4);
+    printf("APM configuration mode=%u value=0x%x\n",mode,configuration);
+    if(!((mode==0 && configuration==0x20004) || (mode==1 && configuration==0x10001)))
+     boundary("unsupported-performance-configuration",c,pc);
+    performance_configuration[mode]=configuration;performance_configuration_set[mode]=1;
+    reply_result(buffer,&request,0);
+   } else {
+    if(!performance_configuration_set[mode]) boundary("uninitialized-performance-configuration",c,pc);
+    reply_value(buffer,&request,performance_configuration[mode]);
+   }
+   c->x[0]=0;return;
+  }
+  if(kind==SESSION_AOC && request.command==8) {
+   /* No add-on content is mounted by this base-only harness. Its content set
+    * is immutable for the lifetime of this process. */
+   ipc_reply_copy(buffer,256,copy_event(&addon_change_event),request.domain,request.token);c->x[0]=0;return;
+  }
+  if(kind==SESSION_WINDOW_CONTROLLER && request.command==1) {
+   reply_wide_value(buffer,&request,GetCurrentProcessId()); c->x[0]=0; return;
+  }
+  if(kind==SESSION_WINDOW_CONTROLLER && request.command==10) {
+   if(!app_window || !IsWindowVisible(app_window) || app_focus!=1) boundary("applet-not-active",c,pc);
+   /* The local application manager hosts one application and no other applets. */
+   app_foreground_owned=1;reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SELF_CONTROLLER && request.command==91) {
+   ipc_reply_copy(buffer,256,copy_event(&app_suspend_event),request.domain,request.token);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SELF_CONTROLLER && request.command==90) {
+   reply_wide_value(buffer,&request,app_suspended_ticks);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SELF_CONTROLLER && request.command==13 && request.argument_size>=3) {
+   const uint8_t *p=request.arguments;
+   if(!((p[0]==0 && p[1]==0 && p[2]==1) || (p[0]==1 && p[1]==1 && p[2]==0) ||
+        (p[0]==1 && p[1]==0 && p[2]==1))) boundary("unsupported-focus-policy",c,pc);
+   app_focus_policy=1;app_suspend_background=p[2];
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SELF_CONTROLLER && request.command==16 && request.argument_size>=1) {
+   if(request.arguments[0]>1) boundary("invalid-suspension-flag",c,pc);
+   app_suspend_out_of_focus=request.arguments[0];reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SELF_CONTROLLER && request.command==14 && request.argument_size>=1) {
+   if(request.arguments[0]>1) boundary("invalid-resume-notification-flag",c,pc);
+   app_resume_notifications=request.arguments[0];reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_SELF_CONTROLLER && (request.command==11 || request.command==12) && request.argument_size>=1) {
+   if(request.arguments[0]>1) boundary("invalid-mode-notification-flag",c,pc);
+   if(request.command==11) app_operation_notifications=request.arguments[0];
+   else app_performance_notifications=request.arguments[0];
+   reply_result(buffer,&request,0);c->x[0]=0;return;
+  }
+  if(kind==SESSION_COMMON_STATE && request.command==0) {
+   uint32_t handle=copy_event(&app_message_event);app_open();
+   ipc_reply_copy(buffer,256,handle,request.domain,request.token);c->x[0]=0;return;
+  }
+  if(kind==SESSION_COMMON_STATE && request.command==1) {
+   unsigned message;
+   if(app_receive(&message)) reply_value(buffer,&request,message);
+   else reply_result(buffer,&request,0x680);
+   c->x[0]=0;return;
+  }
+  if(kind==SESSION_COMMON_STATE && request.command==9) {
+   reply_value(buffer,&request,app_focus);c->x[0]=0;return;
+  }
+  if(kind==SESSION_COMMON_STATE && (request.command==5 || request.command==6)) {
+   reply_value(buffer,&request,request.command==5 ? app_operation_mode : app_performance_mode);c->x[0]=0;return;
+  }
+  if(kind==SESSION_LM && request.command==0 && request.send_pid) {
+   reply_object(session,buffer,&request,SESSION_LOGGER); c->x[0]=0; return;
+  }
+  if(kind==SESSION_LOGGER && request.command==0) {
+   Region data=query(request.send_address);
+   if(!(data.permission&1) || request.send_size<24 || request.send_size>1024*1024 || request.send_size>data.size-(request.send_address-data.base))
+    boundary("log-buffer-extent",c,pc);
+   const uint8_t *packet=input;
+   uint32_t payload=ipc_u32(packet+20);
+   if(payload!=request.send_size-24 || !(packet[16]&4)) boundary("log-packet-layout",c,pc);
+   if(sessions[session].destination) {
+    char path[1024];
+    if(!snapshot_path || snprintf(path,sizeof(path),"%s.logs",snapshot_path)>=(int)sizeof(path)) boundary("log-path",c,pc);
+    if(log_bytes+request.send_size>16*1024*1024) boundary("log-budget",c,pc);
+    FILE *log=fopen(path,"ab"); uint32_t length=(uint32_t)request.send_size;
+    if(!log || fwrite(&length,4,1,log)!=1 || fwrite(packet,1,length,log)!=length || fclose(log)) boundary("log-write",c,pc);
+    log_bytes+=length;
+   }
+   printf("LOG captured %llu bytes\n",(unsigned long long)request.send_size);
+   reply_result(buffer,&request,0); c->x[0]=0; return;
+  }
+  if(kind==SESSION_LOGGER && request.command==1 && request.argument_size>=4) {
+   unsigned destination=ipc_u32(request.arguments);
+   if(destination&~3u) boundary("log-destination",c,pc);
+   sessions[session].destination=destination;
+   reply_result(buffer,&request,0); c->x[0]=0; return;
+  }
+  printf("UNIMPLEMENTED session=%u kind=%d command=%u args=%u copies=%u\n",session,(int)kind,request.command,(unsigned)request.argument_size,(unsigned)request.copy_count);
+  boundary("unimplemented-service-command",c,pc);
+ }
+ if(imm==3) {
+  uint64_t address=c->x[0],size=c->x[1];unsigned mask=(uint32_t)c->x[2],value=(uint32_t)c->x[3];
+  if(address&4095) {c->x[0]=0xcc01;return;}
+  if(!size || size&4095) {c->x[0]=0xca01;return;}
+  if(mask&~8u || value&~mask) boundary("memory-attribute-mask",c,pc);
+  if(address<HEAP_BASE || address>=HEAP_BASE+heap_size || size>HEAP_BASE+heap_size-address) {c->x[0]=0xd401;return;}
+  uint64_t end=address+size;
+  for(uint64_t at=address;at<end;) {
+   Region r=query(at);
+   if(r.kind!=5 || r.permission!=3) {c->x[0]=0xd401;return;}
+   at=r.base+r.size;
+  }
+  c->x[0]=mask ? update_uncached(address,end,value!=0) : 0;return;
+ }
+ if(imm==6) {
+  Region destination=query(c->x[0]);
+  if(!(destination.permission&2) || c->x[0]-destination.base>destination.size || destination.size-(c->x[0]-destination.base)<40)
+   boundary("query-output-outside-writable-memory",c,pc);
+  Region result=query(c->x[2]);
+  uint64_t info[5]={result.base,result.size,result.kind,result.permission,0};
+  info[2]|=(uint64_t)memory_attribute(c->x[2])<<32;
+  for(unsigned i=0;i<64;i++) if(stack_maps[i].size && c->x[2]>=stack_maps[i].source && c->x[2]-stack_maps[i].source<stack_maps[i].size)
+   info[2]|=1ull<<32; /* MemoryAttribute::IsBorrowed */
+  for(unsigned i=0;i<32;i++) if(transfer_memory[i].size && c->x[2]>=transfer_memory[i].address && c->x[2]-transfer_memory[i].address<transfer_memory[i].size)
+   info[2]|=1ull<<32;
+  memcpy((void*)(uintptr_t)c->x[0],info,40);
+  c->x[0]=0; c->x[1]=0; return;
+ }
+ if(imm==0x29 && c->x[1]==11 && c->x[2]==0 && c->x[3]<4) {
+  c->x[1]=entropy[c->x[3]]; c->x[0]=0; return;
+ }
+ if(thread_svc(c,imm)) return;
+ if(imm==0x29 && c->x[2]==0xffff8001 && c->x[3]==0) {
+  uint64_t result;
+  switch(c->x[1]) {
+   case 0: result=PROCESS_CORE_MASK; break;
+   case 1: result=PROCESS_PRIORITY_MASK; break;
+   case 2: result=0x4000000000ull; break;
+   case 3: result=0x1000000000ull; break;
+   case 4: result=HEAP_BASE; break;
+   case 5: result=HEAP_LIMIT; break;
+   case 6: case 21: result=MEMORY_BUDGET; break; /* Harness guest-memory budget. */
+   case 7: case 22:
+    result=static_memory_size()+heap_size;
+    break;
+   case 12: result=0; break;
+   case 13: result=1ull<<39; break;
+   case 14: result=STACK_BASE; break;
+   /* Virtual stack allocation region, not the committed main-thread stack.
+    * Ends at the preferred heap base and includes the existing stack/TLS. */
+   case 15: result=0x100000000ull; break;
+   case 16: result=SYSTEM_RESOURCE_SIZE; break;
+   case 17:
+    if(SYSTEM_RESOURCE_SIZE) boundary("system-resource-accounting",c,pc);
+    result=0; break;
+   default: boundary("get-info",c,pc);
+  }
+  c->x[1]=result; c->x[0]=0; return;
+ }
+ boundary("svc",c,pc);
+}
+void rt_brk(Cpu*c,uint32_t imm,uint64_t pc) {boundary("brk",c,pc);}
+void rt_udf(Cpu*c,uint64_t pc) {boundary("udf",c,pc);}
+uint64_t rt_ticks(void) {
+ static LARGE_INTEGER frequency;
+ LARGE_INTEGER counter;
+ if(!frequency.QuadPart && (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart<=0)) boundary("timer-frequency",&state,state.pc);
+ if(!QueryPerformanceCounter(&counter) || counter.QuadPart<0) boundary("timer-counter",&state,state.pc);
+ return (uint64_t)(((__uint128_t)(uint64_t)counter.QuadPart*19200000ull)/(uint64_t)frequency.QuadPart);
+}
+static void reserve(uint64_t base,size_t size,const char *file) {
+ void *p=VirtualAlloc((void*)(uintptr_t)base,size,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
+ if(p!=(void*)(uintptr_t)base) {fprintf(stderr,"Memory mapping failed: %lu\n",GetLastError()); exit(30);}
+ char moved[MAX_PATH];DWORD n;
+ /* AC_DATA_DIR relocates the build's code images (portable test bundles). */
+ if(file && (n=GetEnvironmentVariableA("AC_DATA_DIR",moved,MAX_PATH)) && n<MAX_PATH) {
+  const char *name=strrchr(file,'/');
+  if(snprintf(moved+n,MAX_PATH-n,"\\images\\%s",name?name+1:file)>=(int)(MAX_PATH-n)) {fprintf(stderr,"Image path too long\n"); exit(31);}
+  file=moved;
+ }
+ if(file) { FILE *f=fopen(file,"rb"); if(!f || fread(p,1,size,f)!=size) {fprintf(stderr,"Image read failed\n"); exit(31);} fclose(f); }
+}

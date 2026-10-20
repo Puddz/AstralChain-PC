@@ -1,0 +1,3 @@
+# Optional diagnostics (audio_report, native_probe validation)
+numpy==2.4.3
+unicorn==2.1.4

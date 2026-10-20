@@ -1,0 +1,20 @@
+@nsobid-4B159F0F7A360669738390EE8657B4F0
+// Astral Chain v1.0.1, applied after Dynamic-FPS 1.0.1.pchtxt (native_trace --patch, in that order).
+//
+// Dynamic-FPS limits the frame step to 2 ticks of 1/30 s. A frame that takes longer (a shader built for the first
+// time, a streaming stall) loses the rest, while the audio plays on in real time: cutscenes drifted behind their
+// voices by the sum of those losses. During cutscene playback (timer flag bit 30 set: w21 == 0 in the mod's step
+// code) the limit becomes 8 ticks, so a cutscene catches up after a stall of up to ~270 ms. Gameplay keeps 2.
+//
+// 0xA0E7F8 held "fmov s1,#2" (the maximum step) in the mod's code cave; it branches to 4 new words after the cave's
+// last one (0xA0EFD0), still inside the executable page that ends the text segment.
+
+@flag offset_shift 0x100
+
+@enabled
+00A0E7F8 F7010014 // b 0xA0EFD4
+00A0EFD4 0110201E // fmov s1,#2.0: gameplay maximum
+00A0EFD8 55000035 // cbnz w21,0xA0EFE0: not in a cutscene
+00A0EFDC 0110241E // fmov s1,#8.0: cutscene maximum
+00A0EFE0 07FEFF17 // b 0xA0E7FC: fminnm s0,s0,s1
+@stop

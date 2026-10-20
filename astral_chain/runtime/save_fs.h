@@ -1,0 +1,168 @@
+/* Writable save filesystem on the native save store (save_store.h).
+ * Paths: same validation and case-sensitive lookup as save_file.h; the final
+ * component may be absent. Writes go directly to the store's data directory and
+ * Commit flushes; there is no journal, unlike Horizon's save containers.
+ * Result codes (switchbrew Filesystem services): PathNotFound 0x202,
+ * PathAlreadyExists 0x402, DirectoryNotEmpty 0x1002 (desc 8). */
+#pragma once
+#include "save_file.h"
+enum { SAVE_MISSING=0, SAVE_FILE=1, SAVE_DIRECTORY=2 };
+#define SAVE_PATH_NOT_FOUND 0x202u
+#define SAVE_PATH_EXISTS 0x402u
+#define SAVE_DIRECTORY_NOT_EMPTY 0x1002u
+/* Resolve a guest save path to a host path. kind: SAVE_MISSING/FILE/DIRECTORY.
+ * Returns a Win32 error; ERROR_PATH_NOT_FOUND when a parent is missing. */
+static DWORD save_resolve(SaveStore *store,const char *input,size_t extent,wchar_t path[1100],int *kind) {
+ *kind=SAVE_MISSING;
+ if(!store->ready)return ERROR_INVALID_STATE;
+ if(!extent || extent>769)return ERROR_BAD_PATHNAME;
+ const char *end=memchr(input,0,extent);
+ if(!end || end==input || input[0]!='/')return ERROR_BAD_PATHNAME;
+ swprintf(path,1100,L"\\\\?\\%ls\\data",store->root);
+ if(end-input==1) {*kind=SAVE_DIRECTORY;return 0;}
+ wchar_t relative[769];
+ int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,input+1,(int)(end-input-1),relative,768);
+ if(!count)return ERROR_BAD_PATHNAME;
+ relative[count]=0;
+ if(relative[count-1]==L'/')relative[--count]=0; /* trailing separator on directories */
+ size_t component=0;
+ for(int i=0;i<=count;i++) {
+  wchar_t c=relative[i];
+  if(!c || c==L'/') {
+   if(i==(int)component || relative[i-1]==L'.' || relative[i-1]==L' ' || i-component>255)return ERROR_BAD_PATHNAME;
+   component=i+1;
+  } else if(c<32 || wcschr(L"\\:*?\"<>|",c))return ERROR_BAD_PATHNAME;
+ }
+ size_t start=0;
+ for(int i=0;i<=count;i++) if(!relative[i] || relative[i]==L'/') {
+  wchar_t saved=relative[i];relative[i]=0;
+  wcscat(path,L"\\");wcscat(path,relative+start);
+  WIN32_FIND_DATAW found;HANDLE find=FindFirstFileW(path,&found);
+  if(find==INVALID_HANDLE_VALUE) {
+   DWORD error=GetLastError();
+   if(error!=ERROR_FILE_NOT_FOUND && error!=ERROR_PATH_NOT_FOUND)return error;
+   if(saved)return ERROR_PATH_NOT_FOUND;
+   return 0; /* missing final component */
+  }
+  FindClose(find);
+  /* Console lookups are case-sensitive: an NTFS case alias is not the entry. */
+  if(wcscmp(found.cFileName,relative+start))return saved ? ERROR_PATH_NOT_FOUND : ERROR_FILE_EXISTS;
+  if(found.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)return ERROR_INVALID_DATA;
+  int directory=(found.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)!=0;
+  if(saved && !directory)return ERROR_PATH_NOT_FOUND;
+  if(!saved)*kind=directory ? SAVE_DIRECTORY : SAVE_FILE;
+  relative[i]=saved;start=i+1;
+ }
+ return 0;
+}
+static uint64_t save_used_bytes(const wchar_t *directory) {
+ wchar_t pattern[1110];swprintf(pattern,1110,L"%ls\\*",directory);
+ WIN32_FIND_DATAW data;HANDLE find=FindFirstFileW(pattern,&data);uint64_t total=0;
+ if(find==INVALID_HANDLE_VALUE)return 0;
+ do {
+  if(!wcscmp(data.cFileName,L".") || !wcscmp(data.cFileName,L".."))continue;
+  if(data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) {
+   wchar_t child[1110];swprintf(child,1110,L"%ls\\%ls",directory,data.cFileName);total+=save_used_bytes(child);
+  } else total+=((uint64_t)data.nFileSizeHigh<<32)|data.nFileSizeLow;
+ } while(FindNextFileW(find,&data));
+ FindClose(find);return total;
+}
+static DWORD save_delete_tree(const wchar_t *directory) {
+ wchar_t pattern[1110];swprintf(pattern,1110,L"%ls\\*",directory);
+ WIN32_FIND_DATAW data;HANDLE find=FindFirstFileW(pattern,&data);
+ if(find!=INVALID_HANDLE_VALUE) {
+  do {
+   if(!wcscmp(data.cFileName,L".") || !wcscmp(data.cFileName,L".."))continue;
+   wchar_t child[1110];swprintf(child,1110,L"%ls\\%ls",directory,data.cFileName);
+   DWORD error=data.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY ? save_delete_tree(child) : (DeleteFileW(child)?0:GetLastError());
+   if(error) {FindClose(find);return error;}
+  } while(FindNextFileW(find,&data));
+  FindClose(find);
+ }
+ return RemoveDirectoryW(directory)?0:GetLastError();
+}
+static uint64_t save_capacity(const SaveStore *store) {uint64_t size;memcpy(&size,store->identity+40,8);return size;}
+/* Returns 1 when handled; result is the Horizon result for the reply. */
+static int save_fs_command(SaveStore *store,const IpcRequest *request,const uint8_t *input,
+                           uint32_t *result,uint64_t *value,int *has_value,HANDLE *opened) {
+ *result=0;*has_value=0;*opened=NULL;
+ unsigned command=request->command;
+ if(command==10) { /* Commit: writes are already in place; make them durable. */
+  printf("SAVE commit\n");return 1;
+ }
+ if(command==11 || command==12) {
+  wchar_t root[1100];swprintf(root,1100,L"\\\\?\\%ls\\data",store->root);
+  uint64_t capacity=save_capacity(store),used=save_used_bytes(root);
+  *value=command==12 ? capacity : (used<capacity ? capacity-used : 0);*has_value=1;return 1;
+ }
+ if(command>=9) return 0; /* OpenDirectory and others: unimplemented */
+ if(request->send_count<1 || !request->send_is_pointer)boundary("save-path-layout",&state,state.pc);
+ wchar_t path[1100];int kind;
+ DWORD error=save_resolve(store,(const char*)input,(size_t)request->send_size,path,&kind);
+ if(error==ERROR_PATH_NOT_FOUND || error==ERROR_FILE_EXISTS) {*result=SAVE_PATH_NOT_FOUND;return 1;}
+ if(error) {printf("SAVE path win32=%lu\n",error);boundary("save-path",&state,state.pc);}
+ switch(command) {
+ case 0: { /* CreateFile(u32 option, u64 size, path) */
+  if(request->argument_size<16)boundary("save-create-layout",&state,state.pc);
+  uint64_t size;memcpy(&size,request->arguments+8,8);
+  if(kind!=SAVE_MISSING) {*result=SAVE_PATH_EXISTS;return 1;}
+  if(size>save_capacity(store))boundary("save-create-exceeds-capacity",&state,state.pc);
+  HANDLE file=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_NEW,0,NULL);
+  if(file==INVALID_HANDLE_VALUE) {printf("SAVE create win32=%lu\n",GetLastError());boundary("save-create-host",&state,state.pc);}
+  LARGE_INTEGER end;end.QuadPart=(LONGLONG)size;
+  if(!SetFilePointerEx(file,end,NULL,FILE_BEGIN) || !SetEndOfFile(file)) boundary("save-create-size",&state,state.pc);
+  CloseHandle(file);return 1;
+ }
+ case 1: /* DeleteFile */
+  if(kind!=SAVE_FILE) {*result=SAVE_PATH_NOT_FOUND;return 1;}
+  if(!DeleteFileW(path))boundary("save-delete-host",&state,state.pc);
+  return 1;
+ case 2: /* CreateDirectory */
+  if(kind!=SAVE_MISSING) {*result=SAVE_PATH_EXISTS;return 1;}
+  if(!CreateDirectoryW(path,NULL))boundary("save-mkdir-host",&state,state.pc);
+  return 1;
+ case 3: /* DeleteDirectory */
+  if(kind!=SAVE_DIRECTORY) {*result=SAVE_PATH_NOT_FOUND;return 1;}
+  if(save_empty_directory(path)) {*result=SAVE_DIRECTORY_NOT_EMPTY;return 1;}
+  if(!RemoveDirectoryW(path))boundary("save-rmdir-host",&state,state.pc);
+  return 1;
+ case 4: /* DeleteDirectoryRecursively */
+  if(kind!=SAVE_DIRECTORY) {*result=SAVE_PATH_NOT_FOUND;return 1;}
+  if(save_delete_tree(path))boundary("save-rmtree-host",&state,state.pc);
+  return 1;
+ case 5: case 6: { /* RenameFile / RenameDirectory: second path in the second pointer buffer */
+  if(request->send_count<2 || !request->send_is_pointer2)boundary("save-rename-layout",&state,state.pc);
+  if(kind!=(command==5 ? SAVE_FILE : SAVE_DIRECTORY)) {*result=SAVE_PATH_NOT_FOUND;return 1;}
+  Region r=query(request->send_address2);
+  if(!(r.permission&1) || request->send_size2>r.size-(request->send_address2-r.base))boundary("save-rename-memory",&state,state.pc);
+  wchar_t target[1100];int target_kind;
+  error=save_resolve(store,(const char*)(uintptr_t)request->send_address2,(size_t)request->send_size2,target,&target_kind);
+  if(error==ERROR_PATH_NOT_FOUND) {*result=SAVE_PATH_NOT_FOUND;return 1;}
+  if(error==ERROR_FILE_EXISTS || target_kind!=SAVE_MISSING) {*result=SAVE_PATH_EXISTS;return 1;}
+  if(error)boundary("save-rename-path",&state,state.pc);
+  if(!MoveFileExW(path,target,MOVEFILE_WRITE_THROUGH))boundary("save-rename-host",&state,state.pc);
+  return 1;
+ }
+ case 7: /* GetEntryType: 0 directory, 1 file */
+  if(kind==SAVE_MISSING) {*result=SAVE_PATH_NOT_FOUND;return 1;}
+  *value=kind==SAVE_DIRECTORY ? 0 : 1;*has_value=2;return 1;
+ case 8: { /* OpenFile(u32 mode: 1 read, 2 write, 4 append) */
+  uint32_t mode=ipc_u32(request->arguments);
+  if(!mode || mode&~7u)boundary("save-open-mode",&state,state.pc);
+  if(kind!=SAVE_FILE) {*result=SAVE_PATH_NOT_FOUND;return 1;}
+  DWORD access=(mode&1 ? GENERIC_READ : 0)|(mode&6 ? GENERIC_WRITE : 0);
+  HANDLE file=CreateFileW(path,access,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_FLAG_OPEN_REPARSE_POINT,NULL);
+  if(file==INVALID_HANDLE_VALUE) {printf("SAVE open win32=%lu\n",GetLastError());boundary("save-open-host",&state,state.pc);}
+  *opened=file;return 1;
+ }
+ }
+ return 0;
+}
+static DWORD save_file_write(HANDLE file,uint64_t offset,const void *data,uint32_t size) {
+ if(offset>INT64_MAX)return ERROR_INVALID_PARAMETER;
+ LARGE_INTEGER position;position.QuadPart=(LONGLONG)offset;
+ if(!SetFilePointerEx(file,position,NULL,FILE_BEGIN))return GetLastError();
+ guest_io_prepare((uint64_t)(uintptr_t)data,size);
+ DWORD written=0;if(size && (!WriteFile(file,data,size,&written,NULL) || written!=size))return GetLastError() ? GetLastError() : ERROR_WRITE_FAULT;
+ return 0;
+}

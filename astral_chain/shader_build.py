@@ -1,0 +1,148 @@
+"""Build an offline probe with reviewed patches to the pinned MIT translator.
+
+The reference checkout stays untouched; derived source and executable belong in
+ignored output. Reject upstream drift rather than silently applying a stale patch.
+"""
+import argparse
+import hashlib
+from pathlib import Path
+import subprocess
+
+TRANSLATOR_SHA256 = '5134be6b065001607ded917874d103b30af89a0dae9290ff15d629c7c8387e8b'
+EXIT_ORIGINAL = '''    if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {  // EXIT
+        sp(&c->body, c->branchy ? "    exit_now = true; break;\\n" : "    break;\\n");'''
+EXIT_REVIEWED = '''    if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {  // EXIT
+        unsigned condition = (unsigned)bits(w, 0, 5);
+        if (condition == 15)
+            sp(&c->body, c->branchy ? "    exit_now = true; break;\\n" : "    break;\\n");
+        else if (condition != 0 && condition != 28)
+            fail(c, "unsupported EXIT condition %#x at %#x", condition, pc);'''
+# Ryujinx d1a093e5 InstEmitFlowControl.Exit evaluates FCSM_TR (28) through
+# GetCondition's false default, and InstEmit.Votevtg emits nothing. Both are
+# viewport-culling early outs; host primitive clipping discards the same work.
+VOTE_ORIGINAL = '''    } else if (OPM(0xf0a8000000000000ull, 0xfff8000000000000ull)) {  // BAR'''
+VOTE_REVIEWED = '''    } else if (OPM(0x50e0000000000000ull, 0xfff8000000000000ull)) {  // VOTE.VTG
+        sp(&c->body, "    /* vote.vtg: host clipping culls */\\n");
+    } else if (OPM(0xf0a8000000000000ull, 0xfff8000000000000ull)) {  // BAR'''
+# LASRecomp's luminance tint is a Link's Awakening post-process, not Maxwell.
+TINT_ORIGINAL = '''    bool tint = stage == STAGE_FRAGMENT && !dbg && (c->omap_target & 0x7) == 0x7 && (!key || key->rt_kind[0] == 0);'''
+TINT_REVIEWED = '''    bool tint = false;  /* game-specific LASRecomp tint excluded */'''
+# Maxwell keeps SSY, PBK and PCNT tokens on one CRS stack: SYNC and BRK pop down to and including the nearest
+# token of their own kind (discarding tokens pushed above it), CONT returns to the nearest PCNT token and keeps it.
+# LASRecomp's three independent stacks leave a stale SSY token behind whenever a BRK or CONT leaves an SSY region;
+# a later SYNC then jumps back into an old region (a loop that only ends at the iteration guard) and unbounded
+# pushes write past the 16-entry arrays. Tokens: target | kind << 30 (1 SSY, 2 PBK, 3 PCNT); an empty stack exits.
+CRS_ORIGINAL = (
+    '        sp(&c->body, "    ssy[ssy_n++] = %uu;\\n", norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));',
+    '        sp(&c->body, "    pbk[pbk_n++] = %uu;\\n", norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));',
+    '        sp(&c->body, "    pcnt[pcnt_n++] = %uu;\\n", norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));',
+    '        sp(&c->body, "    pc = ssy[--ssy_n]; continue;\\n");',
+    '        sp(&c->body, "    pc = pbk[--pbk_n]; continue;\\n");',
+    '        sp(&c->body, "    pc = pcnt[pcnt_n - 1]; continue;\\n");',
+    '        sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0u; uint pbk[16]; uint pbk_n = 0u; uint pcnt[16]; uint pcnt_n = 0u;\\n");',
+    '        sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0; uint pbk[16]; uint pbk_n = 0; uint pcnt[16]; uint pcnt_n = 0;\\n");',
+)
+CRS_PUSH = '        sp(&c->body, "    if (crs_n < 32u) { crs[crs_n] = %uu | {kind}u; crs_n++; }\\n", norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));'
+CRS_POP = ('        sp(&c->body, "    {{ uint e_ = 0u; while (crs_n > 0u) {{ crs_n--; e_ = crs[crs_n]; if ((e_ >> 30) == {kind}u) break; }} '
+           'if ((e_ >> 30) != {kind}u) {{ exit_now = true; break; }} pc = e_ & 0x3FFFFFFFu; continue; }}\\n");')
+CRS_REVIEWED = (
+    CRS_PUSH.replace('{kind}', '0x40000000'),
+    CRS_PUSH.replace('{kind}', '0x80000000'),
+    CRS_PUSH.replace('{kind}', '0xC0000000'),
+    CRS_POP.format(kind=1),
+    CRS_POP.format(kind=2),
+    '        sp(&c->body, "    { while (crs_n > 0u && (crs[crs_n - 1u] >> 30) != 3u) crs_n--; '
+    'if (crs_n == 0u) { exit_now = true; break; } pc = crs[crs_n - 1u] & 0x3FFFFFFFu; continue; }\\n");',
+    '        sp(&s, "  uint pc = 8u; uint crs[32]; uint crs_n = 0u;\\n");',
+    '        sp(&s, "  uint pc = 8u; uint crs[32]; uint crs_n = 0u;\\n");',
+)
+# State-machine iteration cap per invocation (block transitions, not loop iterations). LASRecomp's 100000 lets one
+# runaway pixel cost seconds of GPU time across a full-screen pass (driver timeouts); LARECOMP_SHADER_GUARD at
+# translation time overrides the default. Changing it changes the source and so the SPIR-V cache key.
+GUARD_ORIGINAL = ('        sp(&s, "  for (uint guard = 0u; guard < 100000u; guard++) {\\n  switch (pc) {\\n");',
+                  '        sp(&s, "  for (uint guard = 0; guard < 100000u; guard++) {\\n  switch (pc) {\\n");')
+GUARD_REVIEWED = tuple(
+    '        sp(&s, "  for (uint guard = 0u; guard < %uu; guard++) {\\n  switch (pc) {\\n", '
+    'getenv("LARECOMP_SHADER_GUARD") ? (unsigned)strtoul(getenv("LARECOMP_SHADER_GUARD"), NULL, 0) : 16384u);'
+    for _ in range(2))
+# Compute instructions the game needs that the translator lacks (shared memory, shared/global atomics, LEA.HI):
+# runtime/las/maxwell_ext.h, included before emit_insn (helpers) and in its opcode chain (cases).
+EXT_ORIGINAL = (
+    '    uint32_t cbuf_need[18];  // highest constant vec4 index + 1 per cbuf (array size of the GLSL block)\n} Ctx;',
+    '// ------------------------------------------------------------------ instruction translation\n',
+    '    } else if (OPM(0xef40000000000000ull, 0xfff8000000000000ull) || OPM(0xef50000000000000ull, 0xfff8000000000000ull)) {  // LDL / STL',
+    '    sp(&s, "void main() {\\n");',
+    '    "#extension GL_KHR_shader_subgroup_shuffle_relative : require\\n"',
+    '        sp(&s, "layout(set = %d, binding = %d) uniform %s t%d;\\n", set, 32 + i, glsl_sampler_type(t), i);',
+)
+EXT_REVIEWED = (
+    '    uint32_t cbuf_need[18];  // highest constant vec4 index + 1 per cbuf (array size of the GLSL block)\n'
+    '    bool uses_shared;        // (Astral Chain) LDS/STS/ATOMS: shared uint smem_[]\n} Ctx;',
+    '#define MAXWELL_EXT_DEFS\n#include "maxwell_ext.h"\n#undef MAXWELL_EXT_DEFS\n\n'
+    '// ------------------------------------------------------------------ instruction translation\n',
+    '#include "maxwell_ext.h"\n'
+    '    } else if (OPM(0xef40000000000000ull, 0xfff8000000000000ull) || OPM(0xef50000000000000ull, 0xfff8000000000000ull)) {  // LDL / STL',
+    '    if (c->uses_shared) sp(&s, "shared uint smem_[%d];\\n", SMEM_WORDS);\n    sp(&s, "void main() {\\n");',
+    '    "#extension GL_KHR_shader_subgroup_shuffle_relative : require\\n"\n'
+    '    "#extension GL_KHR_shader_subgroup_vote : require\\n"\n'
+    '    "#extension GL_KHR_shader_subgroup_ballot : require\\n"',
+    # SUST targets: storage images, written without a format qualifier (shaderStorageImageWriteWithoutFormat).
+    '        if (t->is_image) {\n'
+    '            static const char *const img[] = {"image1D", "image2D", "image3D", "imageCube", "image2DArray", "imageCubeArray", "image1DArray"};\n'
+    '            sp(&s, "layout(set = %d, binding = %d) uniform writeonly %s t%d;\\n", set, 32 + i, img[t->type <= TEXTYPE_1D_ARRAY ? t->type : 1], i);\n'
+    '            continue;\n'
+    '        }\n'
+    '        sp(&s, "layout(set = %d, binding = %d) uniform %s t%d;\\n", set, 32 + i, glsl_sampler_type(t), i);',
+)
+S2R_ORIGINAL = '        default: sprintf(t, "0u /* sr %#x */", sr); set_reg(c, d, t);'
+# WScaleFactorXY/Z (Ryujinx SReg 30/31): viewport W scaling factors. Astral Chain
+# never calls an NVN W-scaling or viewport-swizzle API (runs 294-296), so the
+# hardware factors are zero; in its shaders they only feed the culling vote above.
+# SR_EQMASK..SR_GEMASK (0x38-0x3c, nvdisasm): lane masks; 32-lane warps = the low word of the subgroup masks.
+S2R_REVIEWED = ('        case 0x1e: case 0x1f: set_reg(c, d, "0u"); break;  // W scaling disabled\n'
+                '        case 0x38: set_reg(c, d, "gl_SubgroupEqMask.x"); break;\n'
+                '        case 0x39: set_reg(c, d, "gl_SubgroupLtMask.x"); break;\n'
+                '        case 0x3a: set_reg(c, d, "gl_SubgroupLeMask.x"); break;\n'
+                '        case 0x3b: set_reg(c, d, "gl_SubgroupGtMask.x"); break;\n'
+                '        case 0x3c: set_reg(c, d, "gl_SubgroupGeMask.x"); break;\n'
+                '        default: fail(c, "unsupported special register %#x at %#x", sr, pc); break;')
+
+
+def prepare_translator(reference: Path, output: Path) -> Path:
+    source = reference/'runtime/nvn/maxwell/translate.c'
+    with source.open('rb') as stream:
+        data = stream.read(2 * 1024 * 1024 + 1)
+    if hashlib.sha256(data).hexdigest() != TRANSLATOR_SHA256:
+        raise ValueError('unreviewed Maxwell translator identity')
+    text = data.decode('utf-8').replace('\r\n', '\n')
+    # The tint declaration occurs once each in the GLSL and MSL emitters.
+    patches = [(EXIT_ORIGINAL, EXIT_REVIEWED, 1), (S2R_ORIGINAL, S2R_REVIEWED, 1),
+               (VOTE_ORIGINAL, VOTE_REVIEWED, 1), (TINT_ORIGINAL, TINT_REVIEWED, 2)]
+    patches += [(o, r, 1) for o, r in zip(CRS_ORIGINAL + GUARD_ORIGINAL + EXT_ORIGINAL,
+                                          CRS_REVIEWED + GUARD_REVIEWED + EXT_REVIEWED)]
+    for original, replacement, expected in patches:
+        if text.count(original) != expected:
+            raise ValueError('expected exactly one reviewed translator patch location')
+        text = text.replace(original, replacement)
+    output.mkdir(parents=True, exist_ok=True)
+    target = output/'translate-reviewed.c'
+    target.write_text(text, encoding='utf-8', newline='\n')
+    return target
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--reference', type=Path, required=True)
+    parser.add_argument('--compiler', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    reference, output = args.reference.resolve(), args.output.resolve()
+    source = prepare_translator(reference, output)
+    subprocess.run([str(args.compiler.resolve()), 'cc', '-O1', '-I',
+                    str(reference/'runtime/nvn/maxwell'), '-I', str(Path(__file__).parent/'runtime/las'),
+                    str(Path(__file__).parent/'runtime/shader_probe.c'), str(source),
+                    '-o', str(output/'shader-probe.exe')], check=True)
+
+
+if __name__ == '__main__':
+    main()
