@@ -1466,7 +1466,13 @@ static void warm_load(void) {
     if (!f) return;
     uint32_t magic = 0;
     if (fread(&magic, 4, 1, f) == 1 && magic == WARM_MAGIC)
-        while (warm_n < WARM_MAX && fread(&warm_rec[warm_n], sizeof warm_rec[0], 1, f) == 1) warm_n++;
+        // (files written before the fix below hold a header again at each session's start: skipped)
+        for (uint32_t word; warm_n < WARM_MAX && fread(&word, 4, 1, f) == 1;) {
+            if (word == WARM_MAGIC) continue;
+            memcpy(&warm_rec[warm_n], &word, 4);
+            if (fread((uint8_t *)&warm_rec[warm_n] + 4, sizeof warm_rec[0] - 4, 1, f) != 1) break;
+            warm_n++;
+        }
     fclose(f);
     if (magic != WARM_MAGIC) remove("cache/programs.bin");  // (older layout: rebuilt from the next draws)
     LOG("[vk] program warm-up: %d recorded variants\n", warm_n);
@@ -1486,7 +1492,8 @@ static void warm_record(const NvnProgram *np, const ShaderKey *vkey, const Shade
     if (!warm_out) {
         mkdir("cache", 0755);
         warm_out = fopen("cache/programs.bin", "ab");
-        if (warm_out && ftell(warm_out) == 0) { uint32_t magic = WARM_MAGIC; fwrite(&magic, 4, 1, warm_out); }
+        // (ftell is 0 right after opening for append, also on a non-empty file: the header was written every session)
+        if (warm_out && fseek(warm_out, 0, SEEK_END) == 0 && ftell(warm_out) == 0) { uint32_t magic = WARM_MAGIC; fwrite(&magic, 4, 1, warm_out); }
     }
     if (warm_out) { fwrite(&r, sizeof r, 1, warm_out); fflush(warm_out); }
 }

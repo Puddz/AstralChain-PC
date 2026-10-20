@@ -9,6 +9,7 @@ Stages (each is skipped when its result already exists, so a failed run can be f
   3. update   extract the v1.0.1 update's ExeFS, and its RomFS merged over the base
   4. romfs    pack the merged RomFS into game/romfs.bin, then delete the extracted copies
   5. build    translate the game code to C and compile build/game/round-00/trace.exe
+  6. shaders  extract the game's shaders and compile the known ones into build/game/cache (also at each launch)
 
 Nothing here leaves your PC. Keys are read in place by NSTool and never copied; NSPs carry their own tickets. Files picked through the dialogs
 are remembered in userdata/setup.json (paths only) for the next run.
@@ -254,7 +255,7 @@ def fingerprint():
     digest = hashlib.sha256()
     for root in (PROJECT/'astral_chain', PROJECT/'third_party'):
         for path in sorted(root.rglob('*')):
-            if path.is_file() and '__pycache__' not in path.parts:
+            if path.is_file() and '__pycache__' not in path.parts and 'data' not in path.relative_to(root).parts[:1]:
                 digest.update(str(path.relative_to(PROJECT)).encode())
                 digest.update(path.read_bytes())
     return digest.hexdigest()
@@ -291,6 +292,13 @@ def build_game():
         (old/'cache').rename(GAME_BUILD/'cache')
 
 
+def prepare_shaders():
+    """Shaders compiled before the game starts (shader_cache.py); quick when nothing is new."""
+    from . import shader_cache
+    step('Preparing shaders')
+    shader_cache.prepare(ROMFS_IMAGE, GAME, GAME_BUILD, ZIG, GLSLANG, BUILD)
+
+
 def game_data_ready():
     return (UPDATE_EXEFS/'main').is_file() and CONTROL.is_file() and ROMFS_IMAGE.is_file()
 
@@ -310,6 +318,7 @@ def main():
             if not build_is_current():
                 fetch_tools()
                 build_game()
+            prepare_shaders()
             return
         GAME.mkdir(exist_ok=True)
         if not game_data_ready():
@@ -328,6 +337,7 @@ def main():
             step('Removing temporary files')
             shutil.rmtree(WORK, ignore_errors=True)
         build_game()
+        prepare_shaders()
         print('\nSetup complete. Start the game with "Play Astral Chain.cmd".')
     except SetupError as error:
         print(f'\nSetup stopped: {error}', file=sys.stderr)
