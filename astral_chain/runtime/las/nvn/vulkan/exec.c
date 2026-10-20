@@ -755,6 +755,7 @@ static struct {
     uint32_t channel_mask;
     uint8_t color_state[4], ds[8], ms[0x18], poly[4];
     float poly_offset[3];
+    float alpha_ref;  // nvnCommandBufferSetAlphaRef (the test itself: color_state[2])
     uint32_t attrib[16];
     int nattrib;
     uint32_t stream[16][2];
@@ -1413,6 +1414,8 @@ static Prog *get_program_ex(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey, bo
     const uint8_t *vb = (const uint8_t *)vkey;
     for (size_t i = 0; i < sizeof *vkey; i++) { h ^= vb[i]; h *= 0x100000001B3ull; }
     for (int i = 0; i < 8; i++) { h ^= fkey->rt_kind[i]; h *= 0x100000001B3ull; }
+    const uint8_t at[3] = {fkey->alpha_func, (uint8_t)fkey->alpha_ref, (uint8_t)(fkey->alpha_ref >> 8)};  // (alpha test)
+    for (int i = 0; i < 3; i++) { h ^= at[i]; h *= 0x100000001B3ull; }
     if (!h) h = 1;
     uint32_t slot = (uint32_t)(h ^ (h >> 31)) & (PROG_TAB - 1);
     while (prog_tab[slot].key && prog_tab[slot].key != h) slot = (slot + 1) & (PROG_TAB - 1);
@@ -3179,6 +3182,21 @@ static void draw(CmdRec *r, bool indexed) {
     PROF_ADD(prof_draw);
 }
 static uint64_t prof_tp_;
+static uint16_t half_bits(float f) {  // (round to nearest)
+    uint32_t x;
+    memcpy(&x, &f, 4);
+    uint32_t sign = (x >> 16) & 0x8000u, m = x & 0x7FFFFFu;
+    int e = (int)((x >> 23) & 0xFF) - 112;
+    if (((x >> 23) & 0xFF) == 0xFF) return (uint16_t)(sign | 0x7C00u | (m ? 0x200u : 0));
+    if (e >= 31) return (uint16_t)(sign | 0x7C00u);
+    if (e <= 0) {
+        if (e < -10) return (uint16_t)sign;
+        m |= 0x800000u;
+        uint32_t sh = (uint32_t)(14 - e), h = m >> sh;
+        return (uint16_t)(sign | (h + ((m >> (sh - 1)) & 1)));
+    }
+    return (uint16_t)((sign | ((uint32_t)e << 10) | (m >> 13)) + ((m >> 12) & 1));
+}
 static void draw_(CmdRec *r, bool indexed) {
     if (prof) prof_tp_ = SDL_GetTicksNS();
     if (!st.program) { SKIPPED(); return; }
@@ -3188,6 +3206,10 @@ static void draw_(CmdRec *r, bool indexed) {
     vkey.depth_minus_one = nvn_depth_mode() == 0;
     for (int i = 0; i < st.nattrib; i++) vkey.attr_kind[i] = (uint8_t)attr_kind(st.attrib[i] & 0xFF);
     for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) fkey.rt_kind[i] = (uint8_t)rt_kind(st.rt.color[i]->format);
+    if (st.color_state[2] && st.color_state[2] < 8) {  // alpha test: done by the fragment shader (no Vulkan equivalent)
+        fkey.alpha_func = st.color_state[2];
+        fkey.alpha_ref = half_bits(st.alpha_ref);
+    }
     Prog *pr = get_program(st.program, &vkey, &fkey);
     if (pr) wait_built(&pr->state);
     if (!pr || atomic_load(&pr->state) != 1) { SKIPPED(); return; }
@@ -3225,7 +3247,8 @@ static void draw_(CmdRec *r, bool indexed) {
                 while (*p == ',') p++;
             }
         }
-        for (int i = 0; i < nskip; i++) if (last_hash == skip[i]) { SKIPPED(); return; }
+        for (int i = 0; i < nskip; i++)  // (either hash: this one, or the programs.bin / [draw] log one)
+            if (last_hash == skip[i] || stage_hash(st.program, 1) == skip[i]) { SKIPPED(); return; }
         extern bool pot_level_active(void);
         if (last_hash == 0xa2177dbb72197bd9ull && pot_level_active()) { SKIPPED(); return; }
         if (g_debug_frame && getenv("LARECOMP_LOG_FSHASH")) LOG("[fshash] fs=%llx hash %016llx\n", (unsigned long long)fs, (unsigned long long)last_hash);
@@ -3236,6 +3259,34 @@ static void draw_(CmdRec *r, bool indexed) {
         if (st.ubuf[0][5].addr) widescreen_scene_ubo((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
     }
     if (g_debug_frame) debug_draw(pr, r, indexed);
+    {   // LARECOMP_WATCH_FS=<fragment stage hash>: log that shader's draws (blend, constants) in every frame
+        static uint64_t watch = 1;
+        static int nwatch;
+        if (watch == 1) { const char *e = getenv("LARECOMP_WATCH_FS"); watch = e ? strtoull(e, NULL, 16) : 0; }
+        if (watch && nwatch < 4000 && stage_hash(st.program, 1) == watch) {
+            nwatch++;
+            extern volatile int g_debug_frame_request;  // LARECOMP_WATCH_DEBUG=<n>: debug-dump the frame of the n-th draw
+            const char *wd = getenv("LARECOMP_WATCH_DEBUG");
+            if (wd && nwatch == atoi(wd)) g_debug_frame_request = 1;
+            LOG("[watch] alpha test in key %u, shader %s\n", pr->fkey.alpha_func,
+                pr->fi && pr->fi->msl && strstr(pr->fi->msl, ")) discard;") ? "tests" : "does not test");
+            LOG("[watch] frame %llu count %llu blend %#x [%u %u %u %u %u %u %u %u] a2c %u alpha test %u ref %g ds %02x%02x%02x |",
+                (unsigned long long)renderer_present_count(), (unsigned long long)r->x[2], st.color_state[0], st.blend[0][0],
+                st.blend[0][1], st.blend[0][2], st.blend[0][3], st.blend[0][4], st.blend[0][5], st.blend[0][6], st.blend[0][7],
+                st.ms[0xC], st.color_state[2], st.alpha_ref, st.ds[0], st.ds[1], st.ds[2]);
+            for (int s = 0; s < 2; s++) {  // shader cbuf k = binding k - 3 (cbuf 0: driver, 1: compiler constants)
+                uint32_t mask = s ? pr->fi->cbuf_mask : pr->vi->cbuf_mask;
+                for (int k = 3; k < 21; k++) {
+                    if (!((mask >> k) & 1)) continue;
+                    Range u = st.ubuf[s][k - 3];
+                    LOG(" | %s cb%d", s ? "fs" : "vs", k);
+                    if (!u.addr) { LOG(" unbound"); continue; }
+                    for (int i = 0; i < 24 && i * 4 < (int)u.size; i++) LOG(" %.4g", ((const float *)(uintptr_t)u.addr)[i]);
+                }
+            }
+            LOG("\n");
+        }
+    }
     if (ct_on()) ct_draw(pr, "draw");
     alias_draw_check();
     resolve_feedback(pr);
@@ -3244,6 +3295,11 @@ static void draw_(CmdRec *r, bool indexed) {
     snap_reason = "draw-colorwrite";
     for (int i = 0; i < st.rt.ncolor; i++)
         if (st.rt.color[i] && ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
+    {   // LARECOMP_DEBUG_EACH=1 (debug frame): end the pass before each draw, so each draw's result is its own image
+        static int each = -1;
+        if (each < 0) each = getenv("LARECOMP_DEBUG_EACH") != NULL;
+        if (g_debug_frame && each && in_pass) { LOG("[draw]   (state before this draw: pass image %d)\n", debug_pass_no); vk_end_pass(); }
+    }
     begin_pass();
     VkCommandBuffer cb = vk_cmd();
 
@@ -3643,9 +3699,10 @@ static void draw_(CmdRec *r, bool indexed) {
 }
 
 static void debug_draw(Prog *pr, CmdRec *r, bool indexed) {
-    LOG("[draw] %s inst %llu mode %llu count %llu prog vs=%llx fs=%llx | vs cb %#x fs cb %#x | rt %d", indexed ? "e" : "a",
+    LOG("[draw] %s inst %llu mode %llu count %llu prog vs=%llx fs=%llx (%016llx %016llx) | vs cb %#x fs cb %#x | rt %d", indexed ? "e" : "a",
         (unsigned long long)(indexed ? r->x[6] : r->x[4]), (unsigned long long)r->x[0], (unsigned long long)r->x[2],
         (unsigned long long)st.program->stages[0].code_addr, (unsigned long long)st.program->stages[1].code_addr,
+        (unsigned long long)stage_hash(st.program, 0), (unsigned long long)stage_hash(st.program, 1),
         pr->vi->cbuf_mask, pr->fi->cbuf_mask, st.rt.ncolor);
     for (int i = 0; i < st.rt.ncolor; i++) if (st.rt.color[i]) LOG(" %ux%u/f%#x", st.rt.color[i]->width, st.rt.color[i]->height, st.rt.color[i]->format);
     if (st.rt.depth) LOG(" d%#x %p", st.rt.depth->format, (void *)st.rt.depth);
@@ -4294,6 +4351,7 @@ static void exec_list(uint64_t handle, int depth) {
             break;
         }
         case CMD_SET_POLYGON_OFFSET: memcpy(st.poly_offset, r->f, sizeof st.poly_offset); break;
+        case CMD_SET_ALPHA_REF: st.alpha_ref = r->f[0]; break;
         case CMD_SET_PRIMITIVE_RESTART: st.prim_restart = r->x[0] != 0; st.restart_index = (uint32_t)r->x[1]; break;
         case CMD_SET_COPY_STRIDES: st.copy_row_stride = r->x[0]; st.copy_image_stride = r->x[1]; break;
         case CMD_CLEAR_COLOR: {

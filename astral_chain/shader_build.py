@@ -27,6 +27,24 @@ VOTE_REVIEWED = '''    } else if (OPM(0x50e0000000000000ull, 0xfff8000000000000u
 # LASRecomp's luminance tint is a Link's Awakening post-process, not Maxwell.
 TINT_ORIGINAL = '''    bool tint = stage == STAGE_FRAGMENT && !dbg && (c->omap_target & 0x7) == 0x7 && (!key || key->rt_kind[0] == 0);'''
 TINT_REVIEWED = '''    bool tint = false;  /* game-specific LASRecomp tint excluded */'''
+# NVN's fixed-function alpha test (nvnColorStateSetAlphaTest + nvnCommandBufferSetAlphaRef) has no Vulkan
+# equivalent: the GLSL fragment shader discards when c0.a fails it (ShaderKey.alpha_func / alpha_ref, a half float;
+# the reference is emitted bit-exact). Astral Chain's chimera blood (EffectOpacityBlood) writes alpha 0 or 1 and
+# blends ONE/ZERO, relying on the test to dissolve: without it the splash stayed a solid black mass.
+ALPHA_ORIGINAL = '''        if (c->omap_depth) {
+            if (c->reg_used[r + 1]) sp(&s, "  gl_FragDepth'''
+ALPHA_REVIEWED = r'''        if (key && key->alpha_func && key->alpha_func < 8 && (c->omap_target & 0x8) && key->rt_kind[0] == 0) {
+            static const char *const alpha_ops[8] = {"", "", "<", "==", "<=", ">", "!=", ">="};
+            uint32_t h = key->alpha_ref, e = (h >> 10) & 0x1Fu, m = h & 0x3FFu;
+            float ref = e ? ldexpf((float)(m | 0x400u), (int)e - 25) : ldexpf((float)m, -24);
+            if (h & 0x8000u) ref = -ref;
+            uint32_t bits;
+            memcpy(&bits, &ref, 4);
+            if (key->alpha_func == 1) sp(&s, "  discard;\n");
+            else sp(&s, "  if (!(c0.a %s uintBitsToFloat(0x%08xu))) discard;\n", alpha_ops[key->alpha_func], bits);
+        }
+        if (c->omap_depth) {
+            if (c->reg_used[r + 1]) sp(&s, "  gl_FragDepth'''
 # Maxwell keeps SSY, PBK and PCNT tokens on one CRS stack: SYNC and BRK pop down to and including the nearest
 # token of their own kind (discarding tokens pushed above it), CONT returns to the nearest PCNT token and keeps it.
 # LASRecomp's three independent stacks leave a stale SSY token behind whenever a BRK or CONT leaves an SSY region;
@@ -117,7 +135,7 @@ def prepare_translator(reference: Path, output: Path) -> Path:
     text = data.decode('utf-8').replace('\r\n', '\n')
     # The tint declaration occurs once each in the GLSL and MSL emitters.
     patches = [(EXIT_ORIGINAL, EXIT_REVIEWED, 1), (S2R_ORIGINAL, S2R_REVIEWED, 1),
-               (VOTE_ORIGINAL, VOTE_REVIEWED, 1), (TINT_ORIGINAL, TINT_REVIEWED, 2)]
+               (VOTE_ORIGINAL, VOTE_REVIEWED, 1), (TINT_ORIGINAL, TINT_REVIEWED, 2), (ALPHA_ORIGINAL, ALPHA_REVIEWED, 1)]
     patches += [(o, r, 1) for o, r in zip(CRS_ORIGINAL + GUARD_ORIGINAL + EXT_ORIGINAL,
                                           CRS_REVIEWED + GUARD_REVIEWED + EXT_REVIEWED)]
     for original, replacement, expected in patches:

@@ -36,7 +36,14 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
   - Add `LARECOMP_SCREENSHOT_FROM=<frame>` to save into `frames\` instead.
   - `LARECOMP_SHOT_AT=<frame>,...` captures specific frames.
 - **Pass dumps.** `LARECOMP_DEBUG_FRAME=<frame>` writes every render pass of that frame to `build\pass_NNN.png`
-  and logs each draw.
+  (create `build\` in the run folder first) and logs each draw with its shader hashes.
+  - `LARECOMP_DEBUG_EACH=1` ends the pass before every draw, so each draw's result is its own image; the log says
+    which image holds the state before each draw.
+  - Shader names for the hashes: `AC_PRECOMPILE_NAMES=1 build\shader-precompile\<id>\shader_precompile.exe
+    game\shaders 1`. `AC_PRECOMPILE_DUMP=<name part>` prints the translated GLSL instead.
+  - `LARECOMP_SKIP_FSHASH=<hash>,...` skips draws by fragment shader hash. `LARECOMP_WATCH_FS=<hash>` logs that
+    shader's draws in every frame (blend, alpha test, constant buffers); `LARECOMP_WATCH_DEBUG=<n>` debug-dumps the
+    frame of its n-th draw.
 
 ## Diagnostics
 

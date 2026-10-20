@@ -97,8 +97,9 @@ game once, in about a minute. Your saves, game data and shader cache are kept.
 
 ## Known issues
 
-- Defeated enemies may leave dark remnants in the highway chase. A likely cause is fixed, but the fix is
-  unconfirmed.
+- Defeated enemies left a large dark tentacle mass for about two seconds. Cause found: the chimera blood effect
+  dissolves through NVN's alpha test, which was not emulated. It now is (test runs of the highway chase show no
+  mass), not yet confirmed in play.
 - In-game cutscenes were reported with the sound behind the picture after camera cuts (the 60 fps mod's known limit:
   each cut ended up to a frame early). Cut ends now keep their time: the cutscene after the highway chase lasts
   35.192 s, as at the original 30 fps (35.193 s; 35.077 s before). Sound gaps after stalls are skipped to stay in

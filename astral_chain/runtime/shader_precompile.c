@@ -152,6 +152,24 @@ int main(int argc, char **argv) {
     if (argc < 3) { fprintf(stderr, "usage: shader_precompile <shader folder> <threads> [<records file>...]\n"); return 2; }
     load_codes(argv[1]);
     if (!ncodes) { fprintf(stderr, "no shaders in %s\n", argv[1]); return 1; }
+    if (getenv("AC_PRECOMPILE_DUMP")) {  // GLSL of the shaders whose name contains it (generic key)
+        maxwell_gmem_base = 0x7200000000ull;
+        maxwell_gmem_size = 0x100000000ull;
+        for (int i = 0; i < ncodes; i++) {
+            if (!strstr(codes[i].name, getenv("AC_PRECOMPILE_DUMP")) || codes[i].stage > 1) continue;
+            ShaderKey k = {0};
+            k.glsl = 1;
+            k.vs_out_mask = codes[i].stage ? 0xFFFFFFFFu : 0;
+            if (codes[i].stage == 0) k.attr_kind[2] = 2;
+            ShaderInfo *si = maxwell_translate(codes[i].code, codes[i].const_offset, codes[i].stage, &k);
+            printf("// ===== %s\n%s\n", codes[i].name, si && si->msl ? si->msl : "(failed)");
+        }
+        return 0;
+    }
+    if (getenv("AC_PRECOMPILE_NAMES")) {
+        for (int i = 0; i < ncodes; i++) printf("%016llx %d %s\n", (unsigned long long)codes[i].hash, codes[i].stage, codes[i].name);
+        return 0;
+    }
     maxwell_gmem_base = 0x7200000000ull;  // (as the runtime: HEAP_BASE, HEAP_MAX)
     maxwell_gmem_size = 0x100000000ull;
     int matched = 0, missing = 0;
