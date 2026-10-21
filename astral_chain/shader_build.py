@@ -8,7 +8,7 @@ import hashlib
 from pathlib import Path
 import subprocess
 
-TRANSLATOR_SHA256 = '5134be6b065001607ded917874d103b30af89a0dae9290ff15d629c7c8387e8b'
+TRANSLATOR_SHA256 = 'f1c65e86c8e3f18e79027a397c06c4a0326d10fc4b73a71c5d0bb6e986ebd412'
 EXIT_ORIGINAL = '''    if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {  // EXIT
         sp(&c->body, c->branchy ? "    exit_now = true; break;\\n" : "    break;\\n");'''
 EXIT_REVIEWED = '''    if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {  // EXIT
@@ -130,9 +130,10 @@ def prepare_translator(reference: Path, output: Path) -> Path:
     source = reference/'runtime/nvn/maxwell/translate.c'
     with source.open('rb') as stream:
         data = stream.read(2 * 1024 * 1024 + 1)
+    data = data.replace(b'\r\n', b'\n')  # (a git checkout may have CRLF line endings, a zip download LF)
     if hashlib.sha256(data).hexdigest() != TRANSLATOR_SHA256:
         raise ValueError('unreviewed Maxwell translator identity')
-    text = data.decode('utf-8').replace('\r\n', '\n')
+    text = data.decode('utf-8')
     # The tint declaration occurs once each in the GLSL and MSL emitters.
     patches = [(EXIT_ORIGINAL, EXIT_REVIEWED, 1), (S2R_ORIGINAL, S2R_REVIEWED, 1),
                (VOTE_ORIGINAL, VOTE_REVIEWED, 1), (TINT_ORIGINAL, TINT_REVIEWED, 2), (ALPHA_ORIGINAL, ALPHA_REVIEWED, 1)]
