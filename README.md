@@ -50,20 +50,37 @@ How to dump games and keys from your Switch is not covered here.
 
 1. Download this repository: **Code → Download ZIP**, or `git clone`. Put it in a folder you own, for example
    `C:\Games\AstralChain-PC`. The path should be short, and not on a network drive.
-2. Double-click **`setup.cmd`** and pick, when asked:
+2. Start **`Astral Chain Launcher.exe`** in that folder and press **Install game**. Pick, when asked:
    1. your `prod.keys`;
    2. the base game (XCI or NSP);
    3. the v1.0.1 update NSP.
-3. Wait. Setup extracts the game data, packs it into `game\romfs.bin`, then translates and compiles the game. The
-   first time takes roughly **15-40 minutes**, depending on your CPU and disk. Temporary files are removed at the
-   end.
+3. Wait. Setup extracts the game data, packs it into `game\romfs.bin`, then translates and compiles the game and
+   its shaders. The first time takes roughly **15-40 minutes**, depending on your CPU and disk. Temporary files are
+   removed at the end. The launcher shows the progress; **Cancel** stops it.
 
-If a step fails, fix the cause and run `setup.cmd` again: finished steps are skipped. You can also pass the files
-directly: `setup.cmd --keys X:\prod.keys --base X:\AstralChain.xci --update X:\AstralChain-v1.0.1.nsp`.
+The game is installed in the launcher's folder. Once it is, **Install game** is greyed out.
+
+If a step fails, fix the cause and press **Install game** again: finished steps are skipped.
+
+Without the launcher, `setup.cmd` does the same in a console window. It also takes the files directly:
+`setup.cmd --keys X:\prod.keys --base X:\AstralChain.xci --update X:\AstralChain-v1.0.1.nsp`.
+
+Windows SmartScreen may warn about the launcher because it is not signed. Its source is `launcher\Launcher.cs`;
+`python launcher\build.py` builds it again with the C# compiler that comes with Windows.
 
 ## Playing
 
-Double-click **`Play Astral Chain.cmd`**.
+Start **`Astral Chain Launcher.exe`**:
+
+| Button | What it does |
+| --- | --- |
+| **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
+| **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
+| **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
+| **Settings** | Cutscene frame rate, pausing in the background, save backups, presentation mode, shader options and troubleshooting switches. Each one is explained in the window |
+| **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
+
+`Play Astral Chain.cmd` and `Play Astral Chain (diagnostics).cmd` still work, with console windows.
 
 | Switch | Keyboard |
 | --- | --- |
@@ -88,13 +105,13 @@ the Switch's home menu.
 
 ### Safety
 
-The game runs under `astral_chain\run_guarded.ps1`. It closes the game on the first GPU driver error that Windows
+The game always runs under `astral_chain\run_guarded.ps1`, from the launcher too. It closes the game on the first GPU driver error that Windows
 logs. The game also stops itself if the GPU stays busy for more than 1.2 s, before Windows would reset the driver.
 
 ### Updating
 
-Download the new version over the old one, or `git pull`. The next launch of `Play Astral Chain.cmd` rebuilds the
-game once, in about a minute. Your saves, game data and shader cache are kept.
+Download the new version over the old one, or `git pull`. The next **Play** rebuilds the game once, in about a
+minute. Your saves, game data and shader cache are kept.
 
 ## Known issues
 
@@ -108,15 +125,16 @@ game once, in about a minute. Your saves, game data and shader cache are kept.
 - Rarely the game closes right at startup (`STOP host-shared-placeholder-reserve` in `trace.log`). Start it again.
 - Save-slot thumbnails are not captured (`nvnTextureReadTexels` is not implemented).
 
-Reports are welcome. Include `build\game\round-00\stderr.log` and `trace.log` and your GPU and driver version, but
-no game files. For stutters, start the game with **`Play Astral Chain (diagnostics).cmd`** first: it logs where the
-time of each slow frame went.
+Reports are welcome. The easiest way: play with **Play with diagnostics** in the launcher until the problem
+happens, then attach the zip that **Create report** makes. Otherwise include `build\game\round-00\stderr.log` and
+`trace.log` and your GPU and driver version, but no game files.
 
 ## Folder layout
 
 | Path | What |
 | --- | --- |
-| `setup.cmd`, `Play Astral Chain.cmd` | Entry points |
+| `Astral Chain Launcher.exe` | The launcher (source in `launcher/`) |
+| `setup.cmd`, `Play Astral Chain.cmd` | The same steps from a console window |
 | `astral_chain/` | Translator driver, build system and Windows runtime (C) |
 | `astral_chain/patches/` | Code patches of this project (pchtxt) |
 | `third_party/` | Vendored sources: LASRecomp, Vulkan-Headers, VulkanMemoryAllocator, Dynamic-FPS patch |
@@ -124,7 +142,8 @@ time of each slow frame went.
 | `tools/` | *(created by setup)* Zig, glslang, NSTool |
 | `game/` | *(created by setup)* your extracted update code, metadata and `romfs.bin` |
 | `build/` | *(created by setup)* the compiled game and its shader cache |
-| `userdata/` | *(created by setup)* saves, account profile, setup choices |
+| `userdata/` | *(created by setup)* saves, account profile, setup choices, launcher settings (`launcher.ini`) |
+| `reports/` | *(created by the launcher)* reports made with **Create report** |
 
 ## Documentation
 

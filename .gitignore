@@ -3,6 +3,7 @@
 /build/
 /tools/
 /userdata/
+/reports/
 /.venv/
 __pycache__/
 *.pyc

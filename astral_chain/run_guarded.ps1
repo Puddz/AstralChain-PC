@@ -3,9 +3,11 @@
 #   -Seconds   hard time limit
 #   -Script    AC_INPUT_SCRIPT (scripted buttons, see runtime/hid_service.h)
 #   -Env       extra variables, "NAME=value;NAME=value"
+#   -NoConsole the game shares this script's console instead of opening its own (the launcher starts the script
+#              without a window, so no console shows)
 # The game is killed on the first nvlddmkm (NVIDIA), amdkmdag (AMD) or Display 4101 (TDR recovered) event logged after
 # its start. Polls every 250 ms; run.txt records the reason. Exit code: the game's, or 90 watchdog, 91 time limit.
-param([Parameter(Mandatory=$true)][string]$Run,[int]$Seconds=300,[string]$Script='',[string]$Env='')
+param([Parameter(Mandatory=$true)][string]$Run,[int]$Seconds=300,[string]$Script='',[string]$Env='',[switch]$NoConsole)
 $ErrorActionPreference='Stop'
 $project=Split-Path -Parent $PSScriptRoot
 $run=(Resolve-Path $Run).Path
@@ -31,8 +33,10 @@ $gpu=(Get-CimInstance Win32_VideoController | ForEach-Object {"$($_.Name) driver
   Out-File -Encoding utf8 $notes
 
 $start=Get-Date
+$window=if($NoConsole){@{NoNewWindow=$true}}else{@{WindowStyle='Normal'}}
 $game=Start-Process -FilePath $exe -WorkingDirectory $run -ArgumentList ('"'+(Join-Path $round 'relocations.bin')+'"') `
-  -RedirectStandardOutput $log -RedirectStandardError $err -PassThru -WindowStyle Normal
+  -RedirectStandardOutput $log -RedirectStandardError $err -PassThru @window
+$null=$game.Handle  # (Start-Process objects report no exit code unless the handle was taken while it ran)
 $reason=''
 $filter=@{LogName='System';StartTime=$start}
 while(-not $game.HasExited){

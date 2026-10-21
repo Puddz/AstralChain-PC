@@ -326,6 +326,19 @@ def game_data_ready():
     return (UPDATE_EXEFS/'main').is_file() and CONTROL.is_file() and ROMFS_IMAGE.is_file()
 
 
+def print_status():
+    """For the launcher: installed (the game data is extracted), build (current, stale or missing) and shaders
+    (compiled, needed or never: shader_cache.status)."""
+    from . import shader_cache
+    built = (GAME_BUILD/'round-00'/'trace.exe').is_file()
+    current = built and build_is_current()
+    shaders = shader_cache.status(GAME_BUILD) if built else 'never'
+    if shaders == 'compiled' and not current:
+        shaders = 'needed'
+    print(json.dumps({'installed': game_data_ready(), 'build': 'current' if current else 'stale' if built else 'missing',
+                      'shaders': shaders}))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--base', type=Path, help='base game XCI or NSP')
@@ -333,14 +346,23 @@ def main():
     parser.add_argument('--keys', type=Path, help='prod.keys')
     parser.add_argument('--keep-temp', action='store_true', help='keep the extracted NCAs and RomFS folder')
     parser.add_argument('--rebuild-if-stale', action='store_true', help='(launcher) rebuild only if sources changed')
+    parser.add_argument('--force-shaders', action='store_true',
+                        help='(with --rebuild-if-stale) check every shader and compile for the GPU again')
+    parser.add_argument('--status', action='store_true', help='(launcher) print the setup and shader state as JSON')
     args = parser.parse_args()
+    if args.status:
+        print_status()
+        return
     try:
         if args.rebuild_if_stale:
             if not game_data_ready():
-                raise SetupError('The game is not set up yet: run setup.cmd first.')
+                raise SetupError('The game is not set up yet: install it first.')
             if not build_is_current():
                 fetch_tools()
                 build_game()
+            if args.force_shaders:
+                from . import shader_cache
+                shader_cache.forget(GAME_BUILD)
             prepare_shaders()
             return
         GAME.mkdir(exist_ok=True)
@@ -361,7 +383,7 @@ def main():
             shutil.rmtree(WORK, ignore_errors=True)
         build_game()
         prepare_shaders()
-        print('\nSetup complete. Start the game with "Play Astral Chain.cmd".')
+        print('\nSetup complete. Start the game with the launcher (or "Play Astral Chain.cmd").')
     except SetupError as error:
         print(f'\nSetup stopped: {error}', file=sys.stderr)
         sys.exit(1)

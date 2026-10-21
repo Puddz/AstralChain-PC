@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <bcrypt.h>
+#include <dbghelp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -143,6 +144,22 @@ static void snapshot(void);
 static void app_snapshot_frame(const char *path);
 static void nvn_dump_recent(void);
 static void stop_dump(Cpu *c);
+/* AC_CRASH_DUMP=1 (the launcher's diagnostics mode): a minidump of the fault, crash.dmp in the run folder. Thread
+ * stacks and registers only (no guest heap); read it with trace.pdb. */
+static void crash_minidump(PEXCEPTION_POINTERS info) {
+ if(!GetEnvironmentVariableA("AC_CRASH_DUMP",NULL,0)) return;
+ typedef BOOL (WINAPI *WriteDump)(HANDLE,DWORD,HANDLE,MINIDUMP_TYPE,PMINIDUMP_EXCEPTION_INFORMATION,
+  PMINIDUMP_USER_STREAM_INFORMATION,PMINIDUMP_CALLBACK_INFORMATION);
+ HMODULE dbghelp=LoadLibraryA("dbghelp.dll");
+ WriteDump write=dbghelp ? (WriteDump)(void*)GetProcAddress(dbghelp,"MiniDumpWriteDump") : NULL;
+ HANDLE file=write ? CreateFileA("crash.dmp",GENERIC_WRITE,0,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL) : INVALID_HANDLE_VALUE;
+ if(file==INVALID_HANDLE_VALUE) {fputs("CRASH_DUMP not written\n",stderr);return;}
+ MINIDUMP_EXCEPTION_INFORMATION exception={GetCurrentThreadId(),info,FALSE};
+ BOOL ok=write(GetCurrentProcess(),GetCurrentProcessId(),file,
+  (MINIDUMP_TYPE)(MiniDumpWithThreadInfo|MiniDumpWithUnloadedModules),&exception,NULL,NULL);
+ CloseHandle(file);
+ fprintf(stderr,"CRASH_DUMP %s\n",ok ? "crash.dmp" : "failed");
+}
 static LONG CALLBACK fatal_fault_handler(PEXCEPTION_POINTERS info) {
  fflush(stdout);
  nvn_dump_recent();
@@ -154,6 +171,8 @@ static LONG CALLBACK fatal_fault_handler(PEXCEPTION_POINTERS info) {
  info->ExceptionRecord->ExceptionCode,(unsigned long long)state.pc,
  (unsigned long long)(info->ExceptionRecord->NumberParameters>1 ? info->ExceptionRecord->ExceptionInformation[1] : 0),
  strrchr(name,'\\') ? strrchr(name,'\\')+1 : name,(unsigned long long)(at-(uintptr_t)module),GetCurrentThreadId());
+ fflush(stderr);
+ crash_minidump(info);
  fflush(stderr); ExitProcess(32);
 }
 __attribute__((noreturn)) static void boundary(const char *kind, Cpu *c, uint64_t pc) {

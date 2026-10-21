@@ -78,6 +78,7 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_CUT_CARRY=0` | Cutscene cuts end as in the original code (each cut up to a frame early at 60 fps; svc #0xB2) |
 | `AC_AUDIO_RESYNC=0` | Do not skip sound after an underrun (by default the gap, up to 0.3 s, is skipped to stay in sync) |
 | `AC_SAVE_SNAPSHOTS=0` | Do not copy each game save to `<save folder>-snapshots\<date-time>\` (on by default, newest 30 kept) |
+| `AC_CRASH_DUMP=1` | On a host fault, also write `crash.dmp` (a minidump: thread stacks and registers) to the run folder. Read it with `round-00\trace.pdb`. The launcher's diagnostics mode sets it |
 
 With `LARECOMP_VK_PROF=1`, frames over 50 ms are logged as `[hitch]` lines with their time split (texture uploads,
 waits for shader programs). The 2-second lines count pipeline cache hits and misses. Frames with over 40 ms of
@@ -124,7 +125,7 @@ reasonable quality setting) and needs a few GB of disk. So it should be offered 
 
 | File | Role |
 | --- | --- |
-| `setup_game.py` | Setup and rebuild-on-update |
+| `setup_game.py` | Setup and rebuild-on-update; `--status` (JSON) and `--force-shaders` for the launcher |
 | `native_trace.py` | Loads the NSOs, applies patches, translates, generates C, builds, writes `run-env.txt` |
 | `native_build.py`, `nvn_build.py`, `shader_build.py` | Cached compilation of code units, the NVN layer and the patched shader translator |
 | `shader_cache.py`, `runtime/shader_precompile.c` | Shader precompilation: extracts the shaders from `root.pkz` to `game\shaders`, compiles every one of them (generic draw-time keys) plus the variants of `data/shader_variants.bin` and `cache/programs.bin` into `cache/spirv` |
@@ -135,3 +136,21 @@ reasonable quality setting) and needs a few GB of disk. So it should be offered 
 | `runtime/nvn_hle.h` | NVN entry points |
 | `runtime/las/nvn/vulkan/` | Renderer: `exec.c` commands, draws and the pipeline warm-up, `textures.c` uploads, `astc_gpu.c` ASTC decoding on the GPU, `shaders.c` SPIR-V cache, `device.c` swapchain |
 | `runtime/las/maxwell_ext.h` | Maxwell instructions added to the translator (LDS/STS, atomics, VOTE, SUST, TLD...) |
+
+## The launcher
+
+`Astral Chain Launcher.exe` is built from `launcher/Launcher.cs` by `python launcher\build.py`, with the C# 5
+compiler of the .NET Framework 4 that ships with Windows. Rebuild and commit the exe whenever the source changes.
+
+- It runs the same steps as the .cmd files: `.venv` and `requirements.txt`, then `setup_game` (install;
+  `--rebuild-if-stale` before each start; `--force-shaders` for **Compile shaders** when already compiled), then
+  `run_guarded.ps1`. Everything runs without windows (`-NoConsole`: the game shares the guard script's hidden
+  console); its output goes to the launcher's log and `userdata\launcher.log`.
+- The button states come from `setup_game --status`: `installed` (the game data is extracted), `build`
+  (`current`, `stale`, `missing`) and `shaders` (`compiled`, `needed`, `never`: `shader_cache.status` compares the
+  precompile and warm-up stamps with what a launch would write; a new driver is only noticed by the warm-up).
+- Settings are stored in `userdata\launcher.ini` and become the variables of the tables above. The option list is
+  `Options` in `Launcher.cs`.
+- Diagnostics mode adds `LARECOMP_VK_PROF=1` and `AC_CRASH_DUMP=1`. **Create report** zips `run.txt`,
+  `stderr.log`, `trace.log` (last 8 MB each), `launcher.log`, `crash.dmp` and a system summary into `reports\`,
+  with the Windows user name replaced in paths.

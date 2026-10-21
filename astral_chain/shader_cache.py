@@ -122,13 +122,18 @@ def extract_shaders(romfs: Path, out: Path) -> int:
     return count
 
 
-def build_tool(zig: Path, build: Path) -> Path:
-    """shader_precompile.exe, rebuilt when its sources or the translator patches change."""
+def tool_digest() -> str:
+    """Identity of shader_precompile.exe: its sources and the translator patches."""
     digest = hashlib.sha256()
     for path in TOOL_SOURCES + (PROJECT/'astral_chain'/'shader_build.py', RUNTIME/'las'/'las_compat.h',
                                 LASRECOMP/'runtime'/'nvn'/'maxwell'/'translate.c'):
         digest.update(path.read_bytes())
-    folder = build/'shader-precompile'/digest.hexdigest()[:16]
+    return digest.hexdigest()[:16]
+
+
+def build_tool(zig: Path, build: Path) -> Path:
+    """shader_precompile.exe, rebuilt when its sources or the translator patches change."""
+    folder = build/'shader-precompile'/tool_digest()
     exe = folder/'shader_precompile.exe'
     if exe.is_file():
         return exe
@@ -144,11 +149,17 @@ def build_tool(zig: Path, build: Path) -> Path:
     return exe
 
 
+def _precompile_state(tool_id: str, game_build: Path, sizes=None) -> str:
+    sizes = sizes or {}
+    records = [p for p in (SHIPPED_VARIANTS, game_build/'cache'/'programs.bin') if p.is_file() or p.name in sizes]
+    return ' '.join([tool_id] + [f'{sizes.get(p.name) or p.stat().st_size}' for p in records])
+
+
 def precompile(tool: Path, shaders: Path, game_build: Path, glslang: Path) -> None:
     records = [str(p) for p in (SHIPPED_VARIANTS, game_build/'cache'/'programs.bin') if p.is_file()]
     # Nothing new since the last complete run (same tool, same records): skip the 2-second check of the cache
     stamp = game_build/'cache'/'spirv'/'precompiled.txt'
-    state = ' '.join([tool.parent.name] + [f'{Path(r).stat().st_size}' for r in records])
+    state = _precompile_state(tool.parent.name, game_build)
     if stamp.is_file() and stamp.read_text(encoding='ascii') == state:
         return
     for leftover in (game_build/'cache'/'spirv').glob('*.spv.*'):  # (stores whose rename failed, before spirv_cache.c retried)
@@ -189,10 +200,12 @@ def _records(path: Path, base: int):
     return magic, [body[i:i + size] for i in range(0, len(body), size)]
 
 
-def merge_records(game_build: Path) -> None:
+def merge_records(game_build: Path, dry_run=False) -> dict:
     """Append the shipped records this PC's cache lacks. A cache file of another layout is left to the game, which
-    starts it afresh (and the next launch merges into the new one)."""
+    starts it afresh (and the next launch merges into the new one). Returns the new sizes of the files merged into
+    (dry_run: the sizes they would get; nothing is written)."""
     cache = game_build/'cache'
+    sizes = {}
     for shipped, name, base in RECORD_FILES:
         magic, records = _records(shipped, base)
         if not records:
@@ -207,12 +220,52 @@ def merge_records(game_build: Path) -> None:
         new = [r for r in records if r not in known]
         if not new:
             continue
+        sizes[name] = (target.stat().st_size if have_magic is not None else 4) + sum(map(len, new))
+        if dry_run:
+            continue
         cache.mkdir(parents=True, exist_ok=True)
         with target.open('ab') as f:
             if have_magic is None:
                 f.truncate(0)
                 f.write(struct.pack('<I', magic))
             f.write(b''.join(new))
+    return sizes
+
+
+def _warm_state(game_build: Path, sizes=None) -> str:
+    """The build and record part of the warm-up's state (exec.c adds the GPU, driver and shader library use)."""
+    sizes = sizes or {}
+    fingerprint = game_build/'build-fingerprint.txt'
+    parts = [fingerprint.read_text(encoding='ascii').strip() if fingerprint.is_file() else '']
+    for name in ('programs.bin', 'pipelines.bin'):
+        path = game_build/'cache'/name
+        parts.append(f'{sizes.get(name) or (path.stat().st_size if path.is_file() else 0)}')
+    return ' '.join(parts)
+
+
+def status(game_build: Path) -> str:
+    """'compiled' when a launch would neither translate nor compile shaders (as far as can be told without the GPU:
+    a new driver is noticed by the warm-up itself), 'needed' when it would, 'never' before the first time."""
+    stamp = game_build/'cache'/'spirv'/'precompiled.txt'
+    warm = game_build/'cache'/'gpu_warm.txt'
+    if not stamp.is_file() and not warm.is_file():
+        return 'never'
+    sizes = merge_records(game_build, dry_run=True)
+    if not stamp.is_file() or stamp.read_text(encoding='ascii') != _precompile_state(tool_digest(), game_build, sizes):
+        return 'needed'
+    if os.environ.get('AC_GPU_WARM') != '0':
+        done = warm.read_text(encoding='utf-8', errors='replace') if warm.is_file() else ''
+        if not done.startswith(_warm_state(game_build, sizes) + ' | '):
+            return 'needed'
+        if os.environ.get('LARECOMP_GPL') == '0' and done.endswith('shader libraries 1'):
+            return 'needed'  # (the other way round is not known here: the GPU may not support them)
+    return 'compiled'
+
+
+def forget(game_build: Path) -> None:
+    """The next prepare checks every shader and compiles for the GPU again (the caches themselves are kept)."""
+    for stamp in (game_build/'cache'/'spirv'/'precompiled.txt', game_build/'cache'/'gpu_warm.txt'):
+        stamp.unlink(missing_ok=True)
 
 
 def warm_gpu(game_build: Path, shaders: Path, glslang: Path) -> None:
@@ -222,11 +275,8 @@ def warm_gpu(game_build: Path, shaders: Path, glslang: Path) -> None:
     exe = game_build/'round-00'/'trace.exe'
     if not exe.is_file():
         return
-    parts = [(game_build/'build-fingerprint.txt').read_text(encoding='ascii').strip()
-             if (game_build/'build-fingerprint.txt').is_file() else '']
-    parts += [f'{(game_build/"cache"/name).stat().st_size if (game_build/"cache"/name).is_file() else 0}'
-              for name in ('programs.bin', 'pipelines.bin')]
-    env = dict(os.environ, AC_GPU_WARM=str(shaders.resolve()), AC_GPU_WARM_STATE=' '.join(parts), AC_GLSLANG=str(glslang))
+    env = dict(os.environ, AC_GPU_WARM=str(shaders.resolve()), AC_GPU_WARM_STATE=_warm_state(game_build),
+               AC_GLSLANG=str(glslang))
     process = subprocess.Popen([str(exe)], cwd=game_build, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                text=True, errors='replace')
     shown = False
