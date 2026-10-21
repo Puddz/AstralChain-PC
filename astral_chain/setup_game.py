@@ -294,6 +294,8 @@ def build_game():
     step('Building the game (translating and compiling; the first build takes several minutes)')
     old = BUILD/'game-old'
     if GAME_BUILD.exists():
+        if (old/'cache').is_dir() and not (GAME_BUILD/'cache').exists():
+            (old/'cache').rename(GAME_BUILD/'cache')  # (a failed build left the cache in game-old: kept, not deleted)
         shutil.rmtree(old, ignore_errors=True)
         GAME_BUILD.rename(old)
     command = [sys.executable, '-m', 'astral_chain.native_trace', UPDATE_EXEFS,
