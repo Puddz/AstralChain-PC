@@ -23,13 +23,46 @@ shaders, keys or firmware, and never will. Everything the setup produces comes f
 
 | | |
 | --- | --- |
-| Tested | Title, menus, opening cutscene, character creation, the highway chase and the first on-foot section of File 01 |
+| Tested | Title, menus, opening cutscene, character creation, the highway chase and File 01 up to its boss fight (played by the owner) |
 | Frame rate | 60 fps target, cutscenes included (Dynamic-FPS patch, game speed correct at any frame rate). RTX 4090 / Ryzen 7 7800X3D: 57-60 fps. `AC_CUTSCENE_FPS=30` plays cutscenes exactly as the original does |
 | Stability | Driver watchdog plus a GPU hang stop. No driver resets since 2026-10-19 across dozens of test runs |
 | Saving | Works (tested in File 01) |
-| Not yet tested | Everything after the first on-foot section of File 01 |
+| Shader pauses | Shaders are compiled for your GPU before the game starts. Simulated first play of an area never recorded: 7 pauses over 50 ms, 0.49 s in total (26 and 8.0 s before 2026-10-21) |
+| Not yet tested | The File 01 boss fight with the fix of its crash, and everything after it |
 
 Known issues are listed under [Known issues](#known-issues).
+
+## What's new
+
+Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
+
+**2026-10-21**
+
+- **Launcher.** `Astral Chain Launcher.exe`: install, compile shaders, play without console windows, play with
+  diagnostics and create a bug report, and settings for every option. See [Playing](#playing).
+- **Shaders compiled for your GPU before the game starts** ("Compiling for your GPU", about 10 s the first time).
+  In-game, pipelines are linked from those compiled shaders instead of being compiled whole, and the recorded
+  ones are built before their first draw. Most shader pauses in new areas are gone (see Status). *Not yet
+  confirmed.*
+- **ASTC textures are decoded on the GPU** instead of the CPU: no more 60-240 ms pauses when large textures load.
+  Checked byte for byte against the CPU decoder.
+- **Crash at the File 01 boss** (when it throws a container): the game stopped on a rumble value out of range. It
+  now ignores such values. *Not yet confirmed.*
+- **NSP base games** stopped setup at the RomFS step (issue #1). Setup now gives NSTool both the base game's and
+  the update's title keys. *Not yet confirmed by the reporter.*
+- A failed rebuild no longer loses the shader cache.
+- Crash dumps in diagnostics mode; the watchdog script now records the game's exit code.
+
+**2026-10-20**
+
+- All of the game's shaders are translated before the first launch ("Preparing shaders").
+- NVN's alpha test is emulated: defeated enemies no longer leave a dark tentacle mass. *Not yet confirmed.*
+- Cutscene cuts keep their time at 60 fps, and sound skips gaps after a stall, so sound stays with the picture.
+  *Not yet confirmed.* `AC_CUTSCENE_FPS=30` plays cutscenes at 30 fps as on the Switch.
+- Dragging the window by its title bar no longer freezes the game; closing hides the window at once.
+- Each save is also copied to a backup folder (the newest 30 are kept).
+- Textures are uploaded ahead of first use on loading screens; the pipeline cache is kept between sessions.
+- Fixed wrong textures on faces and armour, and a rare crash in the GPU write-back handler.
 
 ## Requirements
 
@@ -93,11 +126,12 @@ Start **`Astral Chain Launcher.exe`**:
 | Right stick | T F G H |
 
 XInput controllers (Xbox pads and compatibles) work too. The game pauses while its window is not focused, as on
-the Switch's home menu.
+the Switch's home menu (Settings: *Keep running while the game window is in the background*).
 
-- **Saves** are in `userdata\saves\`. Back that folder up from time to time.
+- **Saves** are in `userdata\saves\` (the launcher's *Saves folder* link). Each save is also copied next to it
+  (the newest 30 are kept); still, back that folder up from time to time.
 - **Logs** of the last session are in `build\game\round-00\` (`trace.log`, `stderr.log`).
-- **Shaders.** Before the game starts the first time, the launcher translates all of the game's shaders ("Preparing
+- **Shaders.** Before the game starts the first time, setup translates all of the game's shaders ("Preparing
   shaders", about 20 s on a 16-thread CPU), then compiles them for your GPU and driver ("Compiling for your GPU"),
   together with the render-state combinations recorded so far. Later launches skip both unless something changed
   (a game update, new recorded combinations, or a new graphics driver). A combination never seen before is linked
@@ -105,8 +139,8 @@ the Switch's home menu.
 
 ### Safety
 
-The game always runs under `astral_chain\run_guarded.ps1`, from the launcher too. It closes the game on the first GPU driver error that Windows
-logs. The game also stops itself if the GPU stays busy for more than 1.2 s, before Windows would reset the driver.
+The game always runs under `astral_chain\run_guarded.ps1`, from the launcher too. It closes the game on the first
+GPU driver error that Windows logs. The game also stops itself if the GPU stays busy for more than 1.2 s, before Windows would reset the driver.
 
 ### Updating
 
@@ -115,6 +149,9 @@ minute. Your saves, game data and shader cache are kept.
 
 ## Known issues
 
+- Dark, shadow-like patches on scenery when fighting close to it were reported. Under investigation: a screenshot
+  helps.
+- Some short pauses remain when entering new areas: the game loading its own data, not shader compiling.
 - Defeated enemies left a large dark tentacle mass for about two seconds. Cause found: the chimera blood effect
   dissolves through NVN's alpha test, which was not emulated. It now is (test runs of the highway chase show no
   mass), not yet confirmed in play.
