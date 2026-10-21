@@ -73,8 +73,9 @@ namespace AstralChainLauncher
             Add("cutscene_fps_30", "Game", "Cutscenes at 30 fps, as on the Switch",
                 "Off: in-game cutscenes run at 60 fps like the rest of the game.", OptKind.Check, "0",
                 OptTarget.Game, When("1", "AC_CUTSCENE_FPS=30"));
-            Add("ignore_focus", "Game", "Keep running while the game window is in the background",
-                "Off: the game pauses when its window loses focus, as on the Switch's home menu.", OptKind.Check, "0",
+            Add("ignore_focus", "Game", "Keep running while the game window is minimized",
+                "Off: the game pauses while minimized, as on the Switch's home menu. Switching to another window " +
+                "never pauses it; it only stops keyboard input.", OptKind.Check, "0",
                 OptTarget.Game, When("1", "AC_IGNORE_FOCUS=1"));
             Add("save_snapshots", "Game", "Back up each save",
                 "Every time the game saves, a copy goes next to the save in userdata\\saves (the newest 30 are kept).", OptKind.Check, "1",
@@ -93,12 +94,6 @@ namespace AstralChainLauncher
             Add("gpu_warm", "Shaders and performance", "Compile shaders for your GPU before playing",
                 "Takes about 10 s the first time and after driver updates; removes most shader pauses in play.",
                 OptKind.Check, "1", OptTarget.Setup, When("0", "AC_GPU_WARM=0"));
-            Add("skip_unbuilt", "Shaders and performance", "Do not wait for shaders that are still compiling",
-                "Fewer pauses the first time something is drawn, but it can appear a moment late.", OptKind.Check, "0",
-                OptTarget.Game, When("1", "LARECOMP_SKIP_UNBUILT=1"));
-            Add("parallel", "Shaders and performance", "Run the game's threads in parallel",
-                "Needed for 60 fps. Turn off only to test whether a problem depends on it.", OptKind.Check, "1",
-                OptTarget.Game, When("1", "AC_PARALLEL=1"));
             Add("gpu_astc", "Troubleshooting", "Decode ASTC textures on the GPU",
                 "Off: textures are decoded on the CPU (slower loading). Try it if textures look wrong.",
                 OptKind.Check, "1", OptTarget.Game, When("0", "LARECOMP_GPU_ASTC=0"));
@@ -111,7 +106,7 @@ namespace AstralChainLauncher
             var hang = Add("gpu_hang_ms", "Troubleshooting", "GPU hang stop (milliseconds)",
                 "The game stops itself if the GPU stays busy this long, before Windows would reset the driver.",
                 OptKind.Number, "1200", OptTarget.Game, v => v == "1200" ? "" : "AC_GPU_HANG_MS=" + v);
-            hang.Min = 500; hang.Max = 1800;
+            hang.Min = 1000; hang.Max = 1800;
             Add("show_consoles", "Troubleshooting", "Show console windows",
                 "Shows the game's console and the watchdog's window, as the .cmd launchers do.", OptKind.Check, "0",
                 OptTarget.Launcher, null);
@@ -164,7 +159,14 @@ namespace AstralChainLauncher
             foreach (var o in Options.All)
             {
                 if (o.Target != target || o.Env == null) continue;
-                string e = o.Env(Get(o.Key));
+                string value = Get(o.Key);
+                if (o.Kind == OptKind.Number)
+                {
+                    int n;  // (a value edited out of range, or not a number, would reach the game as is)
+                    if (!int.TryParse(value, out n)) n = int.Parse(o.Default);
+                    value = Math.Max(o.Min, Math.Min(o.Max, n)).ToString();
+                }
+                string e = o.Env(value);
                 if (!string.IsNullOrEmpty(e)) parts.Add(e.Trim().Trim(';'));
             }
             return string.Join(";", parts.Where(p => p.Length > 0));
@@ -387,7 +389,7 @@ namespace AstralChainLauncher
                 string run = Path.Combine(project, @"build\game");
                 string dump = Path.Combine(run, "crash.dmp");
                 if (diagnostics) try { File.Delete(dump); } catch { }
-                string env = "AC_PARALLEL=;AC_IGNORE_FOCUS=;" + settings.Env(OptTarget.Game) +
+                string env = "AC_PARALLEL=1;AC_IGNORE_FOCUS=;" + settings.Env(OptTarget.Game) +
                     (diagnostics ? ";LARECOMP_VK_PROF=1;AC_CRASH_DUMP=1" : "");
                 bool consoles = settings.On("show_consoles");
                 string args = "-NoProfile -ExecutionPolicy Bypass -File " +

@@ -118,8 +118,8 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
   if(output->play_end>0 && now>output->play_end) {
    double gap=now-output->play_end;output->starved+=gap;dump_gap=gap<5.0 ? gap : 0;
    if(resync && gap<0.5) {output->owed+=gap;if(output->owed>0.3) output->owed=0.3;}
-   if(gap>0.01) printf("AUDIO underrun at %.3f s: %.1f ms (total %.1f ms); %.0f ms since the previous buffer, %.0f ms queued then\n",
-    now,gap*1e3,output->starved*1e3,(now-output->last_append)*1e3,output->queued_then*1e3);
+   if(gap>0.01) printf("AUDIO underrun at %.3f s: %.1f ms (total %.1f ms); %.0f ms since the previous buffer, %.0f ms queued then; resync %s, %.1f ms skipped so far\n",
+    now,gap*1e3,output->starved*1e3,(now-output->last_append)*1e3,output->queued_then*1e3,resync?"on":"off",output->skipped*1e3);
   }
   if(output->owed>0) {
    size_t owed=(size_t)(output->owed*output->format.nAvgBytesPerSec)/output->format.nBlockAlign*output->format.nBlockAlign;

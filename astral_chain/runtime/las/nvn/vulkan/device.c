@@ -338,8 +338,15 @@ static VkPresentModeKHR present_mode(void) {
     VkPresentModeKHR m[16];
     if (n > 16) n = 16;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_vk.phys, g_vk.surface, &n, m);
-    for (uint32_t i = 0; i < n; i++) if (m[i] == want) return want;
-    return VK_PRESENT_MODE_FIFO_KHR;
+    VkPresentModeKHR got = VK_PRESENT_MODE_FIFO_KHR;
+    for (uint32_t i = 0; i < n; i++) if (m[i] == want) got = want;
+    static VkPresentModeKHR logged = (VkPresentModeKHR)-1;
+    if (got != logged) {
+        logged = got;
+        LOG("[vk] present mode %s%s\n", got == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox"
+            : got == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo", got != want ? " (the one asked for is not supported)" : "");
+    }
+    return got;
 }
 
 static void create_swapchain(void) {

@@ -110,7 +110,7 @@ Start **`Astral Chain Launcher.exe`**:
 | **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
 | **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
 | **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
-| **Settings** | Cutscene frame rate, pausing in the background, save backups, presentation mode, shader options and troubleshooting switches. Each one is explained in the window |
+| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, presentation mode, shader options and troubleshooting switches. Each one is explained in the window |
 | **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
 
 `Play Astral Chain.cmd` and `Play Astral Chain (diagnostics).cmd` still work, with console windows.
@@ -125,8 +125,9 @@ Start **`Astral Chain Launcher.exe`**:
 | Left stick | W A S D |
 | Right stick | T F G H |
 
-XInput controllers (Xbox pads and compatibles) work too. The game pauses while its window is not focused, as on
-the Switch's home menu (Settings: *Keep running while the game window is in the background*).
+XInput controllers (Xbox pads and compatibles) work too. The game pauses while its window is minimized, as on
+the Switch's home menu (Settings: *Keep running while the game window is minimized*). In another window, the game
+keeps running but takes no keyboard input.
 
 - **Saves** are in `userdata\saves\` (the launcher's *Saves folder* link). Each save is also copied next to it
   (the newest 30 are kept); still, back that folder up from time to time.

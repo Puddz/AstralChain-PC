@@ -141,6 +141,7 @@ static void hang_watch_submitted(uint64_t seq) {
     if (started) return;
     started = 1;
     int64_t ms = getenv("AC_GPU_HANG_MS") ? atoll(getenv("AC_GPU_HANG_MS")) : 1200;
+    LOG("[vk] GPU hang stop after %lld ms%s\n", (long long)ms, ms > 0 ? "" : " (off)");
     pthread_t t;
     if (ms > 0 && pthread_create(&t, NULL, hang_watch, (void *)(intptr_t)ms) == 0) pthread_detach(t);
 }

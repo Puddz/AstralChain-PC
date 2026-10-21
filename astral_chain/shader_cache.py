@@ -240,6 +240,8 @@ def _warm_state(game_build: Path, sizes=None) -> str:
     for name in ('programs.bin', 'pipelines.bin'):
         path = game_build/'cache'/name
         parts.append(f'{sizes.get(name) or (path.stat().st_size if path.is_file() else 0)}')
+    if os.environ.get('LARECOMP_GPL') == '0':
+        parts.append('no-gpl')  # (asked for; the GPU's own support is in the part exec.c adds)
     return ' '.join(parts)
 
 
@@ -257,8 +259,6 @@ def status(game_build: Path) -> str:
         done = warm.read_text(encoding='utf-8', errors='replace') if warm.is_file() else ''
         if not done.startswith(_warm_state(game_build, sizes) + ' | '):
             return 'needed'
-        if os.environ.get('LARECOMP_GPL') == '0' and done.endswith('shader libraries 1'):
-            return 'needed'  # (the other way round is not known here: the GPU may not support them)
     return 'compiled'
 
 
