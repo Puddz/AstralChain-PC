@@ -39,8 +39,8 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 **2026-10-21**
 
 - **Launcher.** `Astral Chain Launcher.exe`: install, compile shaders, play without console windows, play with
-  diagnostics and create a bug report, and settings for every option, over original key art. See
-  [Playing](#playing).
+  diagnostics and create a bug report, and settings for every option, over original key art (six backgrounds to
+  pick from with the arrows at the top right). See [Playing](#playing).
 - **Shaders compiled for your GPU before the game starts** ("Compiling for your GPU", about 10 s the first time).
   In-game, pipelines are linked from those compiled shaders instead of being compiled whole, and the recorded
   ones are built before their first draw. Most shader pauses in new areas are gone (see Status). *Not yet
@@ -107,6 +107,8 @@ Windows SmartScreen may warn about the launcher because it is not signed. Its so
 Start **`Astral Chain Launcher.exe`**:
 
 ![The launcher](docs/images/launcher.jpg)
+
+The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six backgrounds; the choice is remembered.
 
 | Button | What it does |
 | --- | --- |
@@ -208,8 +210,9 @@ their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - [AstralChain-Dynamic-FPS](https://github.com/yogesh1239/AstralChain-Dynamic-FPS) by yogesh1239 (MIT): the
   60 fps patch.
 - [astral-extractor](https://github.com/cabalex/astral-extractor) by cabalex: format research.
-- The launcher's key art and icon (`launcher/background.jpg`, `launcher/icon.ico`) are original images made with
-  OpenAI Codex's image generation for this project, in the style of the game. They contain no official artwork.
+- The launcher's backgrounds and icon (`launcher/art/`, `launcher/icon.ico`) are original AI-generated images in the
+  style of the game, chosen by the project's owner; five were made with OpenAI Codex's image generation for this
+  project. They contain no official artwork.
 - [AC-Recomp](https://github.com/swaymun/AC-Recomp): the macOS recompilation, whose setup flow inspired this one.
 - [NSTool](https://github.com/jakcron/nstool), [Zig](https://ziglang.org/),
   [glslang](https://github.com/KhronosGroup/glslang), [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers),

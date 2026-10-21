@@ -183,7 +183,10 @@ namespace AstralChainLauncher
         readonly NeonProgress progress;
         readonly TextBox log;
         readonly LinkLabel savesLink, logsLink, report, details;
-        readonly Image art;
+        Image art;
+        readonly string[] arts = Theme.ArtNames();
+        int artIndex;
+        Label artLabel;
         StreamWriter logFile;
         Thread worker;
         readonly object procLock = new object();
@@ -203,7 +206,8 @@ namespace AstralChainLauncher
             venvPython = Path.Combine(project, @".venv\Scripts\python.exe");
             settings = new Settings(Path.Combine(project, @"userdata\launcher.ini"));
             logPath = Path.Combine(project, @"userdata\launcher.log");
-            art = Theme.LoadArt();
+            artIndex = Math.Max(0, Array.IndexOf(arts, settings.Raw("background")));
+            art = arts.Length > 0 ? Theme.LoadArt(arts[artIndex]) : null;
 
             Text = "Astral Chain PC";
             Font = new Font("Segoe UI", 9.5F);
@@ -234,6 +238,28 @@ namespace AstralChainLauncher
             minimize.Click += (s, e) => WindowState = FormWindowState.Minimized;
             Controls.Add(close);
             Controls.Add(minimize);
+
+            // Background picker (top right, under the window buttons); the choice is kept in launcher.ini
+            if (arts.Length > 1)
+            {
+                var prev = new GlyphButton { Glyph = "\u2039", AccessibleName = "Previous background",
+                    Location = new Point(980, 46), Size = new Size(34, 30), GlyphSize = 15f };
+                var next = new GlyphButton { Glyph = "\u203A", AccessibleName = "Next background",
+                    Location = new Point(1078, 46), Size = new Size(34, 30), GlyphSize = 15f };
+                artLabel = new Label { AutoSize = false, Location = new Point(1014, 46), Size = new Size(64, 30),
+                    TextAlign = ContentAlignment.MiddleCenter, ForeColor = Theme.Text, BackColor = Color.FromArgb(150, 6, 8, 18),
+                    Font = new Font("Segoe UI Semibold", 9.5F) };
+                var artTitle = new Label { Text = "BACKGROUND", AutoSize = false, Location = new Point(886, 46),
+                    Size = new Size(94, 30), TextAlign = ContentAlignment.MiddleRight, ForeColor = Theme.Accent,
+                    BackColor = Color.Transparent, Font = new Font("Segoe UI Semibold", 8.5F) };
+                Controls.Add(artTitle);
+                prev.Click += (s, e) => ShowArt(artIndex - 1);
+                next.Click += (s, e) => ShowArt(artIndex + 1);
+                Controls.Add(prev);
+                Controls.Add(next);
+                Controls.Add(artLabel);
+                artLabel.Text = (artIndex + 1) + " / " + arts.Length;
+            }
 
             statusLabel = new Label { AutoSize = false, Location = new Point(52, 560), Size = new Size(760, 22),
                 ForeColor = Theme.Text, BackColor = Color.Transparent };
@@ -276,6 +302,20 @@ namespace AstralChainLauncher
         {
             base.OnLoad(e);
             BackgroundImage = Theme.Backdrop(art, ClientSize, ClientSize.Width / 1120f);
+        }
+
+        void ShowArt(int index)
+        {
+            artIndex = (index + arts.Length) % arts.Length;
+            var old = art;
+            art = Theme.LoadArt(arts[artIndex]);
+            var oldBackdrop = BackgroundImage;
+            BackgroundImage = Theme.Backdrop(art, ClientSize, ClientSize.Width / 1120f);
+            if (old != null) old.Dispose();
+            if (oldBackdrop != null) oldBackdrop.Dispose();
+            artLabel.Text = (artIndex + 1) + " / " + arts.Length;
+            settings.Set("background", arts[artIndex]);
+            try { settings.Save(); } catch { }
         }
 
         NeonButton MakeButton(string text, string sub, int y, int height, EventHandler click)
@@ -857,12 +897,18 @@ namespace AstralChainLauncher
         public static readonly Color Dim = Color.FromArgb(150, 162, 190);
         public static readonly Color Night = Color.FromArgb(8, 10, 20);
 
-        // The key art, embedded in the exe (launcher/background.jpg)
-        public static Image LoadArt()
+        // The backgrounds embedded in the exe (launcher/art/*.jpg), in file name order
+        public static string[] ArtNames()
+        {
+            return typeof(Theme).Assembly.GetManifestResourceNames().Where(n => n.StartsWith("art/")).OrderBy(n => n)
+                .ToArray();
+        }
+
+        public static Image LoadArt(string name)
         {
             try
             {
-                var s = typeof(Theme).Assembly.GetManifestResourceStream("background.jpg");
+                var s = typeof(Theme).Assembly.GetManifestResourceStream(name);
                 return s != null ? Image.FromStream(s) : null;
             }
             catch { return null; }
@@ -1036,6 +1082,7 @@ namespace AstralChainLauncher
     class GlyphButton : Control
     {
         public string Glyph = "";
+        public float GlyphSize = 11f;
         bool hover;
 
         public GlyphButton()
@@ -1061,7 +1108,7 @@ namespace AstralChainLauncher
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             using (var b = new SolidBrush(hover ? Color.FromArgb(150, Theme.AccentDeep) : Color.FromArgb(130, 6, 8, 18)))
                 g.FillRectangle(b, ClientRectangle);
-            using (var f = new Font("Segoe UI", 11f))
+            using (var f = new Font("Segoe UI", GlyphSize))
             using (var b = new SolidBrush(hover ? Color.White : Theme.Text))
             {
                 var sz = g.MeasureString(Glyph, f);
