@@ -62,7 +62,10 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_TEX_FULLHASH=1` | Hash every texture fully at each check (slow; rules change detection in or out) |
 | `AC_GPU_HANG_MS=<ms>` | GPU hang stop threshold (default 1200) |
 | `LARECOMP_DUMP_TEX=<min width>` | Level-0 data of up to 24 textures (as uploaded, unswizzled) to `tex_*.bin` in the run folder |
-| `LARECOMP_DUMP_ASTC=<min width>` | Blocks and CPU decode of up to 16 ASTC textures (GPUs without ASTC only) to `astc_*.bin` |
+| `LARECOMP_DUMP_ASTC=<min width>` | Blocks and CPU decode of up to 16 ASTC textures (with `LARECOMP_GPU_ASTC=0`) to `astc_*.bin` |
+| `LARECOMP_GPU_ASTC=0` | Decode ASTC on the CPU, as before the GPU decoder |
+| `LARECOMP_ASTC_VERIFY=<n>` | Read back the first n texture levels the GPU decodes and compare them with the CPU decoder (`ASTC verify` lines; slow) |
+| `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
 | `LARECOMP_LOG_PACKAGED=1` | Log each texture's packaged layout (block height) |
 | `AC_CUTSCENE_STALL=<n>:<s>:<ms>[:<s>:<ms>...]` | Stall the game thread `<ms>` ms, `<s>` s after the n-th cutscene starts (A/V sync tests) |
 | `LARECOMP_STALLS=<frame>:<ms>,...` | Stall the render thread at those frames; `LARECOMP_SLOW_FRAME_MS` / `_FROM` / `_UNTIL` / `_EVERY` for ranges |
@@ -73,8 +76,12 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 
 With `LARECOMP_VK_PROF=1`, frames over 50 ms are logged as `[hitch]` lines with their time split (texture uploads,
 waits for shader programs). The 2-second lines count pipeline cache hits and misses. Frames with over 40 ms of
-texture work get a `texture time` line (hashing, uploads, ASTC decoded in the frame or in the background), and any
-single texture upload over 20 ms gets a `slow texture upload` line, profiling or not. `trace.log` always gets `CUTSCENE` lines (cutscene start and end, frames over 200 ms in a
+texture work get a `texture time` line (hashing, uploads, ASTC decoded in the frame, in the background or on the
+GPU), and any single texture upload over 20 ms gets a `slow texture upload` line, profiling or not. The pipeline
+warm-up reports `pipeline warm-up queued / ready / late / rejected` (ready: built before its first draw).
+
+`python -m astral_chain.astc_gpu_test [astc_*.bin...]` checks the GPU ASTC decoder against the CPU one, byte for
+byte: random blocks of every footprint, sRGB and not, plus any texture dumps given. `trace.log` always gets `CUTSCENE` lines (cutscene start and end, frames over 200 ms in a
 cutscene) and `AUDIO underrun` lines when the sound queue ran dry.
 
 ### Testing from a checkpoint
@@ -82,6 +89,30 @@ cutscene) and `AUDIO underrun` lines when the sound queue ran dry.
 Game saves work as checkpoints: every save the game writes is also copied to `<save folder>-snapshots\<date-time>\`.
 To replay a moment, copy a snapshot's `data` folder over a test save folder (`AC_DATA_DIR=<folder>`, see above) and
 load it. The game's own autosaves usually come right before story cutscenes.
+
+## Ideas for later
+
+### Optional ASTC to BC7 conversion at setup
+
+Most of the game's textures are ASTC, which desktop NVIDIA and AMD GPUs cannot sample. They are now decoded by a
+compute shader into RGBA8 (`astc_gpu.c`). Before that, the CPU decoded them, and on the highway chase (RTX 4090,
+Ryzen 7 7800X3D, 2026-10-21) that caused 4 hitches of 58-236 ms (frame 9494: 45 textures, 177 ms); with the GPU
+decoder no frame of the same route spends 40 ms on textures.
+
+What remains: the decoded textures take 4 bytes per texel in video memory, 16x ASTC 8x8 (a 4096x4096 texture: ~90
+MB with its mipmaps instead of ~5.3 MB). An optional setup step could convert every ASTC texture once into BC7, which
+these GPUs sample directly, at about the size of the ASTC data: a quarter of today's video memory for these
+textures, which matters on GPUs with 8 GB or less:
+
+- Find the textures in the game's archives (WTA/WTP pairs in the `.dat`/`.dtt` packs; see astral-extractor) and
+  record each one's layout (format, size, levels, swizzle).
+- Decode each one (the existing decoder), encode to BC7 (for example with bc7enc, MIT), and store the result in
+  `build/game/cache/bc7/`, keyed by a hash of the ASTC data.
+- At upload, look the texture up by the same hash. A hit uploads BC7 into a BC7 image (no decode, a quarter of
+  RGBA8's memory); a miss falls back to today's path.
+
+Expected cost: BC7 encoding of the ~10 GB of game data takes long (likely tens of minutes on 16 threads at a
+reasonable quality setting) and needs a few GB of disk. So it should be offered as a choice in setup, not forced.
 
 ## Code map
 
@@ -92,8 +123,9 @@ load it. The game's own autosaves usually come right before story cutscenes.
 | `native_build.py`, `nvn_build.py`, `shader_build.py` | Cached compilation of code units, the NVN layer and the patched shader translator |
 | `shader_cache.py`, `runtime/shader_precompile.c` | Shader precompilation: extracts the shaders from `root.pkz` to `game\shaders`, compiles every one of them (generic draw-time keys) plus the variants of `data/shader_variants.bin` and `cache/programs.bin` into `cache/spirv` |
 | `data/shader_variants.bin` | Known shader variants (code hashes and draw-time keys, `programs.bin` format; no game data). Grows from test runs |
+| `data/pipeline_variants.bin` | Known pipelines (a program's code hashes and keys, and the render state; `pipelines.bin` format; no game data). Merged into the cache at launch. Grows from test runs |
 | `runtime/host_runtime.c.in` | Kernel and services runtime |
 | `runtime/guest_threads.h` | Guest threads and the parallel scheduler |
 | `runtime/nvn_hle.h` | NVN entry points |
-| `runtime/las/nvn/vulkan/` | Renderer: `exec.c` commands and draws, `textures.c` uploads, `shaders.c` SPIR-V cache, `device.c` swapchain |
+| `runtime/las/nvn/vulkan/` | Renderer: `exec.c` commands, draws and the pipeline warm-up, `textures.c` uploads, `astc_gpu.c` ASTC decoding on the GPU, `shaders.c` SPIR-V cache, `device.c` swapchain |
 | `runtime/las/maxwell_ext.h` | Maxwell instructions added to the translator (LDS/STS, atomics, VOTE, SUST, TLD...) |

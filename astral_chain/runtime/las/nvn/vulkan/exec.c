@@ -40,6 +40,7 @@ _Atomic unsigned long long vk_pipelines_built;  // (device.c: the pipeline cache
 // shader/pipeline build time per stats interval (ns): Maxwell translation, SPIR-V (cache or glslang), pipelines
 static _Atomic unsigned long long build_ns_translate, build_ns_spirv, build_ns_pipe;
 static _Atomic unsigned long long build_pipe_hits, build_pipe_misses, build_ns_pipe_miss;  // (pipeline cache: creation feedback)
+static unsigned long long pwarm_queued, pwarm_ready, pwarm_late, pwarm_rejected;  // (pipeline warm-up, render thread)
 // program warm-up (see get_program): variants queued at SetShaders, and at their first draw ready or still building
 static uint64_t warm_stat_queued, warm_stat_ready, warm_stat_late;
 static uint64_t op_counts[CMD_COUNT];
@@ -642,18 +643,36 @@ typedef struct Job { void (*fn)(void *); void *arg; struct Job *next; } Job;
 static Job *jobs_head, *jobs_tail;
 static pthread_mutex_t jobs_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t jobs_cond = PTHREAD_COND_INITIALIZER;
+// Low priority (pipeline warm-up): taken only when no other job waits, by at most half of the workers at a time.
+static Job *ljobs_head, *ljobs_tail;
+static int ljobs_running, ljobs_max = 2;
 
 static void *worker(void *a) {
     (void)a;
     for (;;) {
         pthread_mutex_lock(&jobs_lock);
-        while (!jobs_head) pthread_cond_wait(&jobs_cond, &jobs_lock);
-        Job *j = jobs_head;
-        jobs_head = j->next;
-        if (!jobs_head) jobs_tail = NULL;
+        while (!jobs_head && !(ljobs_head && ljobs_running < ljobs_max)) pthread_cond_wait(&jobs_cond, &jobs_lock);
+        Job *j;
+        bool low = !jobs_head;
+        if (!low) {
+            j = jobs_head;
+            jobs_head = j->next;
+            if (!jobs_head) jobs_tail = NULL;
+        } else {
+            j = ljobs_head;
+            ljobs_head = j->next;
+            if (!ljobs_head) ljobs_tail = NULL;
+            ljobs_running++;
+        }
         pthread_mutex_unlock(&jobs_lock);
         j->fn(j->arg);
         free(j);
+        if (low) {
+            pthread_mutex_lock(&jobs_lock);
+            ljobs_running--;
+            if (ljobs_head) pthread_cond_signal(&jobs_cond);
+            pthread_mutex_unlock(&jobs_lock);
+        }
     }
     return NULL;
 }
@@ -698,8 +717,7 @@ static void run_translate(void (*fn)(void *), void *arg) {
     pthread_mutex_unlock(&tjobs_lock);
 }
 
-static void run_job(void (*fn)(void *), void *arg) {
-    if (sync_shaders()) { fn(arg); return; }
+static void workers_start(void) {
     static bool started;
     if (!started) {
         started = true;
@@ -707,13 +725,30 @@ static void run_job(void (*fn)(void *), void *arg) {
         int n = SDL_GetNumLogicalCPUCores() - 4;
         if (n < 4) n = 4;
         if (n > 16) n = 16;
+        ljobs_max = n / 2;
         for (int i = 0; i < n; i++) { pthread_t t; pthread_create(&t, NULL, worker, NULL); }
     }
+}
+
+static void run_job(void (*fn)(void *), void *arg) {
+    if (sync_shaders()) { fn(arg); return; }
+    workers_start();
     Job *j = malloc(sizeof *j);
     j->fn = fn; j->arg = arg; j->next = NULL;
     pthread_mutex_lock(&jobs_lock);
     if (jobs_tail) jobs_tail->next = j; else jobs_head = j;
     jobs_tail = j;
+    pthread_cond_signal(&jobs_cond);
+    pthread_mutex_unlock(&jobs_lock);
+}
+
+static void run_job_low(void (*fn)(void *), void *arg) {
+    workers_start();
+    Job *j = malloc(sizeof *j);
+    j->fn = fn; j->arg = arg; j->next = NULL;
+    pthread_mutex_lock(&jobs_lock);
+    if (ljobs_tail) ljobs_tail->next = j; else ljobs_head = j;
+    ljobs_tail = j;
     pthread_cond_signal(&jobs_cond);
     pthread_mutex_unlock(&jobs_lock);
 }
@@ -819,6 +854,11 @@ const char *renderer_stats(void) {
                            pmn = atomic_exchange(&build_ns_pipe_miss, 0);
         n = strlen(stats_text);
         if (ph || pm) snprintf(stats_text + n, sizeof stats_text - n, " (cache hits %llu, misses %llu in %.0f ms)", ph, pm, pmn / 1e6);
+        n = strlen(stats_text);
+        if (pwarm_queued || pwarm_ready || pwarm_late || pwarm_rejected)
+            snprintf(stats_text + n, sizeof stats_text - n, ", pipeline warm-up queued %llu ready %llu late %llu rejected %llu",
+                     pwarm_queued, pwarm_ready, pwarm_late, pwarm_rejected);
+        pwarm_queued = pwarm_ready = pwarm_late = pwarm_rejected = 0;
         n = strlen(stats_text);
         if (warm_stat_queued || warm_stat_ready || warm_stat_late)
             snprintf(stats_text + n, sizeof stats_text - n, ", warm-up queued %llu ready %llu late %llu", (unsigned long long)warm_stat_queued,
@@ -1291,6 +1331,7 @@ typedef struct {
     VkPipelineLayout layout;
     bool vs_uses_vid;
     bool warmed, drawn;  // (program warm-up: created ahead of its first draw / drawn since)
+    uint64_t ident;      // its code hashes and keys as created, the same in every session (pipeline warm-up records)
     _Atomic int state;  // 0 building, 1 ready, 2 failed
 } Prog;
 
@@ -1390,6 +1431,9 @@ static struct { uint64_t key; Prog *prog; } prog_tab[PROG_TAB];
 
 static void warm_record(const NvnProgram *np, const ShaderKey *vkey, const ShaderKey *fkey);
 static Prog *get_program_ex(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey, bool from_draw);
+static uint64_t stage_hash(const NvnProgram *np, int i);
+static uint64_t hmix(uint64_t h, const void *p, size_t n);
+static void pipe_warm_add(Prog *p);
 
 // Draws: the program for this state, built at its first use (or by the warm-up). A draw waiting for one that is
 // still queued moves it to the front.
@@ -1434,6 +1478,9 @@ static Prog *get_program_ex(NvnProgram *np, ShaderKey *vkey, ShaderKey *fkey, bo
     }
     p->vkey = *vkey;
     p->fkey = *fkey;
+    uint64_t sh[2] = {stage_hash(np, 0), stage_hash(np, 1)};
+    p->ident = hmix(hmix(hmix(0xcbf29ce484222325ull, sh, sizeof sh), vkey, sizeof *vkey), fkey, sizeof *fkey);
+    pipe_warm_add(p);
     p->warmed = !from_draw;
     if (from_draw) warm_record(np, vkey, fkey);
     else warm_stat_queued++;
@@ -1728,7 +1775,9 @@ typedef struct {
     uint32_t write_mask[8];
 } PipeKey;
 
-typedef struct { PipeKey k; uint64_t hash; VkPipeline pipe; _Atomic int state; } Pipe;  // state: 0 building, 1 ready, 2 failed
+// state: 0 building, 1 ready, 2 failed. claimed: its build has started (a warm-up build still queued is taken over
+// by the draw that needs it). warmed: queued by the pipeline warm-up.
+typedef struct { PipeKey k; uint64_t hash; VkPipeline pipe; _Atomic int state, claimed; bool warmed, drawn; } Pipe;
 #define PIPE_TAB 8192
 static struct { uint64_t key; Pipe *pipe; } pipe_tab[PIPE_TAB];
 
@@ -1827,6 +1876,181 @@ static void build_pipeline(void *arg) {
     }
     atomic_fetch_add(&stat_compiles, 1); atomic_fetch_add(&vk_pipelines_built, 1);
     atomic_store(&pp->state, r == VK_SUCCESS ? 1 : 2);
+}
+
+// ================================================================== pipeline warm-up (Astral Chain)
+// Pipelines were created at their first draw, on the render thread. The driver's compile takes up to ~100 ms each,
+// and a scene's first frame can need dozens: 2.4 s in one frame at the start of character creation on a first play.
+// Every pipeline a draw creates is recorded in cache/pipelines.bin (its program's identity and the pipeline state);
+// once a program with recorded pipelines is ready (program warm-up, or a draw), they are built on idle workers ahead
+// of their draws. Records may come from another GPU (astral_chain/data/pipeline_variants.bin, merged in at launch):
+// their formats are checked against this one first. LARECOMP_NO_PIPE_WARM=1: off.
+typedef struct { uint64_t ident; PipeKey k; } PipeRec;  // (k.prog: NULL)
+#define PREC_MAX 65536
+#define PREC_MAGIC (0x45504950u ^ (uint32_t)sizeof(PipeRec))  // "PIPE", record size: a layout change starts afresh
+static PipeRec *prec;
+static int32_t *prec_next;   // records chained by ident bucket (1-based, 0: end)
+static int32_t prec_head[4096];
+static int prec_n = -1, prec_cap;  // -1: cache/pipelines.bin not read yet
+static FILE *prec_out;
+static int pipe_tab_used;
+static pthread_mutex_t pwarm_lock = PTHREAD_MUTEX_INITIALIZER;
+static Prog **pwarm_pending;
+static int pwarm_n, pwarm_cap;
+
+static bool pipe_warm_off(void) {
+    static int off = -1;
+    if (off < 0) off = getenv("LARECOMP_NO_PIPE_WARM") != NULL || sync_shaders();
+    return off;
+}
+
+static int prec_find(uint64_t ident, const PipeKey *k) {
+    for (int32_t i = prec_head[ident & 4095]; i; i = prec_next[i - 1])
+        if (prec[i - 1].ident == ident && !memcmp(&prec[i - 1].k, k, sizeof *k)) return i - 1;
+    return -1;
+}
+
+static bool prec_add(const PipeRec *r) {
+    if (prec_n >= PREC_MAX) return false;
+    if (prec_n == prec_cap) {
+        int cap = prec_cap ? prec_cap * 2 : 1024;
+        PipeRec *np = realloc(prec, (size_t)cap * sizeof *np);
+        if (!np) return false;
+        prec = np;
+        int32_t *nn = realloc(prec_next, (size_t)cap * sizeof *nn);
+        if (!nn) return false;
+        prec_next = nn;
+        prec_cap = cap;
+    }
+    prec[prec_n] = *r;
+    prec_next[prec_n] = prec_head[r->ident & 4095];
+    prec_head[r->ident & 4095] = ++prec_n;
+    return true;
+}
+
+static void prec_load(void) {
+    prec_n = 0;
+    FILE *f = fopen("cache/pipelines.bin", "rb");
+    if (!f) return;
+    uint32_t magic = 0;
+    PipeRec r;
+    if (fread(&magic, 4, 1, f) == 1 && magic == PREC_MAGIC)
+        while (fread(&r, sizeof r, 1, f) == 1)
+            if (prec_find(r.ident, &r.k) < 0 && !prec_add(&r)) break;
+    fclose(f);
+    if (magic != PREC_MAGIC) remove("cache/pipelines.bin");  // (older layout: rebuilt from the next draws)
+    LOG("[vk] pipeline warm-up: %d recorded pipelines\n", prec_n);
+}
+
+// (draws) a pipeline created by a draw: recorded for the next sessions
+static void pipe_record(const Prog *p, const PipeKey *k) {
+    if (pipe_warm_off()) return;
+    if (prec_n < 0) prec_load();
+    PipeRec r;
+    memset(&r, 0, sizeof r);
+    r.ident = p->ident;
+    r.k = *k;
+    r.k.prog = NULL;
+    if (prec_find(r.ident, &r.k) >= 0 || !prec_add(&r)) return;
+    if (!prec_out) {
+        mkdir("cache", 0755);
+        prec_out = fopen("cache/pipelines.bin", "ab");
+        if (prec_out && fseek(prec_out, 0, SEEK_END) == 0 && ftell(prec_out) == 0) { uint32_t m = PREC_MAGIC; fwrite(&m, 4, 1, prec_out); }
+    }
+    if (prec_out) { fwrite(&r, sizeof r, 1, prec_out); fflush(prec_out); }
+}
+
+// (any thread) a new program: its recorded pipelines are queued once it is ready
+static void pipe_warm_add(Prog *p) {
+    if (pipe_warm_off()) return;
+    pthread_mutex_lock(&pwarm_lock);
+    if (pwarm_n == pwarm_cap) {
+        int cap = pwarm_cap ? pwarm_cap * 2 : 256;
+        Prog **np = realloc(pwarm_pending, (size_t)cap * sizeof *np);
+        if (np) { pwarm_pending = np; pwarm_cap = cap; }
+    }
+    if (pwarm_n < pwarm_cap) pwarm_pending[pwarm_n++] = p;
+    pthread_mutex_unlock(&pwarm_lock);
+}
+
+static bool format_has(VkFormat f, VkFormatFeatureFlags want) {
+    static struct { VkFormat f; VkFormatFeatureFlags have; } known[64];
+    static int nknown;
+    for (int i = 0; i < nknown; i++) if (known[i].f == f) return (known[i].have & want) == want;
+    VkFormatProperties p;
+    vkGetPhysicalDeviceFormatProperties(g_vk.phys, f, &p);
+    if (nknown < 64) { known[nknown].f = f; known[nknown++].have = p.optimalTilingFeatures; }
+    return (p.optimalTilingFeatures & want) == want;
+}
+
+// A recorded key as this GPU's draws would make it, or false if this GPU cannot build it.
+static bool pipe_key_for_device(PipeKey *k) {
+    extern VkFormat vk_depth24_format(void);
+    if (k->ncolor > 8 || !k->samples || (k->samples & (k->samples - 1)) || k->samples > 64) return false;
+    for (uint32_t i = 0; i < k->ncolor; i++) {
+        if (k->color[i] == VK_FORMAT_UNDEFINED) continue;
+        VkFormatFeatureFlags want = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+        if ((k->blend_on >> i) & 1) want |= VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT;
+        if (!format_has(k->color[i], want)) return false;
+    }
+    if (k->depth == VK_FORMAT_D24_UNORM_S8_UINT) k->depth = vk_depth24_format();  // (AMD: D32S8, as its draws use)
+    if (k->stencil == VK_FORMAT_D24_UNORM_S8_UINT) k->stencil = vk_depth24_format();
+    if (k->depth && !format_has(k->depth, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) return false;
+    if (k->stencil && !format_has(k->stencil, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) return false;
+    for (int i = 0; i < 32; i++) {
+        if (!(k->attr_mask & (1u << i))) continue;
+        if (k->attr_bind[i] > ZERO_BINDING) return false;
+        if (k->attr_bind[i] != ZERO_BINDING) k->attr_fmt[i] = vertex_format_supported(k->attr_fmt[i]);
+    }
+    for (int s = 0; s < 17; s++) if (k->divisor[s] > 1 && !g_vk.divisor) k->divisor[s] = 1;
+    return k->topo_class <= 2;
+}
+
+static void build_pipeline_warm(void *arg) {
+    Pipe *pp = arg;
+    if (atomic_exchange(&pp->claimed, 1)) return;  // (a draw needed it first and built it)
+    build_pipeline(pp);
+}
+
+// Once a frame (device.c), on the render thread: queue the recorded pipelines of programs that became ready.
+void vk_pipeline_warmup(void) {
+    if (pipe_warm_off()) return;
+    if (prec_n < 0) prec_load();
+    Prog *ready[256];
+    int nready = 0;
+    pthread_mutex_lock(&pwarm_lock);
+    int keep = 0;
+    for (int i = 0; i < pwarm_n; i++) {
+        Prog *p = pwarm_pending[i];
+        int s = atomic_load(&p->state);
+        if (s == 0 || (s == 1 && nready == 256)) pwarm_pending[keep++] = p;
+        else if (s == 1) ready[nready++] = p;
+    }
+    pwarm_n = keep;
+    pthread_mutex_unlock(&pwarm_lock);
+    for (int n = 0; n < nready; n++) {
+        Prog *p = ready[n];
+        for (int32_t i = prec_head[p->ident & 4095]; i; i = prec_next[i - 1]) {
+            if (prec[i - 1].ident != p->ident) continue;
+            if (pipe_tab_used >= PIPE_TAB * 3 / 4) return;
+            PipeKey k = prec[i - 1].k;
+            if (!pipe_key_for_device(&k)) { pwarm_rejected++; continue; }
+            k.prog = p;
+            uint64_t ph = hash_words(0xcbf29ce484222325ull, &k, sizeof k);
+            if (!ph) ph = 1;
+            uint32_t slot = (uint32_t)(ph ^ (ph >> 29)) & (PIPE_TAB - 1);
+            while (pipe_tab[slot].key && pipe_tab[slot].key != ph) slot = (slot + 1) & (PIPE_TAB - 1);
+            if (pipe_tab[slot].pipe) continue;
+            Pipe *pp = calloc(1, sizeof *pp);
+            pp->k = k;
+            pp->warmed = true;
+            pipe_tab[slot].key = ph;
+            pipe_tab[slot].pipe = pp;
+            pipe_tab_used++;
+            pwarm_queued++;
+            run_job_low(build_pipeline_warm, pp);
+        }
+    }
 }
 
 // ================================================================== feedback snapshots (renderer.m resolve_feedback)
@@ -3378,10 +3602,18 @@ static void draw_(CmdRec *r, bool indexed) {
     if (!pp) {
         pp = calloc(1, sizeof *pp);
         pp->k = k;
+        pp->claimed = 1;
         pipe_tab[pslot].key = ph;
         pipe_tab[pslot].pipe = pp;
+        pipe_tab_used++;
+        pipe_record(pr, &k);
         // the draw needs it now: built here rather than queued for a worker and waited for (see wait_built)
         if (skip_unbuilt()) run_job(build_pipeline, pp); else build_pipeline(pp);
+    } else if (pp->warmed && !pp->drawn) {
+        pp->drawn = true;
+        if (atomic_load(&pp->state) == 0) pwarm_late++; else pwarm_ready++;
+        // (a warm-up build not started yet: built here, as for a new pipeline)
+        if (atomic_load(&pp->state) == 0 && !skip_unbuilt() && !atomic_exchange(&pp->claimed, 1)) build_pipeline(pp);
     }
     wait_built(&pp->state);
     if (atomic_load(&pp->state) != 1) { SKIPPED(); return; }

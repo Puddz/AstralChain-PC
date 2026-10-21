@@ -9,6 +9,10 @@ from build/game/cache/spirv, on all cores: about 20 s the first time, nothing af
 It also covers the recorded variants: the list shipped in astral_chain/data/shader_variants.bin (hashes of shader
 code and the draw state they were used with, no game data) and the ones recorded on this PC
 (build/game/cache/programs.bin), for the few draws whose shaders differ from the generic translation.
+
+The shipped lists (shader_variants.bin, and pipeline_variants.bin: the render state of the pipelines draws created)
+are also merged into this PC's cache/programs.bin and cache/pipelines.bin, which the game reads to build programs
+and pipelines ahead of their first draw, so a first play starts with them too.
 """
 from pathlib import Path
 import hashlib
@@ -23,6 +27,9 @@ PROJECT = Path(__file__).resolve().parent.parent
 RUNTIME = PROJECT/'astral_chain'/'runtime'
 LASRECOMP = PROJECT/'third_party'/'LASRecomp'
 SHIPPED_VARIANTS = PROJECT/'astral_chain'/'data'/'shader_variants.bin'
+SHIPPED_PIPELINES = PROJECT/'astral_chain'/'data'/'pipeline_variants.bin'
+# Record files: a 4-byte magic (base ^ record size, exec.c WARM_MAGIC / PREC_MAGIC), then fixed-size records
+RECORD_FILES = ((SHIPPED_VARIANTS, 'programs.bin', 0x4D524157), (SHIPPED_PIPELINES, 'pipelines.bin', 0x45504950))
 SHADER_DATS = ('autoshadereff.dat', 'shader.dat', 'shader2.dat', 'shadereff.dat', 'shadereffcs.dat',
                'shaderefflayout.dat')
 TOOL_SOURCES = (RUNTIME/'shader_precompile.c', RUNTIME/'las'/'nvn'/'vulkan'/'spirv_cache.c',
@@ -167,8 +174,53 @@ def precompile(tool: Path, shaders: Path, game_build: Path, glslang: Path) -> No
     process.wait()
 
 
+def _records(path: Path, base: int):
+    """(magic, set of records) of a record file, or (None, None) if it is missing or not that kind of file."""
+    if not path.is_file():
+        return None, None
+    data = path.read_bytes()
+    if len(data) < 4:
+        return None, None
+    magic = struct.unpack_from('<I', data)[0]
+    size = magic ^ base
+    if not 0 < size < 65536:
+        return None, None
+    body = data[4:len(data) - (len(data) - 4) % size]
+    return magic, [body[i:i + size] for i in range(0, len(body), size)]
+
+
+def merge_records(game_build: Path) -> None:
+    """Append the shipped records this PC's cache lacks. A cache file of another layout is left to the game, which
+    starts it afresh (and the next launch merges into the new one)."""
+    cache = game_build/'cache'
+    for shipped, name, base in RECORD_FILES:
+        magic, records = _records(shipped, base)
+        if not records:
+            continue
+        target = cache/name
+        have_magic, have = _records(target, base)
+        if target.is_file() and have_magic is None and target.stat().st_size >= 4:
+            continue  # (unknown content: not touched)
+        if have_magic is not None and have_magic != magic:
+            continue
+        known = set(have or ())
+        new = [r for r in records if r not in known]
+        if not new:
+            continue
+        cache.mkdir(parents=True, exist_ok=True)
+        with target.open('ab') as f:
+            if have_magic is None:
+                f.truncate(0)
+                f.write(struct.pack('<I', magic))
+            f.write(b''.join(new))
+
+
 def prepare(romfs: Path, game: Path, game_build: Path, zig: Path, glslang: Path, build: Path) -> None:
     """Extract (once), build the tool (when changed) and fill the cache. Never stops the game from starting."""
+    try:
+        merge_records(game_build)
+    except Exception as error:
+        print(f'  Recorded shader variants not merged: {error}', file=sys.stderr)
     try:
         shaders = game/'shaders'
         if not extract_shaders(romfs, shaders):

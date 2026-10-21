@@ -639,6 +639,10 @@ void backend_present(NvnTexture *t) {
         extern void vk_texture_warmup(void);
         vk_texture_warmup();
     }
+    {   // recorded pipelines of programs that became ready (exec.c)
+        extern void vk_pipeline_warmup(void);
+        vk_pipeline_warmup();
+    }
     static long shot_every = -1;
     if (shot_every < 0) { const char *e = getenv("LARECOMP_SCREENSHOT_EVERY"); shot_every = e ? atol(e) : 0; }
     extern bool g_debug_frame;

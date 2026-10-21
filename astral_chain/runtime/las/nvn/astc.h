@@ -13,3 +13,6 @@ void astc_decode_ldr(const uint8_t *blocks, uint32_t width, uint32_t height, uin
 
 // One block -> bw*bh*4 bytes (rows of bw texels). Returns false for an error block (output magenta).
 bool astc_decode_block(const uint8_t block[16], uint32_t bw, uint32_t bh, bool srgb, uint8_t *rgba_out);
+
+// The unquantization tables (weights: 142 bytes, colours: 936), for the GPU decoder (vulkan/astc_gpu.c).
+void astc_unquant_tables(const uint8_t **weights, const uint8_t **colours);

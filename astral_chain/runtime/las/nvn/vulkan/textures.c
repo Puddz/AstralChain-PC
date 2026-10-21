@@ -34,6 +34,7 @@ static VkFormat depth24_stencil8(void) {
     }
     return f;
 }
+VkFormat vk_depth24_format(void) { return depth24_stencil8(); }  // (exec.c pipeline warm-up records)
 
 static VkFmt fmt_of(uint32_t f) {
     switch (f) {
@@ -327,6 +328,12 @@ static void create_image(NvnTexture *t, TexBackend *b) {
             storage = true;
         }
     }
+    // ASTC decoded on the GPU (astc_gpu.c): written through an RGBA8 UNORM storage view
+    bool astc_gpu = b->astc_bw && type == VK_IMAGE_TYPE_2D && depth == 1 && samples == 1 && vk_astc_gpu_ready();
+    if (astc_gpu) {
+        usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+        if (vk_storage_twin(vf) != vf) flags |= VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+    }
     if (type == VK_IMAGE_TYPE_2D && layers >= 6 && tw == th && samples == 1) flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .flags = flags, .imageType = type, .format = vf,
                             .extent = {tw, th, depth}, .mipLevels = levels, .arrayLayers = layers,
@@ -345,6 +352,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     }
     b->format = vf;
     b->storage = storage && (ci.usage & VK_IMAGE_USAGE_STORAGE_BIT);  // (the fallback above drops storage usage)
+    b->astc_gpu = astc_gpu && (ci.usage & VK_IMAGE_USAGE_STORAGE_BIT);
     b->width = tw; b->height = th; b->depth = depth; b->layers = layers; b->levels = levels; b->samples = samples;
     b->aspect = depthfmt ? aspect_of(t->format) : VK_IMAGE_ASPECT_COLOR_BIT;
     b->base_type = type == VK_IMAGE_TYPE_1D ? (layers > 1 ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D)
@@ -567,18 +575,62 @@ static void astc_decode_parallel(const uint8_t *blocks, uint32_t w, uint32_t h, 
 }
 
 uint64_t prof_tex_checks, prof_tex_samples, prof_tex_full, prof_tex_full_bytes, prof_tex_dyn, prof_tex_watch_skips, prof_tex_unknown;
+
+// LARECOMP_ASTC_VERIFY=<n>: the first n levels decoded on the GPU are read back and compared with the CPU decoder
+// (astc.c) once their submission completes; logged as "[vk] ASTC verify".
+typedef struct { VkBuffer buf; VmaAllocation mem; uint8_t *gpu, *cpu; uint32_t w, h, lw, bw, bh, lv; uint64_t seq; bool srgb; } AstcCheck;
+static AstcCheck astc_checks[64];
+static int astc_nchecks, astc_checks_left = -1;
+static void astc_verify_queue(VkCommandBuffer cb, TexBackend *b, const uint8_t *blocks, uint32_t lw, uint32_t lh,
+                              uint32_t w, uint32_t h, uint32_t lv) {
+    if (astc_checks_left < 0) { const char *e = getenv("LARECOMP_ASTC_VERIFY"); astc_checks_left = e ? atoi(e) : 0; }
+    if (astc_checks_left <= 0 || astc_nchecks == 64) return;
+    AstcCheck c = {.w = w, .h = h, .lw = lw, .bw = b->astc_bw, .bh = b->astc_bh, .lv = lv, .srgb = b->astc_srgb};
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = (VkDeviceSize)w * h * 4,
+                             .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO,
+                                  .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+    VmaAllocationInfo info;
+    if (vmaCreateBuffer(g_vk.vma, &bi, &ai, &c.buf, &c.mem, &info) != VK_SUCCESS) return;
+    c.gpu = info.pMappedData;
+    c.cpu = malloc((size_t)lw * lh * 4);
+    astc_decode_ldr(blocks, lw, lh, b->astc_bw, b->astc_bh, b->astc_srgb, c.cpu);
+    vk_full_barrier(cb);
+    VkBufferImageCopy rg = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, 0, 1}, .imageExtent = {w, h, 1}};
+    vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, c.buf, 1, &rg);
+    c.seq = vk_pending_seq();
+    astc_checks[astc_nchecks++] = c;
+    astc_checks_left--;
+}
+static void astc_verify_poll(void) {
+    uint64_t done = vk_completed_seq();
+    for (int i = 0; i < astc_nchecks; i++) {
+        AstcCheck *c = &astc_checks[i];
+        if (c->seq > done) continue;
+        vmaInvalidateAllocation(g_vk.vma, c->mem, 0, VK_WHOLE_SIZE);
+        uint64_t bad = 0;
+        for (uint32_t y = 0; y < c->h; y++)
+            for (uint32_t x = 0; x < c->w; x++)
+                bad += memcmp(c->gpu + ((size_t)y * c->w + x) * 4, c->cpu + ((size_t)y * c->lw + x) * 4, 4) != 0;
+        LOG("[vk] ASTC verify: %ux%u level %u, %ux%u blocks%s: %s (%llu of %u texels differ)\n", c->w, c->h, c->lv, c->bw, c->bh,
+            c->srgb ? " sRGB" : "", bad ? "DIFFERENT" : "same", (unsigned long long)bad, c->w * c->h);
+        vmaDestroyBuffer(g_vk.vma, c->buf, c->mem);
+        free(c->cpu);
+        astc_checks[i--] = astc_checks[--astc_nchecks];
+    }
+}
 // Per-frame texture time (hitch causes): logged for frames whose texture work passed 40 ms.
-static struct { uint64_t frame, total, hash, body, astc_here, n_full, n_up, n_astc_here, n_pre, bytes, hash_bytes; } ft;
+static struct { uint64_t frame, total, hash, body, astc_here, n_full, n_up, n_astc_here, n_pre, n_astc_gpu, bytes, hash_bytes; } ft;
 static void ft_frame(uint64_t frame) {
     if (ft.frame == frame) return;
     static int nlog;
     if (ft.total > 40000000ull && nlog < 300) {
         nlog++;
         LOG("[vk] texture time frame %llu: %.1f ms = hashing %.1f (%llu textures, %.1f MB) + uploads %.1f (%llu textures, %.1f MB out; "
-            "ASTC decoded here %llu in %.1f ms, decoded in the background %llu) + rest %.1f\n",(unsigned long long)ft.frame,
+            "ASTC decoded here %llu in %.1f ms, in the background %llu, on the GPU %llu) + rest %.1f\n",(unsigned long long)ft.frame,
             ft.total / 1e6, ft.hash / 1e6, (unsigned long long)ft.n_full, ft.hash_bytes / 1048576.0, ft.body / 1e6,
             (unsigned long long)ft.n_up, ft.bytes / 1048576.0, (unsigned long long)ft.n_astc_here, ft.astc_here / 1e6,
-            (unsigned long long)ft.n_pre, (ft.total - ft.hash - ft.body) / 1e6);
+            (unsigned long long)ft.n_pre, (unsigned long long)ft.n_astc_gpu, (ft.total - ft.hash - ft.body) / 1e6);
     }
     memset(&ft, 0, sizeof ft);
     ft.frame = frame;
@@ -652,6 +704,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     // matches, else drop it.
     const uint8_t *pre = NULL;
     uint64_t pre_off = 0;
+    bool gpu_decoded = false;
     if (b->astc_bw && atomic_load(&b->pre_state)) {
         astc_cancel(b);  // (still queued: decoded here and now instead of after the jobs ahead of it)
         uint64_t w0 = SDL_GetTicksNS();
@@ -670,6 +723,29 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                                         .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, layer, 1},
                                         .imageExtent = {l.w < level_w(b, lv) ? l.w : level_w(b, lv), l.h < level_h(b, lv) ? l.h : level_h(b, lv), 1}};
                 vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+                continue;
+            }
+            if (b->astc_gpu) {  // blocks -> linear block rows in the upload buffer, decoded by the GPU (astc_gpu.c)
+                const uint8_t *src = (const uint8_t *)(uintptr_t)t->addr + layer * layer_size + l.offset;
+                uint64_t bsize = (uint64_t)l.wb * l.hb * 16;
+                VkSpan s = vk_transient(1088 + bsize, 256);
+                vk_astc_tables(s.ptr);
+                uint8_t *blocks = s.ptr + 1088;
+                if (linear) for (uint32_t y = 0; y < l.hb; y++) memcpy(blocks + (uint64_t)y * l.wb * 16, src + (uint64_t)y * t->stride, l.wb * 16);
+                else tegra_deswizzle(src, blocks, l.wb, l.hb, 1, 16, l.block_height_log2, l.block_depth_log2);
+                if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, blocks, l.w, l.h, l.wb * 16);
+                uint32_t w = l.w < level_w(b, lv) ? l.w : level_w(b, lv), hh = l.h < level_h(b, lv) ? l.h : level_h(b, lv);
+                static const VkComponentMapping id = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                                                      VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+                VkImageView view = vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, vk_storage_twin(b->format), lv, 1, layer, 1, id,
+                                                 VK_IMAGE_ASPECT_COLOR_BIT);
+                if (view) {
+                    vk_astc_gpu_decode(cb, s.buf, s.off, 1088 + bsize, 1088 / 4, view, l.wb, l.hb, w, hh, b->astc_bw, b->astc_bh,
+                                       b->astc_srgb);
+                    gpu_decoded = true;
+                    if (layer == 0 && w == l.w && hh == l.h) astc_verify_queue(cb, b, blocks, l.w, l.h, w, hh, lv);
+                }
+                vk_dl_note_upload((void *)b->image, w, hh, lv);
                 continue;
             }
             if (b->astc_bw) {  // blocks -> linear block rows -> RGBA8 texels
@@ -751,6 +827,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
         }
     }
+    if (gpu_decoded) vk_full_barrier(cb);  // (the decode's writes before later copies to it, and before draws)
     if (atomic_load(&b->pre_state) == 2) {  // (used or stale: either way done with)
         free(b->pre_rgba);
         b->pre_rgba = NULL;
@@ -760,14 +837,14 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
         static int nslow;
         uint64_t dt = SDL_GetTicksNS() - slow_t0;
         ft.body += dt; ft.n_up++;
-        if (pre) ft.n_pre++; else if (b->astc_bw) ft.n_astc_here++;
+        if (pre) ft.n_pre++; else if (b->astc_gpu) ft.n_astc_gpu++; else if (b->astc_bw) ft.n_astc_here++;
         for (uint32_t lv = 0; lv < levels; lv++) { LevelLayout l = tegra_level(&t->layout, lv); ft.bytes += (uint64_t)l.w * l.h * 4 * layers; }
         if (dt > 20000000ull && nslow < 200) {
             nslow++;
             LOG("[vk] slow texture upload frame %llu: %.1f ms, %ux%u x%u layers %u levels, format %#x%s%s, %.1f MB, %s (waited %.1f ms for it)\n",
                 (unsigned long long)frame, dt / 1e6, t->width, t->height, layers, levels, t->format,
                 b->astc_bw ? " ASTC" : "", b->dynamic ? " dynamic" : "", total / 1048576.0,
-                pre ? "decoded in the background" : b->astc_bw ? "decoded here" : "copied", slow_wait / 1e6);
+                pre ? "decoded in the background" : b->astc_gpu ? "decoded on the GPU" : b->astc_bw ? "decoded here" : "copied", slow_wait / 1e6);
         }
     }
 }
@@ -866,6 +943,7 @@ static bool astc_queue(NvnTexture *t, TexBackend *b) {
 // Once a frame (device.c): textures the game initialized but has not drawn, newest first, within the budget. Small or
 // non-ASTC ones upload here; large ASTC ones go to the decode workers, and upload here once decoded.
 void vk_texture_warmup(void) {
+    if (astc_nchecks) astc_verify_poll();
     static long budget_ms = -1;
     if (budget_ms < 0) { const char *e = getenv("LARECOMP_TEX_WARM_MS"); budget_ms = e ? atol(e) : 4; }
     // Frames with few draws (loading screens: ~30) get 12 ms: a cutscene's textures, created while it loads, were not
@@ -890,7 +968,7 @@ void vk_texture_warmup(void) {
         int ch = vk_pages_changed(t->addr, total, warm_gen[i], &now);
         if (ch > 0 || !warm_gen[i]) { warm_gen[i] = now ? now : 1; continue; }  // still being written: next frame
         b = tex_backend(t);
-        if (b->astc_bw && total >= (256u << 10) && astc_queue(t, b)) continue;
+        if (b->astc_bw && !b->astc_gpu && total >= (256u << 10) && astc_queue(t, b)) continue;
         vk_tex(t, false);
         prof_tex_warmed++;
         warm_remove(i);

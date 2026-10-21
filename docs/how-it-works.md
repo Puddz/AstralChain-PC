@@ -29,7 +29,10 @@
   layer on Vulkan:
   - Maxwell shader binaries are translated to GLSL, then compiled to SPIR-V with glslang (cached in
     `build/game/cache/`);
-  - textures are de-swizzled, and ASTC is decoded on the CPU;
+  - textures are de-swizzled; ASTC, which desktop GPUs cannot sample, is decoded by a compute shader into RGBA8
+    (`astc_gpu.c`, the same output as the CPU decoder `astc.c`, which remains the fallback);
+  - pipelines are recorded as draws create them (`cache/pipelines.bin`) and built on idle worker threads ahead of
+    their first draw in later sessions; a shipped list (`data/pipeline_variants.bin`) covers a first play;
   - GPU memory written by the CPU is tracked with Windows write-watch.
 - **Audio.** The game mixes its own audio. The runtime plays the PCM it outputs through Windows waveOut.
 - **Saves.** They live in `userdata/saves/<title>/<profile>/`. The runtime exposes them to the game as its save
