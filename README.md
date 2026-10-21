@@ -210,9 +210,9 @@ their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - [AstralChain-Dynamic-FPS](https://github.com/yogesh1239/AstralChain-Dynamic-FPS) by yogesh1239 (MIT): the
   60 fps patch.
 - [astral-extractor](https://github.com/cabalex/astral-extractor) by cabalex: format research.
-- The launcher's backgrounds and icon (`launcher/art/`, `launcher/icon.ico`) are original AI-generated images in the
-  style of the game, chosen by the project's owner; five were made with OpenAI Codex's image generation for this
-  project. They contain no official artwork.
+- The launcher's backgrounds and icon (`launcher/art/`, `launcher/icon.ico`): the default background
+  (`1-visor.jpg`) was provided by the project's owner; the other five and the icon were made with OpenAI Codex's
+  image generation for this project, as original images in the style of the game, without official artwork.
 - [AC-Recomp](https://github.com/swaymun/AC-Recomp): the macOS recompilation, whose setup flow inspired this one.
 - [NSTool](https://github.com/jakcron/nstool), [Zig](https://ziglang.org/),
   [glslang](https://github.com/KhronosGroup/glslang), [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers),
