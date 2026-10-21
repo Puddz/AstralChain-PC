@@ -64,7 +64,10 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_DUMP_TEX=<min width>` | Level-0 data of up to 24 textures (as uploaded, unswizzled) to `tex_*.bin` in the run folder |
 | `LARECOMP_DUMP_ASTC=<min width>` | Blocks and CPU decode of up to 16 ASTC textures (with `LARECOMP_GPU_ASTC=0`) to `astc_*.bin` |
 | `LARECOMP_GPU_ASTC=0` | Decode ASTC on the CPU, as before the GPU decoder |
-| `LARECOMP_BC7=1` | (launcher setting) Store ASTC textures as BC7, recompressed on the GPU (`bc7_gpu.c`): a quarter of RGBA8's video memory. Logs `[vk] BC7: ...`; the 2-s profile line shows `video memory` |
+| `LARECOMP_BC7=1` | (launcher: *Texture compression*) Store ASTC textures as BC7 (`bc7_gpu.c`): precomputed ones from `cache\bc7` if there, the others recompressed on the GPU. Logs `[vk] BC7: ...`; the 2-s profile line shows `video memory` and the precomputed hits / misses |
+| `AC_BC7_PRECOMPUTE=1` | (setup; launcher: *prepared at setup*) `setup_game` encodes every ASTC texture to BC7 into `build\game\cache\bc7` (`bc7_cache.py`, once) |
+| `LARECOMP_BC7_CACHE=0` | Ignore the precomputed BC7 textures (GPU conversion only) |
+| `LARECOMP_BC7_LOG=1` | One `[bc7key]` line per ASTC texture upload: hash, layout, precomputed hit or miss |
 | `AC_KEYS=A:74,B:75,...` | (launcher **Controls**) Keyboard keys as Windows virtual-key codes: `A B X Y LSTICK RSTICK L R ZL ZR PLUS MINUS DLEFT DUP DRIGHT DDOWN LLEFT LUP LRIGHT LDOWN RLEFT RUP RRIGHT RDOWN` (`hid_service.h`); unlisted ones keep their default, 0 for none |
 | `LARECOMP_ASTC_VERIFY=<n>` | Read back the first n texture levels the GPU decodes and compare them with the CPU decoder (`ASTC verify` lines; slow) |
 | `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
@@ -103,16 +106,35 @@ load it. The game's own autosaves usually come right before story cutscenes.
 
 ## BC7 textures
 
-The idea was an optional setup step converting every ASTC texture to BC7 once. BC7 takes 1 byte per texel and ASTC
-8x8 a quarter of that, so that cache would have been ~4x the ASTC data on disk (several GB) and tens of minutes of
-encoding. Instead `LARECOMP_BC7=1` (the launcher's Settings) converts each texture on the GPU when its data arrives
-(`bc7_gpu.c`): the ASTC decoder writes the level into a scratch buffer, a compute shader encodes BC7 mode 6 blocks
-(principal axis endpoints, refined by least squares; ~0.3 ms for a 1023x517 test image on an RTX 4090, 42-57 dB on
-smooth test images), and they are copied into a BC7 image. Levels over 4096x4096 stay RGBA8.
+`LARECOMP_BC7=1` stores the game's ASTC textures as BC7 images, a quarter of RGBA8's video memory. A texture gets
+its BC7 blocks one of two ways:
 
-Highway chase (RTX 4090, 2026-10-21, same route with and without): video memory 7.2 GB on average (peak 8.7 GB)
--> 4.7 GB (peak 5.2 GB); texture upload time in hitch frames 35 -> 22 ms. Hitches were 35 vs 41 after the first
-1000 frames, all of them game-side time ("other"), not uploads or GPU waits.
+- **Precomputed** (`AC_BC7_PRECOMPUTE=1` at setup, `bc7_cache.py` and `runtime/bc7_convert.c`): every texture of
+  the game's packs (XT1 headers in `.wta`, data in `.wtp`, inside `.dat`/`.dtt`/`.evn`/`.eff` packs or loose in the
+  `.pkz` archives; WTB files hold both) is unswizzled with the runtime's own layout code, decoded, and encoded with
+  bc7enc (modes 1/5/6/7, quality 1) on all CPU threads. `cache/bc7/index.bin` lists them by the same hash
+  `upload_texture` computes over the texture's guest bytes (`bc7_cache.h`); `data.bin` holds the blocks. Some
+  textures are created with their mipmaps only down to one ASTC block: they get a second index entry for the same
+  data. 13,387 textures, 16.2 GB, 12.4 min on a Ryzen 7 7800X3D; every texture of the highway route found.
+- **On the GPU** (`bc7_gpu.c`, anything not precomputed): the ASTC decoder writes the level into a scratch buffer, a
+  compute shader encodes BC7 mode 6 blocks (principal axis endpoints, least squares refinement), and they are copied
+  into the image. Levels over 4096x4096 stay RGBA8.
+
+Comparison (2026-10-21; fresh install, first-play state for each run, highway chase, 3 runs each, interleaved; RTX
+4090; pauses counted between frames 1000 and 19950):
+
+| | Off | GPU | Precomputed |
+| --- | --- | --- | --- |
+| Video memory, average / peak | 7.2 / 8.7 GB | 4.7 / 5.2 GB | 4.7 / 5.1 GB |
+| Pauses per run (total) | 8, 6, 7 (~460 ms) | 12, 12, 11 (~980 ms) | 7, 6, 6 (~500 ms) |
+| Texture upload time per run | 9.4 s | 9.2 s | 10.4-11.3 s (reads; 4 uploads of ~26 ms, one 101 ms pause) |
+| PSNR on 300 game textures, mean / worst | | 46.2 / 27.2 dB | 51.0 / 34.2 dB |
+
+The GPU version's extra pauses (60-100 ms, mostly on the loading screen as an area's textures arrive) are counted as
+"other" time, not texture uploads or GPU waits: not explained yet. Its quality gap is in non-colour textures
+(normal maps, masks: 43.4 vs 49.6 dB; colour 50.5 vs 53.2 dB): mode 6 alone has one line through RGBA per block.
+The precomputed runs had most of the 16 GB file in the Windows file cache (31 GB RAM); from a cold disk its reads
+would take longer. `python -m astral_chain.bc7_cache --keys <file>` lists the precomputed keys without encoding.
 
 ## Code map
 
@@ -121,6 +143,7 @@ Highway chase (RTX 4090, 2026-10-21, same route with and without): video memory 
 | `setup_game.py` | Setup and rebuild-on-update; `--status` (JSON) and `--force-shaders` for the launcher |
 | `native_trace.py` | Loads the NSOs, applies patches, translates, generates C, builds, writes `run-env.txt` |
 | `native_build.py`, `nvn_build.py`, `shader_build.py` | Cached compilation of code units, the NVN layer and the patched shader translator |
+| `bc7_cache.py`, `runtime/bc7_convert.c` | The optional BC7 preparation (`AC_BC7_PRECOMPUTE=1`): game textures to `build\game\cache\bc7` |
 | `shader_cache.py`, `runtime/shader_precompile.c` | Shader precompilation: extracts the shaders from `root.pkz` to `game\shaders`, compiles every one of them (generic draw-time keys) plus the variants of `data/shader_variants.bin` and `cache/programs.bin` into `cache/spirv` |
 | `data/shader_variants.bin` | Known shader variants (code hashes and draw-time keys, `programs.bin` format; no game data). Grows from test runs |
 | `data/pipeline_variants.bin` | Known pipelines (a program's code hashes and keys, and the render state; `pipelines.bin` format; no game data). Merged into the cache at launch. Grows from test runs |

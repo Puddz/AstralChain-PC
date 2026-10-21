@@ -95,10 +95,15 @@ namespace AstralChainLauncher
             Add("gpu_warm", "Shaders and performance", "Compile shaders for your GPU before playing",
                 "Takes about 10 s the first time and after driver updates; removes most shader pauses in play.",
                 OptKind.Check, "1", OptTarget.Setup, When("0", "AC_GPU_WARM=0"));
-            Add("bc7", "Shaders and performance", "Compress textures in video memory (BC7)",
-                "Most textures are stored as BC7, a quarter of the video memory they take now. They are converted " +
-                "on the GPU as they load: no setup step and no disk space. Detail can differ very slightly. For " +
-                "GPUs with 8 GB or less.", OptKind.Check, "0", OptTarget.Game, When("1", "LARECOMP_BC7=1"));
+            var bc7 = Add("bc7", "Shaders and performance", "Texture compression (BC7)",
+                "Saves about 2.5 GB of video memory (7.2 GB -> 4.7 GB on the highway chase), for GPUs with 8 GB or " +
+                "less.\n" +
+                "On the GPU: nothing to prepare and no disk space, but about 5 extra short pauses (60-100 ms) while " +
+                "an area loads, and slightly less detail on some surfaces (bumps and reflections).\n" +
+                "Prepared at setup: the best detail and about as smooth as off, but it takes about 12 minutes once " +
+                "(at the next Play) and 16 GB of disk space.",
+                OptKind.Choice, "off", OptTarget.Game, v => v == "gpu" || v == "setup" ? "LARECOMP_BC7=1" : "");
+            bc7.Choices = new[] { "off|Off (default)", "gpu|On: converted on the GPU", "setup|On: prepared at setup (best)" };
             Add("gpu_astc", "Troubleshooting", "Decode ASTC textures on the GPU",
                 "Off: textures are decoded on the CPU (slower loading). Try it if textures look wrong.",
                 OptKind.Check, "1", OptTarget.Game, When("0", "LARECOMP_GPU_ASTC=0"));
@@ -135,6 +140,8 @@ namespace AstralChainLauncher
                 int eq = line.IndexOf('=');
                 if (eq > 0 && !line.StartsWith("#")) values[line.Substring(0, eq).Trim()] = line.Substring(eq + 1);
             }
+            string old;
+            if (values.TryGetValue("bc7", out old) && old == "1") values["bc7"] = "gpu";  // (was a checkbox)
         }
 
         public string Get(string key)
@@ -517,13 +524,33 @@ namespace AstralChainLauncher
 
         void OnSettings(object sender, EventArgs e)
         {
+            string oldBc7 = settings.Get("bc7");
             using (var f = new SettingsForm(settings))
             {
                 if (f.ShowDialog(this) == DialogResult.OK)
                 {
                     settings.Save();
+                    BC7Changed(oldBc7, settings.Get("bc7"));
                     RefreshState();
                 }
+            }
+        }
+
+        // Texture compression switched to or away from "prepared at setup": say what happens next / offer the disk space back
+        void BC7Changed(string before, string after)
+        {
+            string prepared = Path.Combine(project, @"build\game\cache\bc7");
+            if (after == "setup" && before != "setup" && !File.Exists(Path.Combine(prepared, "complete.txt")))
+                MessageBox.Show(this, "The textures are prepared the next time you press Play (or Compile shaders): " +
+                    "about 12 minutes, once, and 16 GB of disk space.\n\nUntil then they are converted on the GPU.",
+                    "Texture compression", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (before == "setup" && after != "setup" && Directory.Exists(prepared) &&
+                MessageBox.Show(this, "Delete the prepared textures to free about 16 GB of disk space?\n\nChoosing " +
+                    "\"prepared at setup\" again prepares them again (about 12 minutes).", "Texture compression",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            {
+                try { Directory.Delete(prepared, true); }
+                catch (Exception ex) { Log("Could not delete " + prepared + ": " + ex.Message); }
             }
         }
 
@@ -627,6 +654,8 @@ namespace AstralChainLauncher
             }
             // The game's settings change what the GPU warm-up compiles (shader libraries on or off)
             if (settings.Get("gpl") == "0") env["LARECOMP_GPL"] = "0";
+            // BC7 prepared at setup: the next setup run (Play, Compile shaders) encodes the textures once
+            if (settings.Get("bc7") == "setup") env["AC_BC7_PRECOMPUTE"] = "1";
             return env;
         }
 

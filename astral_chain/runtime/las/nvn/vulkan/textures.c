@@ -722,7 +722,16 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
         slow_wait = SDL_GetTicksNS() - w0;
         if (b->pre_hash == h && b->tp <= 0) pre = b->pre_rgba;
     }
-    for (uint32_t layer = 0; layer < layers; layer++) {
+    // BC7 precomputed at setup (bc7_gpu.c, bc7_cache.h): uploaded as stored; else converted on the GPU below
+    bool precomputed = false;
+    if (b->bc7 && b->tp <= 0) {
+        extern bool vk_bc7_cache_upload(VkCommandBuffer cb, VkImage image, uint64_t hash, uint64_t total, uint32_t format,
+                                        uint32_t w, uint32_t h, uint32_t layout_levels, uint32_t layers, uint32_t levels);
+        precomputed = vk_bc7_cache_upload(cb, b->image, h, total, t->format, t->layout.width, t->layout.height,
+                                          t->layout.levels, layers, levels);
+        gpu_decoded |= precomputed;
+    }
+    for (uint32_t layer = 0; layer < (precomputed ? 0 : layers); layer++) {
         for (uint32_t lv = 0; lv < levels; lv++) {
             LevelLayout l = tegra_level(&t->layout, lv);
             if (pre) {  // decoded already: copy
@@ -861,7 +870,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
             LOG("[vk] slow texture upload frame %llu: %.1f ms, %ux%u x%u layers %u levels, format %#x%s%s, %.1f MB, %s (waited %.1f ms for it)\n",
                 (unsigned long long)frame, dt / 1e6, t->width, t->height, layers, levels, t->format,
                 b->astc_bw ? " ASTC" : "", b->dynamic ? " dynamic" : "", total / 1048576.0,
-                pre ? "decoded in the background" : b->astc_gpu ? "decoded on the GPU" : b->astc_bw ? "decoded here" : "copied", slow_wait / 1e6);
+                pre ? "decoded in the background" : precomputed ? "precomputed BC7" : b->astc_gpu ? "decoded on the GPU" : b->astc_bw ? "decoded here" : "copied", slow_wait / 1e6);
         }
     }
 }

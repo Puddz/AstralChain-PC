@@ -884,6 +884,12 @@ const char *renderer_stats(void) {
             if (mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) used += budgets[i].statistics.allocationBytes;
         size_t n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, ", video memory %.0fMB", used / 1048576.0);
+        extern void vk_bc7_cache_stats(uint64_t *hits, uint64_t *misses);
+        uint64_t bh, bm;
+        vk_bc7_cache_stats(&bh, &bm);
+        n = strlen(stats_text);
+        if (bh || bm) snprintf(stats_text + n, sizeof stats_text - n, " (BC7 precomputed: %llu hits, %llu misses)",
+                               (unsigned long long)bh, (unsigned long long)bm);
     }
     {
         size_t n = strlen(stats_text);

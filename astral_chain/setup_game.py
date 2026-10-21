@@ -322,6 +322,30 @@ def prepare_shaders():
     shader_cache.prepare(ROMFS_IMAGE, GAME, GAME_BUILD, ZIG, GLSLANG, BUILD)
 
 
+def prepare_bc7():
+    """Optional (AC_BC7_PRECOMPUTE=1): BC7 versions of the game's ASTC textures, encoded on the CPU (bc7_cache.py).
+    Used by the game with LARECOMP_BC7=1; textures not found there are converted on the GPU."""
+    if os.environ.get('AC_BC7_PRECOMPUTE') != '1':
+        return
+    from . import bc7_cache
+    out = GAME_BUILD/'cache'/'bc7'
+    stamp = out/'complete.txt'
+    want = f'{bc7_cache.tool_digest()} q{bc7_cache.DEFAULT_QUALITY} {ROMFS_IMAGE.stat().st_size}'
+    if stamp.is_file() and stamp.read_text(encoding='ascii').strip() == want:
+        return
+    step('Preparing BC7 textures (about 12 minutes and 16 GB of disk space, once)')
+    free = shutil.disk_usage(PROJECT).free / 1e9
+    if free < 20:
+        print(f'  Skipped: about 20 GB free disk space needed ({free:.0f} GB free). The game converts its textures on '
+              'the GPU instead.')
+        return
+    stamp.unlink(missing_ok=True)
+    dll = bc7_cache.build_tool(ZIG, BUILD)
+    count, size, seconds = bc7_cache.build(ROMFS_IMAGE, out, dll, progress=lambda line: print(line, flush=True))
+    stamp.write_text(want + '\n', encoding='ascii')
+    print(f'  {count} textures, {size / 2**30:.1f} GB in {seconds:.0f} s')
+
+
 def game_data_ready():
     return (UPDATE_EXEFS/'main').is_file() and CONTROL.is_file() and ROMFS_IMAGE.is_file()
 
@@ -364,6 +388,7 @@ def main():
                 from . import shader_cache
                 shader_cache.forget(GAME_BUILD)
             prepare_shaders()
+            prepare_bc7()
             return
         GAME.mkdir(exist_ok=True)
         if not game_data_ready():
@@ -383,6 +408,7 @@ def main():
             shutil.rmtree(WORK, ignore_errors=True)
         build_game()
         prepare_shaders()
+        prepare_bc7()
         print('\nSetup complete. Start the game with the launcher (or "Play Astral Chain.cmd").')
     except SetupError as error:
         print(f'\nSetup stopped: {error}', file=sys.stderr)

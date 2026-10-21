@@ -249,3 +249,77 @@ void vk_bc7_level(VkCommandBuffer cb, VkBuffer buf, uint64_t off, uint64_t size,
     vkCmdCopyBufferToImage(cb, blocks, image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
 }
 #endif
+
+#ifndef BC7_GPU_SOURCE_ONLY
+// ---- precomputed BC7 (setup step, bc7_cache.h): a texture found there is uploaded as stored, no GPU conversion
+#include "bc7_cache.h"
+#include <stdio.h>
+
+static Bc7Record *cache_index;
+static uint32_t cache_count;
+static FILE *cache_data;
+static uint64_t cache_hits, cache_misses;
+
+static void cache_open(void) {
+    static int tried;
+    if (tried) return;
+    tried = 1;
+    const char *e = getenv("LARECOMP_BC7_CACHE");
+    if (e && !atoi(e)) return;
+    FILE *f = fopen("cache/bc7/index.bin", "rb");
+    if (!f) return;
+    uint32_t head[3];
+    if (fread(head, 4, 3, f) == 3 && head[0] == BC7_CACHE_MAGIC && head[1] == BC7_CACHE_VERSION && head[2]) {
+        cache_index = malloc((size_t)head[2] * sizeof *cache_index);
+        if (cache_index && fread(cache_index, sizeof *cache_index, head[2], f) == head[2]) cache_count = head[2];
+    }
+    fclose(f);
+    if (cache_count) cache_data = fopen("cache/bc7/data.bin", "rb");
+    if (!cache_data) cache_count = 0;
+    LOG("[vk] BC7: %u precomputed textures%s\n", cache_count, cache_count ? "" : " (none: converted on the GPU)");
+}
+
+// The texture with guest bytes hashing to `hash` (total bytes, layout w x h, levels, layers, NVN format), from the
+// cache: its first `levels` levels uploaded into image. False: not there (convert on the GPU instead).
+bool vk_bc7_cache_upload(VkCommandBuffer cb, VkImage image, uint64_t hash, uint64_t total, uint32_t format, uint32_t w,
+                         uint32_t h, uint32_t layout_levels, uint32_t layers, uint32_t levels) {
+    cache_open();
+    static int log = -1;
+    if (log < 0) { const char *e = getenv("LARECOMP_BC7_LOG"); log = e && atoi(e); }
+    const Bc7Record *r = NULL;
+    for (uint32_t lo = 0, hi = cache_count; lo < hi;) {
+        uint32_t mid = (lo + hi) / 2;
+        if (cache_index[mid].hash < hash) lo = mid + 1;
+        else { if (cache_index[mid].hash == hash) r = &cache_index[mid]; hi = mid; }
+    }
+    // (equal hashes are adjacent: the first with the same layout)
+    while (r && r < cache_index + cache_count && r->hash == hash &&
+           (r->total != total || r->format != format || r->width != w || r->height != h || r->levels != layout_levels ||
+            r->layers != layers))
+        r++;
+    if (r && (r >= cache_index + cache_count || r->hash != hash)) r = NULL;
+    if (log) LOG("[bc7key] %016llx total %llu fmt %#x %ux%u levels %u layers %u: %s\n", (unsigned long long)hash,
+                 (unsigned long long)total, format, w, h, layout_levels, layers, r ? "hit" : "miss");
+    if (!r) { cache_misses++; return false; }
+    VkSpan s = vk_transient(r->size, 16);
+    if (_fseeki64(cache_data, (long long)r->offset, SEEK_SET) || fread(s.ptr, 1, r->size, cache_data) != r->size) {
+        cache_misses++;
+        return false;
+    }
+    uint64_t off = 0;
+    for (uint32_t ly = 0; ly < layers; ly++)
+        for (uint32_t lv = 0; lv < layout_levels; lv++) {
+            uint32_t lw = w >> lv ? w >> lv : 1, lh = h >> lv ? h >> lv : 1, cx = (lw + 3) / 4, cy = (lh + 3) / 4;
+            if (lv < levels) {
+                VkBufferImageCopy rg = {.bufferOffset = s.off + off, .bufferRowLength = cx * 4, .bufferImageHeight = cy * 4,
+                                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, ly, 1}, .imageExtent = {lw, lh, 1}};
+                vkCmdCopyBufferToImage(cb, s.buf, image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+            }
+            off += (uint64_t)cx * cy * 16;
+        }
+    cache_hits++;
+    return true;
+}
+
+void vk_bc7_cache_stats(uint64_t *hits, uint64_t *misses) { *hits = cache_hits; *misses = cache_misses; }
+#endif

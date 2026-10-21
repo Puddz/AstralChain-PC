@@ -8,6 +8,7 @@
 | LASRecomp NVN layer, modified | `astral_chain/runtime/las/` | same commit, changes listed in its `README.md` | MIT, `astral_chain/runtime/las/LICENSE-LASRecomp` |
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | `third_party/Vulkan-Headers/` (C headers only) | `vulkan-sdk-1.4.363.0` (`6802bb4733b63ed5efd3adb308a6c885ef180ea1`) | Apache-2.0 or MIT, `third_party/Vulkan-Headers/LICENSE.md` |
 | [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | `third_party/VulkanMemoryAllocator/` | 3.1.0 | MIT, `third_party/VulkanMemoryAllocator/LICENSE.txt` |
+| [bc7enc](https://github.com/richgel999/bc7enc) | `third_party/bc7enc/` (`bc7enc.c`, `bc7enc.h`; the optional BC7 texture preparation) | commit `f66c2e489b07138f2673a2fb3d27c1aa1d565c48` | MIT or public domain, `third_party/bc7enc/LICENSE` |
 | [AstralChain-Dynamic-FPS](https://github.com/yogesh1239/AstralChain-Dynamic-FPS) | `third_party/AstralChain-Dynamic-FPS/1.0.1.pchtxt` (`mods/Dynamic-60fps/exefs/1.0.1.pchtxt`) | v1.1.1, commit `79965b4df077f64b27b74456d0db88c6afac5bbe` | MIT, `third_party/AstralChain-Dynamic-FPS/LICENSE` |
 
 The Maxwell shader translator is LASRecomp's `runtime/nvn/maxwell/translate.c` with reviewed changes applied at

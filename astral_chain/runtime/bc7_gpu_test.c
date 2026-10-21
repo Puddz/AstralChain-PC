@@ -110,6 +110,7 @@ static double encode(const uint8_t *rgba, uint32_t w, uint32_t h, double *ms) {
     *ms = (f1.QuadPart - f0.QuadPart) * 1000.0 / fq.QuadPart;
     double se = 0;
     bool ok = true;
+    uint8_t *dump = getenv("BC7_TEST_DUMP") ? calloc((size_t)w * h, 4) : NULL;  // (decoded result, for a look at it)
     for (uint32_t by = 0; by < cy && ok; by++)
         for (uint32_t bx = 0; bx < cx; bx++) {
             uint8_t px[16][4];
@@ -118,10 +119,16 @@ static double encode(const uint8_t *rgba, uint32_t w, uint32_t h, double *ms) {
                 uint32_t x = bx * 4 + (t & 3), y = by * 4 + (t >> 2);
                 if (x >= w || y >= h) continue;
                 for (int c = 0; c < 4; c++) { double d = (double)px[t][c] - rgba[((uint64_t)y * w + x) * 4 + c]; se += d * d; }
+                if (dump) memcpy(dump + ((uint64_t)y * w + x) * 4, px[t], 4);
             }
         }
     free_buffer(&in);
     free_buffer(&out);
+    if (dump) {
+        FILE *f = fopen(getenv("BC7_TEST_DUMP"), "wb");
+        if (f) { fwrite(dump, 4, (size_t)w * h, f); fclose(f); }
+        free(dump);
+    }
     if (!ok) return -1;
     double mse = se / ((double)w * h * 4);
     return mse == 0 ? 99.0 : 10 * log10(255.0 * 255.0 / mse);
