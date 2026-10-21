@@ -68,6 +68,8 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
 | `LARECOMP_GPL=0` | No shader libraries (`VK_EXT_graphics_pipeline_library`): pipelines are compiled whole at their first draw |
 | `LARECOMP_NO_GPL_WARM=1` | Shader libraries only when a program is built, not when the game loads a shader |
+| `AC_GPU_WARM=0` | (launcher) Skip the GPU warm-up before the game (`shader_cache.warm_gpu`, exec.c `vk_gpu_warm`) |
+| `__GL_SHADER_DISK_CACHE_PATH=<empty folder>` | (NVIDIA) Start the driver's shader cache empty, for this process only: first-play measurements without touching the shared cache |
 | `LARECOMP_DEBUG_IF_DARK=<x0>,<y0>,<x1>,<y1>,<level>[,<frame>]` | With screenshots: debug-dump the next frame once a screenshot is darker than level in that box (fractions of the window) |
 | `LARECOMP_LOG_PACKAGED=1` | Log each texture's packaged layout (block height) |
 | `AC_CUTSCENE_STALL=<n>:<s>:<ms>[:<s>:<ms>...]` | Stall the game thread `<ms>` ms, `<s>` s after the n-th cutscene starts (A/V sync tests) |

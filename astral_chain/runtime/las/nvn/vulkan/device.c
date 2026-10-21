@@ -800,6 +800,41 @@ static void window_init(void) {
     vk_shaders_init();
 }
 
+// Every file below folder, recursively (exec.c vk_gpu_warm: the game's shader files).
+void vk_walk_files(const char *folder, void (*fn)(const char *path, void *ctx), void *ctx) {
+    char pattern[MAX_PATH];
+    snprintf(pattern, sizeof pattern, "%s/*", folder);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.cFileName[0] == '.') continue;
+        char path[MAX_PATH];
+        snprintf(path, sizeof path, "%s/%s", folder, fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) vk_walk_files(path, fn, ctx);
+        else fn(path, ctx);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+// AC_GPU_WARM (exec.c vk_gpu_warm): Vulkan on the GPU the game uses, without the game's window or a swapchain (a
+// hidden window gives the surface the device choice checks presentation against).
+void vk_init_for_warm(void) {
+    if (window) return;
+    WNDCLASSW wc = {.lpfnWndProc = DefWindowProcW, .hInstance = GetModuleHandleW(NULL), .lpszClassName = L"AstralChainGpuWarm"};
+    RegisterClassW(&wc);
+    window = CreateWindowExW(0, wc.lpszClassName, L"", WS_POPUP, 0, 0, 16, 16, NULL, NULL, wc.hInstance, NULL);
+    if (!window) FATAL("no window for the GPU warm-up\n");
+    create_instance();
+    VkWin32SurfaceCreateInfoKHR si = {.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
+                                      .hinstance = GetModuleHandleW(NULL), .hwnd = window};
+    VK_CHECK(vkCreateWin32SurfaceKHR(g_vk.inst, &si, NULL, &g_vk.surface));
+    pick_device();
+    create_device();
+    vk_exec_init();
+    vk_shaders_init();
+}
+
 void backend_init(void) {
     window_init();
     LOG("[vk] %s, swapchain %ux%u\n", g_vk.props.deviceName, g_vk.sc_extent.width, g_vk.sc_extent.height);

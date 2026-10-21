@@ -5017,3 +5017,161 @@ void backend_execute(uint64_t handle) {
     if (sync_submit) renderer_flush();
     else renderer_submit();
 }
+
+// ================================================================== GPU warm-up (AC_GPU_WARM=<shader folder>)
+// The launcher runs the game's executable in this mode before the game, with the game closed (the NVIDIA driver files
+// its Vulkan cache under the executable's name, so it is the game's own cache that fills). It compiles, for this GPU
+// and driver, what the game would otherwise compile while it plays: the programs of the recorded variants
+// (cache/programs.bin) and their shader libraries, a shader library for every vertex and fragment shader of the game
+// (game/shaders, the keys nearly all draws use), and every recorded pipeline (cache/pipelines.bin). The results go to
+// the driver's cache and cache/vk_pipelines.bin; in the game the same builds are then cache hits (well under a
+// millisecond). AC_GPU_WARM_STATE: the launcher's description of the inputs; with this GPU and driver it is kept in
+// cache/gpu_warm.txt, and an unchanged state skips the work. Prints "progress <done> <total>" and "done ..." lines.
+typedef struct { uint8_t *code; size_t size; uint32_t const_offset; int stage; uint64_t hash; } GwCode;
+static GwCode *gw_codes;
+static int gw_ncodes, gw_cap;
+static _Atomic int gw_done;
+
+static uint8_t *gw_read(const char *path, size_t *size) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t *d = n > 0 ? malloc((size_t)n + 0x10000) : NULL;  // (zero tail: the translator may look past the code)
+    if (d) { memset(d + n, 0, 0x10000); if (fread(d, 1, (size_t)n, f) != (size_t)n) { free(d); d = NULL; } }
+    fclose(f);
+    if (d) *size = (size_t)n;
+    return d;
+}
+
+// <name>.code / <name>.control pairs (astral_chain/shader_cache.py), as shader_precompile.c load_codes reads them
+static void gw_file(const char *path, void *ctx) {
+    (void)ctx;
+    size_t len = strlen(path);
+    if (len < 6 || strcmp(path + len - 5, ".code")) return;
+    char cpath[1024];
+    snprintf(cpath, sizeof cpath, "%.*s.control", (int)(len - 5), path);
+    size_t size = 0, csize = 0;
+    uint8_t *code = gw_read(path, &size), *control = gw_read(cpath, &csize);
+    if (!code || !control || csize < 0x704) { free(code); free(control); return; }
+    uint32_t co, magic = 0, sph0 = 0;
+    memcpy(&co, control + 0x700, 4);
+    free(control);
+    if (size >= 0x34) { memcpy(&magic, code, 4); memcpy(&sph0, code + 0x30, 4); }
+    int type = (sph0 >> 10) & 0xF, stage = magic != 0x12345678 ? 5 : type == 1 ? 0 : type == 5 ? 1 : -1;
+    if ((stage != 0 && stage != 1) || !co || co > size) { free(code); return; }
+    if (gw_ncodes == gw_cap) { gw_cap = gw_cap ? gw_cap * 2 : 1024; gw_codes = realloc(gw_codes, (size_t)gw_cap * sizeof *gw_codes); }
+    gw_codes[gw_ncodes++] = (GwCode){code, size, co, stage, hmix(0x9E3779B97F4A7C15ull + (uint64_t)stage, code, co)};
+}
+static void gw_load(const char *folder) {
+    extern void vk_walk_files(const char *folder, void (*fn)(const char *path, void *ctx), void *ctx);
+    vk_walk_files(folder, gw_file, NULL);
+}
+
+static GwCode *gw_find(uint64_t hash, int stage) {
+    for (int i = 0; i < gw_ncodes; i++) if (gw_codes[i].stage == stage && gw_codes[i].hash == hash) return &gw_codes[i];
+    return NULL;
+}
+
+static void gw_stage_job(void *arg) {
+    gpl_warm_job(arg);  // (frees arg)
+    atomic_fetch_add(&gw_done, 1);
+}
+
+typedef struct { PipeKey k; } GwPipe;
+static void gw_pipe_job(void *arg) {
+    GwPipe *g = arg;
+    VkPipeline p = VK_NULL_HANDLE;
+    if (create_pipeline(&g->k, &p) == VK_SUCCESS) vkDestroyPipeline(g_vk.dev, p, NULL);
+    free(g);
+    atomic_fetch_add(&gw_done, 1);
+}
+
+int vk_gpu_warm(const char *folder) {
+    extern void vk_init_for_warm(void);
+    extern void vk_pipeline_cache_save(void);
+    uint64_t t0 = SDL_GetTicksNS();
+    vk_init_for_warm();
+    char state[1024];
+    snprintf(state, sizeof state, "%s | %s %u.%u.%u (%08x) | shader libraries %d", getenv("AC_GPU_WARM_STATE") ? getenv("AC_GPU_WARM_STATE") : "",
+             g_vk.props.deviceName, VK_API_VERSION_MAJOR(g_vk.props.driverVersion), VK_API_VERSION_MINOR(g_vk.props.driverVersion),
+             VK_API_VERSION_PATCH(g_vk.props.driverVersion), g_vk.props.driverVersion, g_vk.gpl);
+    {
+        char old[1024] = {0};
+        FILE *f = fopen("cache/gpu_warm.txt", "rb");
+        if (f) { size_t n = fread(old, 1, sizeof old - 1, f); old[n] = 0; fclose(f); }
+        if (!strcmp(old, state)) { printf("done skipped (unchanged)\n"); fflush(stdout); return 0; }
+    }
+    gw_load(folder);
+    if (!gw_ncodes) { printf("done failed (no shaders in %s)\n", folder); fflush(stdout); return 1; }
+    warm_load();
+    prec_load();
+    // programs of the recorded variants (their shader libraries come with them: compile_program)
+    Prog **progs = calloc((size_t)(warm_n > 0 ? warm_n : 1), sizeof *progs);
+    int nprogs = 0;
+    for (int i = 0; i < warm_n; i++) {
+        GwCode *vs = gw_find(warm_rec[i].vh, 0), *fs = warm_rec[i].fh ? gw_find(warm_rec[i].fh, 1) : NULL;
+        if (!vs || (warm_rec[i].fh && !fs)) continue;
+        NvnProgram pair;
+        memset(&pair, 0, sizeof pair);
+        pair.stages[0].code_addr = (uint64_t)(uintptr_t)vs->code;
+        pair.stages[0].const_offset = vs->const_offset;
+        pair.stage_mask = 1;
+        if (fs) { pair.stages[1].code_addr = (uint64_t)(uintptr_t)fs->code; pair.stages[1].const_offset = fs->const_offset; pair.stage_mask |= 2; }
+        ShaderKey vk = warm_rec[i].vkey, fk = warm_rec[i].fkey;
+        Prog *p = get_program_ex(&pair, &vk, &fk, false);
+        if (p) progs[nprogs++] = p;
+    }
+    // a shader library for every shader, as the game builds them when it loads one (gpl_warm_stage)
+    int nstage = 0;
+    if (g_vk.gpl) {
+        for (int i = 0; i < gw_ncodes; i++) {
+            GplWarm *w = malloc(sizeof *w);
+            w->code = (uint64_t)(uintptr_t)gw_codes[i].code;
+            w->cmax = gw_codes[i].const_offset;
+            w->stage = gw_codes[i].stage;
+            run_job(gw_stage_job, w);
+            nstage++;
+        }
+    }
+    int total = nprogs + nstage + (prec_n > 0 ? prec_n : 0), queued_pipes = 0, last = -1;
+    printf("warm-up: %d shaders, %d recorded programs, %d recorded pipelines\n", gw_ncodes, nprogs, prec_n > 0 ? prec_n : 0);
+    fflush(stdout);
+    // the recorded pipelines, once their program is ready
+    bool *queued = calloc((size_t)(prec_n > 0 ? prec_n : 1), 1);
+    for (;;) {
+        int ready = 0;
+        for (int i = 0; i < nprogs; i++) {
+            if (atomic_load(&progs[i]->state) == 0) continue;
+            ready++;
+            if (atomic_load(&progs[i]->state) != 1) continue;
+            for (int r = 0; r < prec_n; r++) {
+                if (queued[r] || prec[r].ident != progs[i]->ident) continue;
+                queued[r] = true;
+                GwPipe *g = malloc(sizeof *g);
+                g->k = prec[r].k;
+                if (!pipe_key_for_device(&g->k)) { free(g); atomic_fetch_add(&gw_done, 1); continue; }
+                g->k.prog = progs[i];
+                run_job(gw_pipe_job, g);
+                queued_pipes++;
+            }
+        }
+        int done = ready + atomic_load(&gw_done);
+        if (done / 25 != last / 25) { last = done; printf("progress %d %d\n", done, total); fflush(stdout); }
+        int pipes_done = 0;
+        for (int r = 0; r < prec_n; r++) pipes_done += queued[r];
+        if (ready == nprogs && atomic_load(&gw_done) >= nstage + pipes_done && SDL_GetTicksNS() - t0 > 1000000ull) {
+            // (records whose program never got made: counted as done)
+            if (done < total) { printf("progress %d %d\n", total, total); fflush(stdout); }
+            break;
+        }
+        SDL_Delay(20);
+    }
+    vk_pipeline_cache_save();
+    FILE *f = fopen("cache/gpu_warm.txt", "wb");
+    if (f) { fputs(state, f); fclose(f); }
+    printf("done %d programs, %d shader libraries, %d pipelines in %.1f s\n", nprogs, nstage, queued_pipes, (SDL_GetTicksNS() - t0) / 1e9);
+    fflush(stdout);
+    return 0;
+}

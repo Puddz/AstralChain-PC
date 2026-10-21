@@ -440,6 +440,8 @@ SetUnhandledExceptionFilter(fatal_fault_handler);
 snapshot_path=argc>1 ? argv[1] : NULL;
 if(BCryptGenRandom(NULL,(PUCHAR)entropy,sizeof(entropy),BCRYPT_USE_SYSTEM_PREFERRED_RNG)<0) return 34;
 '''
+    if args.nvn_backend == 'vulkan':  # (the launcher's GPU warm-up: compile for this GPU, then exit; exec.c vk_gpu_warm)
+        setup += '{const char *gw=getenv("AC_GPU_WARM"); if(gw && *gw){ extern int vk_gpu_warm(const char *folder); return vk_gpu_warm(gw);} }\n'
     for module in image.modules:
         image_file=cache_image(output.parent/'native-images',module.nso.image)
         setup += f'reserve({module.base}ull,{module.nso.size},{json.dumps(image_file.as_posix())});\n'

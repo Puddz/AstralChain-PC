@@ -215,6 +215,38 @@ def merge_records(game_build: Path) -> None:
             f.write(b''.join(new))
 
 
+def warm_gpu(game_build: Path, shaders: Path, glslang: Path) -> None:
+    """Compile for this GPU and driver before the game (the game's executable in its AC_GPU_WARM mode, exec.c
+    vk_gpu_warm): shader libraries for every shader, the recorded programs and pipelines, into the driver's cache and
+    cache/vk_pipelines.bin. It skips itself when nothing changed (game build, records, GPU, driver)."""
+    exe = game_build/'round-00'/'trace.exe'
+    if not exe.is_file():
+        return
+    parts = [(game_build/'build-fingerprint.txt').read_text(encoding='ascii').strip()
+             if (game_build/'build-fingerprint.txt').is_file() else '']
+    parts += [f'{(game_build/"cache"/name).stat().st_size if (game_build/"cache"/name).is_file() else 0}'
+              for name in ('programs.bin', 'pipelines.bin')]
+    env = dict(os.environ, AC_GPU_WARM=str(shaders.resolve()), AC_GPU_WARM_STATE=' '.join(parts), AC_GLSLANG=str(glslang))
+    process = subprocess.Popen([str(exe)], cwd=game_build, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               text=True, errors='replace')
+    shown = False
+    try:
+        for line in process.stdout:
+            words = line.split()
+            if words[:1] == ['progress']:
+                print(f'\r  Compiling for your GPU: {words[1]}/{words[2]}', end='', flush=True)
+                shown = True
+            elif words[:1] == ['done']:
+                if shown:
+                    print()
+                if words[1:2] != ['skipped']:
+                    print('  GPU ready: ' + ' '.join(words[1:]))
+        process.wait(timeout=900)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        print('\n  GPU warm-up stopped (took too long); the game compiles in play instead.', file=sys.stderr)
+
+
 def prepare(romfs: Path, game: Path, game_build: Path, zig: Path, glslang: Path, build: Path) -> None:
     """Extract (once), build the tool (when changed) and fill the cache. Never stops the game from starting."""
     try:
@@ -228,3 +260,10 @@ def prepare(romfs: Path, game: Path, game_build: Path, zig: Path, glslang: Path,
         precompile(build_tool(zig, build), shaders, game_build, glslang)
     except Exception as error:  # (the game still runs; it compiles shaders in play as before)
         print(f'  Shader precompilation skipped: {error}', file=sys.stderr)
+        return
+    if os.environ.get('AC_GPU_WARM') == '0':
+        return
+    try:
+        warm_gpu(game_build, game/'shaders', glslang)
+    except Exception as error:
+        print(f'  GPU warm-up skipped: {error}', file=sys.stderr)
