@@ -567,6 +567,23 @@ static void astc_decode_parallel(const uint8_t *blocks, uint32_t w, uint32_t h, 
 }
 
 uint64_t prof_tex_checks, prof_tex_samples, prof_tex_full, prof_tex_full_bytes, prof_tex_dyn, prof_tex_watch_skips, prof_tex_unknown;
+// Per-frame texture time (hitch causes): logged for frames whose texture work passed 40 ms.
+static struct { uint64_t frame, total, hash, body, astc_here, n_full, n_up, n_astc_here, n_pre, bytes, hash_bytes; } ft;
+static void ft_frame(uint64_t frame) {
+    if (ft.frame == frame) return;
+    static int nlog;
+    if (ft.total > 40000000ull && nlog < 300) {
+        nlog++;
+        LOG("[vk] texture time frame %llu: %.1f ms = hashing %.1f (%llu textures, %.1f MB) + uploads %.1f (%llu textures, %.1f MB out; "
+            "ASTC decoded here %llu in %.1f ms, decoded in the background %llu) + rest %.1f\n",(unsigned long long)ft.frame,
+            ft.total / 1e6, ft.hash / 1e6, (unsigned long long)ft.n_full, ft.hash_bytes / 1048576.0, ft.body / 1e6,
+            (unsigned long long)ft.n_up, ft.bytes / 1048576.0, (unsigned long long)ft.n_astc_here, ft.astc_here / 1e6,
+            (unsigned long long)ft.n_pre, (ft.total - ft.hash - ft.body) / 1e6);
+    }
+    memset(&ft, 0, sizeof ft);
+    ft.frame = frame;
+}
+
 static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (!t->addr || t->target == 10) return;
     uint64_t frame = vk_frame_counter();
@@ -613,7 +630,9 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
         if (sh == b->sample_hash) return;
     }
     prof_tex_full++; prof_tex_full_bytes += total; if (b->dynamic) prof_tex_dyn++;
+    uint64_t hash_t0 = SDL_GetTicksNS();
     uint64_t h = hash_full(mem, total);
+    ft.hash += SDL_GetTicksNS() - hash_t0; ft.n_full++; ft.hash_bytes += total;
     b->full_frame = frame;
     b->sample_hash = fnv_sample(mem, total);
     if (b->uploaded && h == b->data_hash && !restyle) return;
@@ -622,6 +641,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     b->data_hash = h;
     b->uploaded = true;
     if (b->format != mf.vf && !b->astc_bw) return;  // unsupported format: nothing sensible to copy
+    uint64_t slow_t0 = SDL_GetTicksNS(), slow_wait = 0;
     VkCommandBuffer cb = vk_upload_cmd();
     uint32_t layers = t->layout.layers ? t->layout.layers : 1;
     if (layers > b->layers && b->depth == 1) layers = b->layers;
@@ -634,7 +654,9 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     uint64_t pre_off = 0;
     if (b->astc_bw && atomic_load(&b->pre_state)) {
         astc_cancel(b);  // (still queued: decoded here and now instead of after the jobs ahead of it)
+        uint64_t w0 = SDL_GetTicksNS();
         while (atomic_load(&b->pre_state) == 1) SDL_Delay(1);
+        slow_wait = SDL_GetTicksNS() - w0;
         if (b->pre_hash == h && b->tp <= 0) pre = b->pre_rgba;
     }
     for (uint32_t layer = 0; layer < layers; layer++) {
@@ -657,7 +679,9 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 else tegra_deswizzle(src, blocks, l.wb, l.hb, 1, 16, l.block_height_log2, l.block_depth_log2);
                 if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, blocks, l.w, l.h, l.wb * 16);
                 VkSpan s = vk_transient((uint64_t)l.w * l.h * 4, 16);
+                uint64_t ad0 = SDL_GetTicksNS();
                 astc_decode_parallel(blocks, l.w, l.h, b->astc_bw, b->astc_bh, b->astc_srgb, s.ptr);
+                ft.astc_here += SDL_GetTicksNS() - ad0;
                 {   // LARECOMP_DUMP_ASTC=<min width>: level-0 blocks and our decode of up to 16 textures (decoder tests)
                     static int dumped = -1;
                     static long minw;
@@ -731,6 +755,20 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
         free(b->pre_rgba);
         b->pre_rgba = NULL;
         atomic_store(&b->pre_state, 0);
+    }
+    {   // uploads over 20 ms in the frame (hitch causes): what they were
+        static int nslow;
+        uint64_t dt = SDL_GetTicksNS() - slow_t0;
+        ft.body += dt; ft.n_up++;
+        if (pre) ft.n_pre++; else if (b->astc_bw) ft.n_astc_here++;
+        for (uint32_t lv = 0; lv < levels; lv++) { LevelLayout l = tegra_level(&t->layout, lv); ft.bytes += (uint64_t)l.w * l.h * 4 * layers; }
+        if (dt > 20000000ull && nslow < 200) {
+            nslow++;
+            LOG("[vk] slow texture upload frame %llu: %.1f ms, %ux%u x%u layers %u levels, format %#x%s%s, %.1f MB, %s (waited %.1f ms for it)\n",
+                (unsigned long long)frame, dt / 1e6, t->width, t->height, layers, levels, t->format,
+                b->astc_bw ? " ASTC" : "", b->dynamic ? " dynamic" : "", total / 1048576.0,
+                pre ? "decoded in the background" : b->astc_bw ? "decoded here" : "copied", slow_wait / 1e6);
+        }
     }
 }
 
@@ -866,8 +904,9 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     else if (!b->gpu_owned) {
         extern uint64_t prof_up_ns, cum_up_ns;
         uint64_t t0 = prof_up_ns != ~0ull ? SDL_GetTicksNS() : 0;
+        ft_frame(vk_frame_counter());
         upload_texture(t, b);
-        if (prof_up_ns != ~0ull) { prof_up_ns += SDL_GetTicksNS() - t0; cum_up_ns += SDL_GetTicksNS() - t0; }
+        if (prof_up_ns != ~0ull) { prof_up_ns += SDL_GetTicksNS() - t0; cum_up_ns += SDL_GetTicksNS() - t0; ft.total += SDL_GetTicksNS() - t0; }
     }
     return b;
 }

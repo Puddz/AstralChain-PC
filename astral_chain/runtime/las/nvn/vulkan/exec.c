@@ -39,6 +39,7 @@ static _Atomic int stat_compiles;
 _Atomic unsigned long long vk_pipelines_built;  // (device.c: the pipeline cache is saved after new builds)
 // shader/pipeline build time per stats interval (ns): Maxwell translation, SPIR-V (cache or glslang), pipelines
 static _Atomic unsigned long long build_ns_translate, build_ns_spirv, build_ns_pipe;
+static _Atomic unsigned long long build_pipe_hits, build_pipe_misses, build_ns_pipe_miss;  // (pipeline cache: creation feedback)
 // program warm-up (see get_program): variants queued at SetShaders, and at their first draw ready or still building
 static uint64_t warm_stat_queued, warm_stat_ready, warm_stat_late;
 static uint64_t op_counts[CMD_COUNT];
@@ -814,6 +815,10 @@ const char *renderer_stats(void) {
         size_t n = strlen(stats_text);
         if (tr || sp || pi)
             snprintf(stats_text + n, sizeof stats_text - n, ", build ms translate %.0f spirv %.0f pipelines %.0f", tr / 1e6, sp / 1e6, pi / 1e6);
+        unsigned long long ph = atomic_exchange(&build_pipe_hits, 0), pm = atomic_exchange(&build_pipe_misses, 0),
+                           pmn = atomic_exchange(&build_ns_pipe_miss, 0);
+        n = strlen(stats_text);
+        if (ph || pm) snprintf(stats_text + n, sizeof stats_text - n, " (cache hits %llu, misses %llu in %.0f ms)", ph, pm, pmn / 1e6);
         n = strlen(stats_text);
         if (warm_stat_queued || warm_stat_ready || warm_stat_late)
             snprintf(stats_text + n, sizeof stats_text - n, ", warm-up queued %llu ready %llu late %llu", (unsigned long long)warm_stat_queued,
@@ -1803,9 +1808,19 @@ static void build_pipeline(void *arg) {
                                        .pStages = stages, .pVertexInputState = &vi, .pInputAssemblyState = &ia, .pViewportState = &vs,
                                        .pRasterizationState = &rs, .pMultisampleState = &ms, .pDepthStencilState = &ds,
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = k->prog->layout};
+    VkPipelineCreationFeedback fb_pipe = {0}, fb_stages[2] = {0};
+    VkPipelineCreationFeedbackCreateInfo fb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO,
+                                               .pPipelineCreationFeedback = &fb_pipe, .pipelineStageCreationFeedbackCount = 2,
+                                               .pPipelineStageCreationFeedbacks = fb_stages};
+    ri.pNext = &fb;
     uint64_t bt0 = SDL_GetTicksNS();
     VkResult r = vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &pp->pipe);
-    atomic_fetch_add(&build_ns_pipe, SDL_GetTicksNS() - bt0);
+    uint64_t bdt = SDL_GetTicksNS() - bt0;
+    atomic_fetch_add(&build_ns_pipe, bdt);
+    if (fb_pipe.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT) {
+        if (fb_pipe.flags & VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT) atomic_fetch_add(&build_pipe_hits, 1);
+        else { atomic_fetch_add(&build_pipe_misses, 1); atomic_fetch_add(&build_ns_pipe_miss, bdt); }
+    }
     if (r != VK_SUCCESS) {
         static int n;
         if (n++ < 10) LOG("[vk] pipeline creation failed: %d\n", r);

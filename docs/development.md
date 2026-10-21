@@ -72,7 +72,9 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_SAVE_SNAPSHOTS=0` | Do not copy each game save to `<save folder>-snapshots\<date-time>\` (on by default, newest 30 kept) |
 
 With `LARECOMP_VK_PROF=1`, frames over 50 ms are logged as `[hitch]` lines with their time split (texture uploads,
-waits for shader programs). `trace.log` always gets `CUTSCENE` lines (cutscene start and end, frames over 200 ms in a
+waits for shader programs). The 2-second lines count pipeline cache hits and misses. Frames with over 40 ms of
+texture work get a `texture time` line (hashing, uploads, ASTC decoded in the frame or in the background), and any
+single texture upload over 20 ms gets a `slow texture upload` line, profiling or not. `trace.log` always gets `CUTSCENE` lines (cutscene start and end, frames over 200 ms in a
 cutscene) and `AUDIO underrun` lines when the sound queue ran dry.
 
 ### Testing from a checkpoint
