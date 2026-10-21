@@ -41,12 +41,17 @@ static void hid_accept_vibration(const IpcRequest *request) {
   boundary("hid-vibration-layout",&state,state.pc);
  uint64_t aruid;memcpy(&aruid,request->arguments+24,8);
  if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",&state,state.pc);
- unsigned handle=ipc_u32(request->arguments);hid_vibration_index(handle);
+ unsigned handle=ipc_u32(request->arguments);
  float value[4];memcpy(value,request->arguments+4,sizeof(value));
+ /* Values are not checked further: there is no actuator to drive, and the console clamps rather than rejects. A
+  * negative or non-finite value used to stop the game here (an explosion in the File 01 boss fight, 2026-10-21). */
+ static unsigned odd_logged;
  for(unsigned i=0;i<4;i++) {
   unsigned bits=ipc_u32(request->arguments+4+4*i);
-  if((bits&0x7f800000u)==0x7f800000u || value[i]<0)
-   boundary("hid-vibration-value",&state,state.pc);
+  if(((bits&0x7f800000u)==0x7f800000u || value[i]<0) && odd_logged<10) {
+   odd_logged++;
+   printf("HID vibration handle=0x%x value %u out of range (bits 0x%08x): ignored\n",handle,i,bits);
+  }
  }
  /* The current keyboard backend has no physical actuator. Accept the command
   * for a valid virtual device without fabricating a connection or actual output. */
