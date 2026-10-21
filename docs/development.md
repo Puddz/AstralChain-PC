@@ -66,6 +66,9 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_GPU_ASTC=0` | Decode ASTC on the CPU, as before the GPU decoder |
 | `LARECOMP_ASTC_VERIFY=<n>` | Read back the first n texture levels the GPU decodes and compare them with the CPU decoder (`ASTC verify` lines; slow) |
 | `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
+| `LARECOMP_GPL=0` | No shader libraries (`VK_EXT_graphics_pipeline_library`): pipelines are compiled whole at their first draw |
+| `LARECOMP_NO_GPL_WARM=1` | Shader libraries only when a program is built, not when the game loads a shader |
+| `LARECOMP_DEBUG_IF_DARK=<x0>,<y0>,<x1>,<y1>,<level>[,<frame>]` | With screenshots: debug-dump the next frame once a screenshot is darker than level in that box (fractions of the window) |
 | `LARECOMP_LOG_PACKAGED=1` | Log each texture's packaged layout (block height) |
 | `AC_CUTSCENE_STALL=<n>:<s>:<ms>[:<s>:<ms>...]` | Stall the game thread `<ms>` ms, `<s>` s after the n-th cutscene starts (A/V sync tests) |
 | `LARECOMP_STALLS=<frame>:<ms>,...` | Stall the render thread at those frames; `LARECOMP_SLOW_FRAME_MS` / `_FROM` / `_UNTIL` / `_EVERY` for ranges |
@@ -78,7 +81,8 @@ With `LARECOMP_VK_PROF=1`, frames over 50 ms are logged as `[hitch]` lines with 
 waits for shader programs). The 2-second lines count pipeline cache hits and misses. Frames with over 40 ms of
 texture work get a `texture time` line (hashing, uploads, ASTC decoded in the frame, in the background or on the
 GPU), and any single texture upload over 20 ms gets a `slow texture upload` line, profiling or not. The pipeline
-warm-up reports `pipeline warm-up queued / ready / late / rejected` (ready: built before its first draw).
+warm-up reports `pipeline warm-up queued / ready / late / rejected` (ready: built before its first draw), the shader
+libraries `shader libraries built / reused / linked / optimized`.
 
 `python -m astral_chain.astc_gpu_test [astc_*.bin...]` checks the GPU ASTC decoder against the CPU one, byte for
 byte: random blocks of every footprint, sRGB and not, plus any texture dumps given. `trace.log` always gets `CUTSCENE` lines (cutscene start and end, frames over 200 ms in a

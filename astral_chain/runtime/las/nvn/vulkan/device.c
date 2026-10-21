@@ -157,7 +157,7 @@ static void create_device(void) {
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[8];
+    const char *ext[12];
     uint32_t n_ext = 0;
     ext[n_ext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
     g_vk.custom_border = has_ext(ep, ne, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
@@ -174,6 +174,10 @@ static void create_device(void) {
     // allows null descriptors, so a stray access is contained instead of faulting.
     bool robust2 = has_ext(ep, ne, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
     if (robust2) ext[n_ext++] = VK_EXT_ROBUSTNESS_2_EXTENSION_NAME;
+    // Astral Chain: shader libraries (exec.c), linked into pipelines at draw time without compiling. LARECOMP_GPL=0: off.
+    const char *gpl_env = getenv("LARECOMP_GPL");
+    bool gpl = has_ext(ep, ne, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME) &&
+               has_ext(ep, ne, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME) && !(gpl_env && !atoi(gpl_env));
     free(ep);
 
     // features the backend relies on (all present on current desktop drivers)
@@ -182,6 +186,18 @@ static void create_device(void) {
                                                 .pNext = robust2 ? &r2have : NULL};
     VkPhysicalDeviceFeatures2 have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &f13have};
     vkGetPhysicalDeviceFeatures2(g_vk.phys, &have);
+    if (gpl) {
+        VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gf = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT};
+        VkPhysicalDeviceFeatures2 h2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &gf};
+        vkGetPhysicalDeviceFeatures2(g_vk.phys, &h2);
+        VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT gp = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &gp};
+        vkGetPhysicalDeviceProperties2(g_vk.phys, &p2);
+        gpl = gf.graphicsPipelineLibrary && gp.graphicsPipelineLibraryFastLinking;
+    }
+    if (gpl) { ext[n_ext++] = VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME; ext[n_ext++] = VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME; }
+    g_vk.gpl = gpl;
+    LOG("[vk] shader libraries (graphics pipeline library): %s\n", gpl ? "on" : "off");
     VkPhysicalDeviceRobustness2FeaturesEXT r2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
                                                  .robustBufferAccess2 = r2have.robustBufferAccess2 && have.features.robustBufferAccess,
                                                  .robustImageAccess2 = r2have.robustImageAccess2,
@@ -210,6 +226,9 @@ static void create_device(void) {
     r2.pNext = fault ? (void *)&ff : (void *)&f11;
     VkPhysicalDeviceFeatures2 f = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
                                    .pNext = robust2 ? (void *)&r2 : fault ? (void *)&ff : (void *)&f11};
+    VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gplf = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT,
+                                                              .graphicsPipelineLibrary = VK_TRUE, .pNext = f.pNext};
+    if (gpl) f.pNext = &gplf;
     VkPhysicalDeviceFeatures *b = &f.features, *h = &have.features;
     b->independentBlend = h->independentBlend;
     b->dualSrcBlend = h->dualSrcBlend;
@@ -515,6 +534,32 @@ static void png_chunk(FILE *f, const char *type, const uint8_t *data, uint32_t n
     fwrite(crc, 1, 4, f);
 }
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h) {
+    {
+        // LARECOMP_DEBUG_IF_DARK=<x0>,<y0>,<x1>,<y1>,<level>[,<first frame>] (fractions of the window; with screenshots):
+        // debug-dump the next frame once a screenshot's mean brightness in that box falls below level (0-255), to catch
+        // a glitch whose moment varies from run to run
+        static int dark_done;
+        const char *e = getenv("LARECOMP_DEBUG_IF_DARK");
+        float box[6] = {0, 0, 0, 0, 0, 0};
+        extern uint64_t vk_frame_counter(void);
+        if (e && !dark_done && sscanf(e, "%f,%f,%f,%f,%f,%f", &box[0], &box[1], &box[2], &box[3], &box[4], &box[5]) >= 5 &&
+            vk_frame_counter() >= (uint64_t)box[5]) {
+            uint32_t x0 = (uint32_t)(box[0] * w), y0 = (uint32_t)(box[1] * h), x1 = (uint32_t)(box[2] * w), y1 = (uint32_t)(box[3] * h);
+            double sum = 0;
+            uint64_t n = 0;
+            for (uint32_t y = y0; y < y1 && y < h; y++)
+                for (uint32_t x = x0; x < x1 && x < w; x++, n++) {
+                    const uint8_t *p = rgba + ((uint64_t)y * w + x) * 4;
+                    sum += 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2];
+                }
+            if (n && sum / n < box[4]) {
+                extern volatile int g_debug_frame_request;
+                g_debug_frame_request = 1;
+                dark_done = 1;
+                LOG("[debug] %s: box brightness %.1f below %.1f, dumping the next frame\n", path, sum / n, box[4]);
+            }
+        }
+    }
     FILE *f = fopen(path, "wb");
     size_t row = (size_t)w * 4 + 1, raw = row * h, blocks = (raw + 65534) / 65535;
     uint8_t *z = f ? malloc(2 + raw + blocks * 5 + 4) : NULL;

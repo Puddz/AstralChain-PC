@@ -81,10 +81,10 @@ the Switch's home menu.
 - **Saves** are in `userdata\saves\`. Back that folder up from time to time.
 - **Logs** of the last session are in `build\game\round-00\` (`trace.log`, `stderr.log`).
 - **Shaders.** Before the game starts the first time, the launcher compiles all of the game's shaders ("Preparing
-  shaders", about 20 s on a 16-thread CPU). Later launches skip it unless something changed. The render-state
-  combinations the game uses are recorded and built in the background ahead of their first use; ones not seen
-  before are still built when first drawn, so short pauses are still possible on first sight. The cache is in
-  `build\game\cache\`.
+  shaders", about 20 s on a 16-thread CPU). Later launches skip it unless something changed. In play, each shader
+  the game loads is also compiled for your GPU in the background, and the render-state combinations it draws with
+  are recorded and built ahead of their next use. A combination never seen before can still cause a short pause
+  the first time it is drawn. The cache is in `build\game\cache\`.
 
 ### Safety
 

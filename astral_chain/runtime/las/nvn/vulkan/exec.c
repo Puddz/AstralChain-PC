@@ -41,6 +41,7 @@ _Atomic unsigned long long vk_pipelines_built;  // (device.c: the pipeline cache
 static _Atomic unsigned long long build_ns_translate, build_ns_spirv, build_ns_pipe;
 static _Atomic unsigned long long build_pipe_hits, build_pipe_misses, build_ns_pipe_miss;  // (pipeline cache: creation feedback)
 static unsigned long long pwarm_queued, pwarm_ready, pwarm_late, pwarm_rejected;  // (pipeline warm-up, render thread)
+static _Atomic unsigned long long gpl_stage_built, gpl_stage_hits, gpl_stage_ns, gpl_linked, gpl_link_ns, gpl_opt_built;  // (shader libraries)
 // program warm-up (see get_program): variants queued at SetShaders, and at their first draw ready or still building
 static uint64_t warm_stat_queued, warm_stat_ready, warm_stat_late;
 static uint64_t op_counts[CMD_COUNT];
@@ -859,6 +860,13 @@ const char *renderer_stats(void) {
             snprintf(stats_text + n, sizeof stats_text - n, ", pipeline warm-up queued %llu ready %llu late %llu rejected %llu",
                      pwarm_queued, pwarm_ready, pwarm_late, pwarm_rejected);
         pwarm_queued = pwarm_ready = pwarm_late = pwarm_rejected = 0;
+        unsigned long long sb = atomic_exchange(&gpl_stage_built, 0), sh = atomic_exchange(&gpl_stage_hits, 0),
+                           sn = atomic_exchange(&gpl_stage_ns, 0), lk = atomic_exchange(&gpl_linked, 0),
+                           ln = atomic_exchange(&gpl_link_ns, 0), ob = atomic_exchange(&gpl_opt_built, 0);
+        n = strlen(stats_text);
+        if (sb || sh || lk || ob)
+            snprintf(stats_text + n, sizeof stats_text - n, ", shader libraries built %llu in %.0f ms (reused %llu), linked %llu in %.1f ms, optimized %llu",
+                     sb, sn / 1e6, sh, lk, ln / 1e6, ob);
         n = strlen(stats_text);
         if (warm_stat_queued || warm_stat_ready || warm_stat_late)
             snprintf(stats_text + n, sizeof stats_text - n, ", warm-up queued %llu ready %llu late %llu", (unsigned long long)warm_stat_queued,
@@ -1332,6 +1340,7 @@ typedef struct {
     bool vs_uses_vid;
     bool warmed, drawn;  // (program warm-up: created ahead of its first draw / drawn since)
     uint64_t ident;      // its code hashes and keys as created, the same in every session (pipeline warm-up records)
+    VkPipeline vs_lib, fs_lib;  // its shader libraries (shader libraries below), or NULL
     _Atomic int state;  // 0 building, 1 ready, 2 failed
 } Prog;
 
@@ -1340,9 +1349,144 @@ static VkPipelineLayout make_layout(Prog *p, int nsets, VkShaderStageFlags s0, V
     if (nsets > 1) p->set_layout[1] = vk_set_layout(p->binds, p->nbinds, 1, s1);
     VkPipelineLayoutCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = (uint32_t)nsets,
                                      .pSetLayouts = p->set_layout};
+    if (g_vk.gpl && nsets == 2) ci.flags = VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT;  // (shader libraries)
     VkPipelineLayout l;
     VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &ci, NULL, &l));
     return l;
+}
+
+// ================================================================== shader libraries (VK_EXT_graphics_pipeline_library)
+// Most of a pipeline's build time is compiling its two shaders; the rest of its state (vertex formats, blend, render
+// target formats) is cheap. With pipeline libraries each shader is compiled once into a library of its own: when a
+// program is built, and before that, when the game loads the shader (gpl_warm_stage, with the keys draws use for
+// nearly all shaders). A draw's pipeline is then linked from the two shader libraries and two small state libraries
+// without compiling anything, and the optimized pipeline is built in the background to replace it. Pipeline layouts
+// use independent sets: a shader library holds only its own set (vertex: 0, fragment: 1).
+typedef struct { uint64_t key; VkPipeline lib; _Atomic int state; } StageLib;  // state: 0 building, 1 ready, 2 failed
+#define STAGELIB_TAB 16384
+static struct { uint64_t key; StageLib *lib; } stagelib_tab[STAGELIB_TAB];
+static int stagelib_n;
+static pthread_mutex_t stagelib_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t hash_words(uint64_t h, const void *p, size_t n);
+
+static VkPipeline gpl_build_stage(int stage, const uint32_t *spv, size_t n) {
+    VkBindingInfo binds[MAX_BIND];
+    int nb = vk_reflect(spv, n, binds, MAX_BIND);
+    VkDescriptorSetLayout sl[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    sl[stage] = vk_set_layout(binds, nb, (uint32_t)stage, stage ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT);
+    VkPipelineLayoutCreateInfo lci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                                      .flags = VK_PIPELINE_LAYOUT_CREATE_INDEPENDENT_SETS_BIT_EXT, .setLayoutCount = 2, .pSetLayouts = sl};
+    VkPipelineLayout layout;
+    if (vkCreatePipelineLayout(g_vk.dev, &lci, NULL, &layout) != VK_SUCCESS) return VK_NULL_HANDLE;
+    VkShaderModule m = vk_module(spv, n);
+    if (!m) return VK_NULL_HANDLE;
+    VkPipelineShaderStageCreateInfo ss = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                                          .stage = stage ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT, .module = m,
+                                          .pName = "main"};
+    VkGraphicsPipelineLibraryCreateInfoEXT li = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT,
+                                                 .flags = stage ? VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT
+                                                                : VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT};
+    VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .pNext = &li};
+    VkPipelineViewportStateCreateInfo vs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                                                 .polygonMode = VK_POLYGON_MODE_FILL, .lineWidth = 1};
+    VkPipelineDepthStencilStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                                           .dynamicStateCount = NDYN, .pDynamicStates = DYN};
+    VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &ri,
+                                       .flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR, .stageCount = 1, .pStages = &ss,
+                                       .pDynamicState = &dy, .layout = layout};
+    if (stage) pi.pDepthStencilState = &ds;
+    else { pi.pViewportState = &vs; pi.pRasterizationState = &rs; }
+    VkPipeline lib = VK_NULL_HANDLE;
+    uint64_t t0 = SDL_GetTicksNS();
+    VkResult r = vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &lib);
+    atomic_fetch_add(&gpl_stage_ns, SDL_GetTicksNS() - t0);
+    atomic_fetch_add(&gpl_stage_built, 1);
+    atomic_fetch_add(&vk_pipelines_built, 1);  // (pipeline cache save)
+    vkDestroyShaderModule(g_vk.dev, m, NULL);
+    if (r != VK_SUCCESS) {
+        static int nlog;
+        if (nlog++ < 10) LOG("[vk] shader library failed: %d (stage %d)\n", r, stage);
+        return VK_NULL_HANDLE;
+    }
+    return lib;
+}
+
+// The library of this shader (stage 0 vertex, 1 fragment), built here if no thread has yet; NULL if it cannot be.
+static StageLib *gpl_stage(int stage, const uint32_t *spv, size_t n) {
+    if (!g_vk.gpl || !spv) return NULL;
+    uint64_t key = hash_words(0x9E3779B97F4A7C15ull + (uint64_t)stage, spv, n * 4);
+    if (!key) key = 1;
+    pthread_mutex_lock(&stagelib_lock);
+    uint32_t slot = (uint32_t)(key ^ (key >> 29)) & (STAGELIB_TAB - 1);
+    while (stagelib_tab[slot].key && stagelib_tab[slot].key != key) slot = (slot + 1) & (STAGELIB_TAB - 1);
+    StageLib *sl = stagelib_tab[slot].lib;
+    bool build = false;
+    if (!sl && stagelib_n < STAGELIB_TAB * 3 / 4) {
+        sl = calloc(1, sizeof *sl);
+        sl->key = key;
+        stagelib_tab[slot].key = key;
+        stagelib_tab[slot].lib = sl;
+        stagelib_n++;
+        build = true;
+    }
+    pthread_mutex_unlock(&stagelib_lock);
+    if (!sl) return NULL;
+    if (build) {
+        sl->lib = gpl_build_stage(stage, spv, n);
+        atomic_store(&sl->state, sl->lib ? 1 : 2);
+    } else {
+        atomic_fetch_add(&gpl_stage_hits, 1);
+        for (uint64_t t0 = SDL_GetTicksNS(); atomic_load(&sl->state) == 0 && SDL_GetTicksNS() - t0 < 3000000000ull;) SDL_Delay(1);
+    }
+    return atomic_load(&sl->state) == 1 ? sl : NULL;
+}
+
+// (nvnProgramSetShaders) the game loaded a shader: its library, built on an idle worker with the keys nearly all
+// draws use (shader_precompile.c: float attributes, plus unsigned attribute 2 for skinned meshes; every varying)
+typedef struct { uint64_t code, cmax; int stage; } GplWarm;
+static uint64_t gpl_warm_seen[8192];
+static int gpl_warm_nseen;
+static void gpl_warm_job(void *arg) {
+    GplWarm *w = arg;
+    for (int variant = 0; variant < 2; variant++) {
+        ShaderKey k;
+        memset(&k, 0, sizeof k);
+        k.glsl = 1;
+        if (w->stage) k.vs_out_mask = 0xFFFFFFFFu;
+        if (variant) k.attr_kind[2] = 2;
+        pthread_mutex_lock(&translate_lock);
+        maxwell_gmem_base = HEAP_BASE;
+        maxwell_gmem_size = HEAP_MAX;
+        ShaderInfo *si = maxwell_translate((const uint8_t *)(uintptr_t)w->code, w->cmax, w->stage ? STAGE_FRAGMENT : STAGE_VERTEX, &k);
+        pthread_mutex_unlock(&translate_lock);
+        bool skinned = si && si->msl && !w->stage && (si->attr_mask & 4);
+        if (si && si->msl) {
+            size_t n = 0;
+            uint32_t *spv = vk_glsl_to_spirv(si->msl, w->stage ? STAGE_FRAGMENT : STAGE_VERTEX, w->stage ? "fs" : "vs", &n);
+            gpl_stage(w->stage, spv, n);
+            free(spv);
+        }
+        if (si) maxwell_free(si);
+        if (!skinned) break;
+    }
+    free(w);
+}
+static void run_job_low(void (*fn)(void *), void *arg);
+static void gpl_warm_stage(const NvnProgram *np, int s, uint64_t hash) {
+    if (!g_vk.gpl || !np->stages[s].code_addr || !np->stages[s].const_offset) return;
+    static int off = -1;
+    if (off < 0) off = getenv("LARECOMP_NO_GPL_WARM") != NULL || sync_shaders();
+    if (off) return;
+    for (int i = 0; i < gpl_warm_nseen; i++) if (gpl_warm_seen[i] == hash) return;
+    if (gpl_warm_nseen == 8192) return;
+    gpl_warm_seen[gpl_warm_nseen++] = hash;
+    GplWarm *w = malloc(sizeof *w);
+    w->code = np->stages[s].code_addr;
+    w->cmax = np->stages[s].const_offset;
+    w->stage = s;
+    run_job_low(gpl_warm_job, w);
 }
 
 static void save_glsl(const char *src, uint64_t addr, const char *suffix) {
@@ -1382,6 +1526,8 @@ static void compile_program(void *arg) {
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
     p->vs = vk_module(sv, nv);
     p->fs = vk_module(sf, nf);
+    StageLib *lv = gpl_stage(0, sv, nv), *lf = lv ? gpl_stage(1, sf, nf) : NULL;
+    if (lv && lf) { p->vs_lib = lv->lib; p->fs_lib = lf->lib; }
     free(sv);
     free(sf);
     p->layout = make_layout(p, 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -1563,6 +1709,7 @@ static const NvnShaderStage *warm_seen_stage(uint64_t h) {
     return NULL;
 }
 static void warm_program(NvnProgram *np) {
+    for (int s = 0; s < 2; s++) if (np->stage_mask & (1u << s)) gpl_warm_stage(np, s, stage_hash(np, s));  // (own switch)
     if (warm_off()) return;
     if (np->stage_mask & (1u << 5)) { warm_compute(np); return; }
     if (warm_n < 0) warm_load();
@@ -1777,7 +1924,8 @@ typedef struct {
 
 // state: 0 building, 1 ready, 2 failed. claimed: its build has started (a warm-up build still queued is taken over
 // by the draw that needs it). warmed: queued by the pipeline warm-up.
-typedef struct { PipeKey k; uint64_t hash; VkPipeline pipe; _Atomic int state, claimed; bool warmed, drawn; } Pipe;
+// opt: the optimized pipeline that replaces a linked one (shader libraries), once built.
+typedef struct { PipeKey k; uint64_t hash; VkPipeline pipe; _Atomic int state, claimed; bool warmed, drawn; _Atomic uint64_t opt; } Pipe;
 #define PIPE_TAB 8192
 static struct { uint64_t key; Pipe *pipe; } pipe_tab[PIPE_TAB];
 
@@ -1801,9 +1949,7 @@ static VkPrimitiveTopology topo_class_base(uint8_t c) {
 }
 
 static bool skip_unbuilt(void);
-static void build_pipeline(void *arg) {
-    Pipe *pp = arg;
-    PipeKey *k = &pp->k;
+static VkResult create_pipeline(const PipeKey *k, VkPipeline *out) {
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = k->prog->vs, .pName = "main"},
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = k->prog->fs, .pName = "main"}};
@@ -1863,7 +2009,7 @@ static void build_pipeline(void *arg) {
                                                .pPipelineStageCreationFeedbacks = fb_stages};
     ri.pNext = &fb;
     uint64_t bt0 = SDL_GetTicksNS();
-    VkResult r = vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &pp->pipe);
+    VkResult r = vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, out);
     uint64_t bdt = SDL_GetTicksNS() - bt0;
     atomic_fetch_add(&build_ns_pipe, bdt);
     if (fb_pipe.flags & VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT) {
@@ -1875,7 +2021,127 @@ static void build_pipeline(void *arg) {
         if (n++ < 10) LOG("[vk] pipeline creation failed: %d\n", r);
     }
     atomic_fetch_add(&stat_compiles, 1); atomic_fetch_add(&vk_pipelines_built, 1);
+    return r;
+}
+
+static void build_pipeline(void *arg) {
+    Pipe *pp = arg;
+    VkResult r = create_pipeline(&pp->k, &pp->pipe);
     atomic_store(&pp->state, r == VK_SUCCESS ? 1 : 2);
+}
+
+// (low priority) the optimized pipeline for one that was linked from libraries
+static void build_pipeline_opt(void *arg) {
+    Pipe *pp = arg;
+    VkPipeline p = VK_NULL_HANDLE;
+    if (create_pipeline(&pp->k, &p) == VK_SUCCESS) { atomic_store(&pp->opt, (uint64_t)(uintptr_t)p); atomic_fetch_add(&gpl_opt_built, 1); }
+}
+
+// State libraries: vertex input (formats, streams, topology) and fragment output (target formats, blend, samples),
+// cached by their part of the key. Render thread only.
+typedef struct { uint64_t key; VkPipeline lib; } StateLib;
+#define STATELIB_TAB 4096
+static StateLib vi_libs[STATELIB_TAB], fo_libs[STATELIB_TAB];
+static VkPipeline state_lib(StateLib *tab, uint64_t key, const VkGraphicsPipelineCreateInfo *ci) {
+    if (!key) key = 1;
+    uint32_t slot = (uint32_t)(key ^ (key >> 29)) & (STATELIB_TAB - 1);
+    for (int probe = 0; probe < 64; probe++, slot = (slot + 1) & (STATELIB_TAB - 1)) {
+        if (tab[slot].key == key) return tab[slot].lib;
+        if (!tab[slot].key) break;
+    }
+    VkPipeline lib = VK_NULL_HANDLE;
+    if (vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, ci, NULL, &lib) != VK_SUCCESS) return VK_NULL_HANDLE;
+    if (!tab[slot].key) { tab[slot].key = key; tab[slot].lib = lib; }
+    return lib;
+}
+
+// The pipeline of pp linked from libraries (no compiling); false if that is not possible (then built as before).
+static bool gpl_link(Pipe *pp) {
+    const PipeKey *k = &pp->k;
+    Prog *p = k->prog;
+    if (!g_vk.gpl || !p->vs_lib || !p->fs_lib || !k->poly_fill) return false;
+    uint64_t t0 = SDL_GetTicksNS();
+    VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                                           .dynamicStateCount = NDYN, .pDynamicStates = DYN};
+    // vertex input interface
+    VkVertexInputAttributeDescription va[32];
+    VkVertexInputBindingDescription vb[17];
+    VkVertexInputBindingDivisorDescriptionEXT vd[17];
+    uint32_t na = 0, nb = 0, nd = 0;
+    for (int i = 0; i < 32; i++)
+        if (k->attr_mask & (1u << i)) va[na++] = (VkVertexInputAttributeDescription){(uint32_t)i, k->attr_bind[i], k->attr_fmt[i], k->attr_off[i]};
+    for (uint32_t s = 0; s < 17; s++) {
+        if (!(k->used_streams & (1u << s))) continue;
+        bool inst = k->divisor[s] != 0;
+        vb[nb++] = (VkVertexInputBindingDescription){s, k->stride[s], inst ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX};
+        if (inst && k->divisor[s] > 1 && g_vk.divisor) vd[nd++] = (VkVertexInputBindingDivisorDescriptionEXT){s, k->divisor[s]};
+    }
+    VkPipelineVertexInputDivisorStateCreateInfoEXT dvi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT,
+                                                          .vertexBindingDivisorCount = nd, .pVertexBindingDivisors = vd};
+    VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, .pNext = nd ? &dvi : NULL,
+                                               .vertexBindingDescriptionCount = nb, .pVertexBindingDescriptions = vb,
+                                               .vertexAttributeDescriptionCount = na, .pVertexAttributeDescriptions = va};
+    VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                                                 .topology = topo_class_base(k->topo_class)};
+    VkGraphicsPipelineLibraryCreateInfoEXT vli = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT,
+                                                  .flags = VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT};
+    VkGraphicsPipelineCreateInfo vci = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &vli,
+                                        .flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR, .pVertexInputState = &vi,
+                                        .pInputAssemblyState = &ia, .pDynamicState = &dy};
+    uint64_t vkey = hash_words(0x7631ull, k->attr_fmt, sizeof k->attr_fmt);
+    vkey = hash_words(vkey, k->attr_off, sizeof k->attr_off);
+    vkey = hash_words(vkey, k->attr_bind, sizeof k->attr_bind);
+    uint32_t vmisc[3] = {k->attr_mask, k->used_streams, k->topo_class};
+    vkey = hash_words(vkey, vmisc, sizeof vmisc);
+    vkey = hash_words(vkey, k->stride, sizeof k->stride);
+    vkey = hash_words(vkey, k->divisor, sizeof k->divisor);
+    // fragment output interface
+    VkPipelineColorBlendAttachmentState cba[8] = {0};
+    for (uint32_t i = 0; i < k->ncolor; i++) {
+        cba[i].colorWriteMask = k->write_mask[i];
+        if ((k->blend_on >> i) & 1) {
+            const uint8_t *b = k->blend[i];
+            cba[i].blendEnable = VK_TRUE;
+            cba[i].srcColorBlendFactor = blend_factor(b[1]);
+            cba[i].dstColorBlendFactor = blend_factor(b[2]);
+            cba[i].srcAlphaBlendFactor = blend_factor(b[3]);
+            cba[i].dstAlphaBlendFactor = blend_factor(b[4]);
+            cba[i].colorBlendOp = blend_op(b[5]);
+            cba[i].alphaBlendOp = blend_op(b[6]);
+        }
+    }
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                                              .attachmentCount = k->ncolor, .pAttachments = cba};
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                                               .rasterizationSamples = (VkSampleCountFlagBits)k->samples, .alphaToCoverageEnable = k->a2c};
+    VkGraphicsPipelineLibraryCreateInfoEXT fli = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT,
+                                                  .flags = VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT};
+    VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .pNext = &fli,
+                                        .colorAttachmentCount = k->ncolor, .pColorAttachmentFormats = k->color,
+                                        .depthAttachmentFormat = k->depth, .stencilAttachmentFormat = k->stencil};
+    VkGraphicsPipelineCreateInfo fci = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &ri,
+                                        .flags = VK_PIPELINE_CREATE_LIBRARY_BIT_KHR, .pColorBlendState = &cb,
+                                        .pMultisampleState = &ms, .pDynamicState = &dy};
+    uint64_t fkey = hash_words(0x666full, k->color, sizeof k->color);
+    uint32_t fmisc[6] = {k->depth, k->stencil, k->ncolor, k->samples, k->a2c, k->blend_on};
+    fkey = hash_words(fkey, fmisc, sizeof fmisc);
+    fkey = hash_words(fkey, k->blend, sizeof k->blend);
+    fkey = hash_words(fkey, k->write_mask, sizeof k->write_mask);
+    VkPipeline libs[4] = {state_lib(vi_libs, vkey, &vci), p->vs_lib, p->fs_lib, state_lib(fo_libs, fkey, &fci)};
+    if (!libs[0] || !libs[3]) return false;
+    VkPipelineLibraryCreateInfoKHR lci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR, .libraryCount = 4, .pLibraries = libs};
+    VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &lci, .layout = p->layout};
+    VkResult r = vkCreateGraphicsPipelines(g_vk.dev, VK_NULL_HANDLE, 1, &pi, NULL, &pp->pipe);
+    atomic_fetch_add(&gpl_link_ns, SDL_GetTicksNS() - t0);
+    if (r != VK_SUCCESS) {
+        static int nlog;
+        if (nlog++ < 10) LOG("[vk] pipeline link failed: %d\n", r);
+        return false;
+    }
+    atomic_fetch_add(&gpl_linked, 1);
+    atomic_store(&pp->state, 1);
+    run_job_low(build_pipeline_opt, pp);
+    return true;
 }
 
 // ================================================================== pipeline warm-up (Astral Chain)
@@ -3607,18 +3873,23 @@ static void draw_(CmdRec *r, bool indexed) {
         pipe_tab[pslot].pipe = pp;
         pipe_tab_used++;
         pipe_record(pr, &k);
-        // the draw needs it now: built here rather than queued for a worker and waited for (see wait_built)
-        if (skip_unbuilt()) run_job(build_pipeline, pp); else build_pipeline(pp);
+        // the draw needs it now: linked from shader libraries, or built here rather than queued for a worker and
+        // waited for (see wait_built)
+        if (gpl_link(pp)) {}
+        else if (skip_unbuilt()) run_job(build_pipeline, pp);
+        else build_pipeline(pp);
     } else if (pp->warmed && !pp->drawn) {
         pp->drawn = true;
         if (atomic_load(&pp->state) == 0) pwarm_late++; else pwarm_ready++;
-        // (a warm-up build not started yet: built here, as for a new pipeline)
-        if (atomic_load(&pp->state) == 0 && !skip_unbuilt() && !atomic_exchange(&pp->claimed, 1)) build_pipeline(pp);
+        // (a warm-up build not started yet: linked or built here, as for a new pipeline)
+        if (atomic_load(&pp->state) == 0 && !skip_unbuilt() && !atomic_exchange(&pp->claimed, 1) && !gpl_link(pp)) build_pipeline(pp);
     }
     wait_built(&pp->state);
     if (atomic_load(&pp->state) != 1) { SKIPPED(); return; }
     ss_enabled();
-    if (ss_need(SS_PIPE, ss.pipe == pp->pipe)) { ss.pipe = pp->pipe; vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pp->pipe); }
+    VkPipeline use = (VkPipeline)(uintptr_t)atomic_load(&pp->opt);
+    if (!use) use = pp->pipe;
+    if (ss_need(SS_PIPE, ss.pipe == use)) { ss.pipe = use; vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, use); }
     uint64_t prof_td_ = prof ? SDL_GetTicksNS() : 0;
     if (prof) prof_key += prof_td_ - prof_tk_;
 

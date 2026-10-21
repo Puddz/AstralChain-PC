@@ -33,6 +33,9 @@
     (`astc_gpu.c`, the same output as the CPU decoder `astc.c`, which remains the fallback);
   - pipelines are recorded as draws create them (`cache/pipelines.bin`) and built on idle worker threads ahead of
     their first draw in later sessions; a shipped list (`data/pipeline_variants.bin`) covers a first play;
+  - with `VK_EXT_graphics_pipeline_library` (current NVIDIA and AMD drivers), every shader the game loads is compiled
+    in the background into a shader library; a pipeline nobody recorded is then linked from those at its first draw
+    without compiling, and its optimized version replaces it once built in the background;
   - GPU memory written by the CPU is tracked with Windows write-watch.
 - **Audio.** The game mixes its own audio. The runtime plays the PCM it outputs through Windows waveOut.
 - **Saves.** They live in `userdata/saves/<title>/<profile>/`. The runtime exposes them to the game as its save

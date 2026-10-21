@@ -353,6 +353,7 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     b->format = vf;
     b->storage = storage && (ci.usage & VK_IMAGE_USAGE_STORAGE_BIT);  // (the fallback above drops storage usage)
     b->astc_gpu = astc_gpu && (ci.usage & VK_IMAGE_USAGE_STORAGE_BIT);
+    b->usage = ci.usage;
     b->width = tw; b->height = th; b->depth = depth; b->layers = layers; b->levels = levels; b->samples = samples;
     b->aspect = depthfmt ? aspect_of(t->format) : VK_IMAGE_ASPECT_COLOR_BIT;
     b->base_type = type == VK_IMAGE_TYPE_1D ? (layers > 1 ? VK_IMAGE_VIEW_TYPE_1D_ARRAY : VK_IMAGE_VIEW_TYPE_1D)
@@ -1036,6 +1037,9 @@ VkImageView vk_image_view(TexBackend *b, VkImageViewType type, VkFormat fmt, uin
     prof_views_created++;
     VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = b->image, .viewType = type,
                                 .format = fmt, .components = sw, .subresourceRange = {aspect, lv0, nlv, ly0, nly}};
+    // a storage image's views in formats without storage support (its sRGB views): their usage without storage
+    VkImageViewUsageCreateInfo vu = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO, .usage = b->usage & ~VK_IMAGE_USAGE_STORAGE_BIT};
+    if ((b->usage & VK_IMAGE_USAGE_STORAGE_BIT) && !format_supports(fmt, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) vi.pNext = &vu;
     VkImageView v;
     if (vkCreateImageView(g_vk.dev, &vi, NULL, &v) != VK_SUCCESS) {
         static int nfail;
