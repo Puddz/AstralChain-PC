@@ -64,6 +64,8 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_DUMP_TEX=<min width>` | Level-0 data of up to 24 textures (as uploaded, unswizzled) to `tex_*.bin` in the run folder |
 | `LARECOMP_DUMP_ASTC=<min width>` | Blocks and CPU decode of up to 16 ASTC textures (with `LARECOMP_GPU_ASTC=0`) to `astc_*.bin` |
 | `LARECOMP_GPU_ASTC=0` | Decode ASTC on the CPU, as before the GPU decoder |
+| `LARECOMP_BC7=1` | (launcher setting) Store ASTC textures as BC7, recompressed on the GPU (`bc7_gpu.c`): a quarter of RGBA8's video memory. Logs `[vk] BC7: ...`; the 2-s profile line shows `video memory` |
+| `AC_KEYS=A:74,B:75,...` | (launcher **Controls**) Keyboard keys as Windows virtual-key codes: `A B X Y LSTICK RSTICK L R ZL ZR PLUS MINUS DLEFT DUP DRIGHT DDOWN LLEFT LUP LRIGHT LDOWN RLEFT RUP RRIGHT RDOWN` (`hid_service.h`); unlisted ones keep their default, 0 for none |
 | `LARECOMP_ASTC_VERIFY=<n>` | Read back the first n texture levels the GPU decodes and compare them with the CPU decoder (`ASTC verify` lines; slow) |
 | `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
 | `LARECOMP_GPL=0` | No shader libraries (`VK_EXT_graphics_pipeline_library`): pipelines are compiled whole at their first draw |
@@ -88,7 +90,9 @@ warm-up reports `pipeline warm-up queued / ready / late / rejected` (ready: buil
 libraries `shader libraries built / reused / linked / optimized`.
 
 `python -m astral_chain.astc_gpu_test [astc_*.bin...]` checks the GPU ASTC decoder against the CPU one, byte for
-byte: random blocks of every footprint, sRGB and not, plus any texture dumps given. `trace.log` always gets `CUTSCENE` lines (cutscene start and end, frames over 200 ms in a
+byte: random blocks of every footprint, sRGB and not, plus any texture dumps given. `python -m
+astral_chain.bc7_gpu_test [astc_*.bin...]` measures the BC7 encoder (PSNR on test images and dumps; every block must
+be mode 6). `trace.log` always gets `CUTSCENE` lines (cutscene start and end, frames over 200 ms in a
 cutscene) and `AUDIO underrun` lines when the sound queue ran dry.
 
 ### Testing from a checkpoint
@@ -97,29 +101,18 @@ Game saves work as checkpoints: every save the game writes is also copied to `<s
 To replay a moment, copy a snapshot's `data` folder over a test save folder (`AC_DATA_DIR=<folder>`, see above) and
 load it. The game's own autosaves usually come right before story cutscenes.
 
-## Ideas for later
+## BC7 textures
 
-### Optional ASTC to BC7 conversion at setup
+The idea was an optional setup step converting every ASTC texture to BC7 once. BC7 takes 1 byte per texel and ASTC
+8x8 a quarter of that, so that cache would have been ~4x the ASTC data on disk (several GB) and tens of minutes of
+encoding. Instead `LARECOMP_BC7=1` (the launcher's Settings) converts each texture on the GPU when its data arrives
+(`bc7_gpu.c`): the ASTC decoder writes the level into a scratch buffer, a compute shader encodes BC7 mode 6 blocks
+(principal axis endpoints, refined by least squares; ~0.3 ms for a 1023x517 test image on an RTX 4090, 42-57 dB on
+smooth test images), and they are copied into a BC7 image. Levels over 4096x4096 stay RGBA8.
 
-Most of the game's textures are ASTC, which desktop NVIDIA and AMD GPUs cannot sample. They are now decoded by a
-compute shader into RGBA8 (`astc_gpu.c`). Before that, the CPU decoded them, and on the highway chase (RTX 4090,
-Ryzen 7 7800X3D, 2026-10-21) that caused 4 hitches of 58-236 ms (frame 9494: 45 textures, 177 ms); with the GPU
-decoder no frame of the same route spends 40 ms on textures.
-
-What remains: the decoded textures take 4 bytes per texel in video memory, 16x ASTC 8x8 (a 4096x4096 texture: ~90
-MB with its mipmaps instead of ~5.3 MB). An optional setup step could convert every ASTC texture once into BC7, which
-these GPUs sample directly, at about the size of the ASTC data: a quarter of today's video memory for these
-textures, which matters on GPUs with 8 GB or less:
-
-- Find the textures in the game's archives (WTA/WTP pairs in the `.dat`/`.dtt` packs; see astral-extractor) and
-  record each one's layout (format, size, levels, swizzle).
-- Decode each one (the existing decoder), encode to BC7 (for example with bc7enc, MIT), and store the result in
-  `build/game/cache/bc7/`, keyed by a hash of the ASTC data.
-- At upload, look the texture up by the same hash. A hit uploads BC7 into a BC7 image (no decode, a quarter of
-  RGBA8's memory); a miss falls back to today's path.
-
-Expected cost: BC7 encoding of the ~10 GB of game data takes long (likely tens of minutes on 16 threads at a
-reasonable quality setting) and needs a few GB of disk. So it should be offered as a choice in setup, not forced.
+Highway chase (RTX 4090, 2026-10-21, same route with and without): video memory 7.2 GB on average (peak 8.7 GB)
+-> 4.7 GB (peak 5.2 GB); texture upload time in hitch frames 35 -> 22 ms. Hitches were 35 vs 41 after the first
+1000 frames, all of them game-side time ("other"), not uploads or GPU waits.
 
 ## Code map
 
@@ -134,7 +127,7 @@ reasonable quality setting) and needs a few GB of disk. So it should be offered 
 | `runtime/host_runtime.c.in` | Kernel and services runtime |
 | `runtime/guest_threads.h` | Guest threads and the parallel scheduler |
 | `runtime/nvn_hle.h` | NVN entry points |
-| `runtime/las/nvn/vulkan/` | Renderer: `exec.c` commands, draws and the pipeline warm-up, `textures.c` uploads, `astc_gpu.c` ASTC decoding on the GPU, `shaders.c` SPIR-V cache, `device.c` swapchain |
+| `runtime/las/nvn/vulkan/` | Renderer: `exec.c` commands, draws and the pipeline warm-up, `textures.c` uploads, `astc_gpu.c` ASTC decoding on the GPU, `bc7_gpu.c` the optional BC7 recompression, `shaders.c` SPIR-V cache, `device.c` swapchain |
 | `runtime/las/maxwell_ext.h` | Maxwell instructions added to the translator (LDS/STS, atomics, VOTE, SUST, TLD...) |
 
 ## The launcher
@@ -154,6 +147,9 @@ borderless and draws its own buttons (`Theme`, `NeonButton`, `GlyphButton`, `Neo
   precompile and warm-up stamps with what a launch would write; a new driver is only noticed by the warm-up).
 - Settings are stored in `userdata\launcher.ini` and become the variables of the tables above. The option list is
   `Options` in `Launcher.cs`.
+- **Controls** (`ControlsForm`) stores `keys=A:74,...` (virtual-key codes, as the game window receives them) and
+  passes `AC_KEYS` only when a key differs from the defaults. Mapped Alt and F10 no longer open the game window's
+  system menu.
 - Diagnostics mode adds `LARECOMP_VK_PROF=1` and `AC_CRASH_DUMP=1`. **Create report** zips `run.txt`,
   `stderr.log`, `trace.log` (last 8 MB each), `launcher.log`, `crash.dmp` and a system summary into `reports\`,
   with the Windows user name replaced in paths.

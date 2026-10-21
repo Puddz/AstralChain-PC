@@ -24,6 +24,9 @@ To start over completely, delete `game\`, `build\` and `tools\`. Keep `userdata\
   launcher's *Compile shaders* says *(Already compiled)* and that *Compile shaders for your GPU before playing* is on
   in Settings. Remaining pauses are mostly the game loading its data. For a report, use **Play with diagnostics**:
   it logs where the time of each slow frame went.
+- **Out of video memory, or stutter on GPUs with 8 GB or less.** Turn on *Compress textures in video memory
+  (BC7)* in Settings. If textures then look wrong, turn it off again and please report it.
+- **A key does nothing.** Check **Controls** in the launcher; *Defaults* restores the original keys.
 - **No sound.** The game uses the default Windows output device. If the device disappears during play, the game
   reopens it.
 - **Which GPU is used.** The first lines of `build\game\round-00\stderr.log` list the Vulkan GPUs and the one in

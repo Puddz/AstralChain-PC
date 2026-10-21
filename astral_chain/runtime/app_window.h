@@ -105,7 +105,10 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
    int down=message==WM_KEYDOWN || message==WM_SYSKEYDOWN;
    hid_keys[wparam]=down;keyboard_event((unsigned)wparam,lparam,down);
   }
-  if(message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) return DefWindowProcW(window,message,wparam,lparam);
+  /* (Alt and F10 open the window menu: not when they are game keys. Alt+F4 still closes.) */
+  hid_keys_load();
+  if((message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) && !((wparam==VK_MENU || wparam==VK_F10) && hid_key_mapped[wparam]))
+   return DefWindowProcW(window,message,wparam,lparam);
   return 0;
  }
  if(message==WM_SIZE) {

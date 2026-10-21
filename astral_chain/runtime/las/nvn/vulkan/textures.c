@@ -330,7 +330,15 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     }
     // ASTC decoded on the GPU (astc_gpu.c): written through an RGBA8 UNORM storage view
     bool astc_gpu = b->astc_bw && type == VK_IMAGE_TYPE_2D && depth == 1 && samples == 1 && vk_astc_gpu_ready();
-    if (astc_gpu) {
+    // ... or recompressed to BC7 (bc7_gpu.c, optional): a quarter of RGBA8's video memory. (The game's ASTC textures
+    // all have the NVN image flag, but ASTC is no shader write format: no storage usage is lost.)
+    b->bc7 = astc_gpu && !b->scalable && vk_bc7_fits(tw, th);
+    if (b->bc7) {
+        vf = b->astc_srgb ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
+        usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        storage = false;
+        flags &= ~VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
+    } else if (astc_gpu) {
         usage |= VK_IMAGE_USAGE_STORAGE_BIT;
         if (vk_storage_twin(vf) != vf) flags |= VK_IMAGE_CREATE_EXTENDED_USAGE_BIT;
     }
@@ -349,10 +357,11 @@ static void create_image(NvnTexture *t, TexBackend *b) {
         ci.flags &= ~VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
         VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL));
         depthfmt = false;
+        b->bc7 = false;
     }
     b->format = vf;
     b->storage = storage && (ci.usage & VK_IMAGE_USAGE_STORAGE_BIT);  // (the fallback above drops storage usage)
-    b->astc_gpu = astc_gpu && (ci.usage & VK_IMAGE_USAGE_STORAGE_BIT);
+    b->astc_gpu = astc_gpu && (b->bc7 || (ci.usage & VK_IMAGE_USAGE_STORAGE_BIT));
     b->usage = ci.usage;
     b->width = tw; b->height = th; b->depth = depth; b->layers = layers; b->levels = levels; b->samples = samples;
     b->aspect = depthfmt ? aspect_of(t->format) : VK_IMAGE_ASPECT_COLOR_BIT;
@@ -736,6 +745,13 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 else tegra_deswizzle(src, blocks, l.wb, l.hb, 1, 16, l.block_height_log2, l.block_depth_log2);
                 if (b->tp > 0 && layer == 0) texpatch_apply(b->tp - 1, lv, blocks, l.w, l.h, l.wb * 16);
                 uint32_t w = l.w < level_w(b, lv) ? l.w : level_w(b, lv), hh = l.h < level_h(b, lv) ? l.h : level_h(b, lv);
+                if (b->bc7) {
+                    vk_bc7_level(cb, s.buf, s.off, 1088 + bsize, 1088 / 4, b->image, lv, layer, l.wb, l.hb, w, hh,
+                                 level_w(b, lv), level_h(b, lv), b->astc_bw, b->astc_bh, b->astc_srgb);
+                    gpu_decoded = true;
+                    vk_dl_note_upload((void *)b->image, w, hh, lv);
+                    continue;
+                }
                 static const VkComponentMapping id = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                                                       VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
                 VkImageView view = vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, vk_storage_twin(b->format), lv, 1, layer, 1, id,

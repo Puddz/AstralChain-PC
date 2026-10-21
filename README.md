@@ -38,6 +38,11 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-10-21**
 
+- **Keyboard controls can be changed**: **Controls** in the launcher (click a key, press the new one).
+- **Optional BC7 texture compression** (Settings, off by default): the game's ASTC textures are stored as BC7 in
+  video memory, converted on the GPU as they load. On the highway chase it used 4.7 GB of video memory on average
+  instead of 7.2 GB (peak 5.2 GB instead of 8.7 GB), for GPUs with 8 GB or less. No setup step, nothing on disk.
+  *Not yet confirmed in play.*
 - **Launcher.** `Astral Chain Launcher.exe`: install, compile shaders, play without console windows, play with
   diagnostics and create a bug report, and settings for every option, over original key art (six backgrounds to
   pick from with the arrows at the top right). See [Playing](#playing).
@@ -115,10 +120,13 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 | **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
 | **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
 | **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
-| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, presentation mode, shader options and troubleshooting switches. Each one is explained in the window |
+| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, presentation mode, BC7 texture compression, shader options and troubleshooting switches. Each one is explained in the window |
+| **Controls** | The keyboard keys for every button, stick direction and the D-pad. Click a key, then press the new one; a key already in use swaps places |
 | **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
 
 `Play Astral Chain.cmd` and `Play Astral Chain (diagnostics).cmd` still work, with console windows.
+
+Default keys (change them with **Controls**):
 
 | Switch | Keyboard |
 | --- | --- |
@@ -129,6 +137,7 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 | D-pad | Arrow keys |
 | Left stick | W A S D |
 | Right stick | T F G H |
+| Left / right stick press | 1 / 2 |
 
 XInput controllers (Xbox pads and compatibles) work too. The game pauses while its window is minimized, as on
 the Switch's home menu (Settings: *Keep running while the game window is minimized*). In another window, the game

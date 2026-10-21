@@ -86,6 +86,7 @@ typedef struct TexBackend {
     uint8_t astc_bw, astc_bh;  // ASTC without GPU support: decoded to RGBA8 on upload (runtime/nvn/astc.c)
     bool astc_srgb;
     bool astc_gpu;  // ... decoded by a compute shader (astc_gpu.c) instead
+    bool bc7;       // ... and stored as BC7 (bc7_gpu.c, LARECOMP_BC7=1): the image's format is BC7
     VkImageUsageFlags usage;  // as created
     int tp;              // runtime/nvn/texpatch.c: 0 not checked yet, -1 none, else known UI texture + 1
     uint32_t tp_gen;     // texpatch_generation() it was last uploaded with
@@ -123,6 +124,11 @@ bool vk_astc_gpu_ready(void);  // astc_gpu.c
 uint32_t vk_astc_tables(uint8_t *out);
 void vk_astc_gpu_decode(VkCommandBuffer cb, VkBuffer buf, uint64_t off, uint64_t size, uint32_t first, VkImageView view,
                         uint32_t bx, uint32_t by, uint32_t w, uint32_t h, uint32_t bw, uint32_t bh, bool srgb);
+bool vk_bc7_ready(void);  // bc7_gpu.c
+bool vk_bc7_fits(uint32_t w, uint32_t h);
+void vk_bc7_level(VkCommandBuffer cb, VkBuffer buf, uint64_t off, uint64_t size, uint32_t first, VkImage image, uint32_t lv,
+                  uint32_t layer, uint32_t bx, uint32_t by, uint32_t w, uint32_t h, uint32_t lw, uint32_t lh, uint32_t bw,
+                  uint32_t bh, bool srgb);
 VkShaderModule vk_builtin_shader(const char *name);  // internal shaders (clear, copy, present)
 
 // ---- device / window (device.c)

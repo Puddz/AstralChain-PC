@@ -26,7 +26,7 @@ GLSLANG = PROJECT/'tools/glslang/bin/glslang.exe'
 VULKAN_DLL = Path('C:/Windows/System32/vulkan-1.dll')
 OBJECT_LAYER = ('nvn/objects.c', 'nvn/cmdbuf.c', 'nvn/formats.c', 'nvn/tegra.c', 'nvn/astc.c')
 VULKAN_LAYER = ('nvn/vulkan/device.c', 'nvn/vulkan/exec.c', 'nvn/vulkan/textures.c', 'nvn/vulkan/shaders.c',
-                'nvn/vulkan/spirv_cache.c', 'nvn/vulkan/astc_gpu.c',
+                'nvn/vulkan/spirv_cache.c', 'nvn/vulkan/astc_gpu.c', 'nvn/vulkan/bc7_gpu.c',
                 'shaderc_glslang.c', 'game_hooks_neutral.c', 'vma.cpp')
 BACKENDS = {'null': ('null_backend.c',), 'vulkan': VULKAN_LAYER}
 

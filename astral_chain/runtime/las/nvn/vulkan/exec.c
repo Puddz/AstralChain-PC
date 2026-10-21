@@ -874,6 +874,17 @@ const char *renderer_stats(void) {
                      (unsigned long long)warm_stat_ready, (unsigned long long)warm_stat_late);
         warm_stat_queued = warm_stat_ready = warm_stat_late = 0;
     }
+    {   // the game's video memory (VMA's allocations in device-local heaps), e.g. for LARECOMP_BC7 comparisons
+        const VkPhysicalDeviceMemoryProperties *mp;
+        vmaGetMemoryProperties(g_vk.vma, &mp);
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+        vmaGetHeapBudgets(g_vk.vma, budgets);
+        uint64_t used = 0;
+        for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
+            if (mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) used += budgets[i].statistics.allocationBytes;
+        size_t n = strlen(stats_text);
+        snprintf(stats_text + n, sizeof stats_text - n, ", video memory %.0fMB", used / 1048576.0);
+    }
     {
         size_t n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, ", mirror in %.1fMB, write-back %.1fMB in %llu (%llu faults, %d lazy)",
@@ -4324,6 +4335,7 @@ static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
     copy_region_dims(t, src, &fi, rg, &level, &row, &img);
     if (!fi || !fi->bpb || fi->bpb == 3 || row % fi->bpb) return;
     TexBackend *b = vk_tex(t, false);
+    if (b->bc7) return;  // (BC7-stored ASTC, bc7_gpu.c: no readback of its blocks)
     float tsx, tsy;
     renderer_texture_scale(t, &tsx, &tsy);
     VkCommandBuffer cb = vk_cmd();
@@ -4424,6 +4436,11 @@ static void copy_texture(const TexRefRec *src, const TexRefRec *dst, uint64_t fl
         return;
     }
     if (s->samples != d->samples) return;
+    if ((s->bc7 || d->bc7) && s->format != d->format) {  // (BC7-stored ASTC, bc7_gpu.c: no conversions to or from it)
+        static int nlog;
+        if (nlog++ < 5) LOG("[vk] copy to or from a BC7 texture skipped (%ux%u -> %ux%u)\n", s->width, s->height, d->width, d->height);
+        return;
+    }
     if (sw == dw && sh == dh && s->format == d->format) {
         VkImageCopy c = {.srcSubresource = {sa, slv, sly, 1}, .srcOffset = {sx0, sy0, 0}, .dstSubresource = {da, dlv, dly, 1},
                          .dstOffset = {dx0, dy0, 0}, .extent = {(uint32_t)sw, (uint32_t)sh, 1}};

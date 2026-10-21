@@ -9,6 +9,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Management;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -94,6 +95,10 @@ namespace AstralChainLauncher
             Add("gpu_warm", "Shaders and performance", "Compile shaders for your GPU before playing",
                 "Takes about 10 s the first time and after driver updates; removes most shader pauses in play.",
                 OptKind.Check, "1", OptTarget.Setup, When("0", "AC_GPU_WARM=0"));
+            Add("bc7", "Shaders and performance", "Compress textures in video memory (BC7)",
+                "Most textures are stored as BC7, a quarter of the video memory they take now. They are converted " +
+                "on the GPU as they load: no setup step and no disk space. Detail can differ very slightly. For " +
+                "GPUs with 8 GB or less.", OptKind.Check, "0", OptTarget.Game, When("1", "LARECOMP_BC7=1"));
             Add("gpu_astc", "Troubleshooting", "Decode ASTC textures on the GPU",
                 "Off: textures are decoded on the CPU (slower loading). Try it if textures look wrong.",
                 OptKind.Check, "1", OptTarget.Game, When("0", "LARECOMP_GPU_ASTC=0"));
@@ -178,7 +183,7 @@ namespace AstralChainLauncher
     {
         readonly string project, venvPython, logPath;
         readonly Settings settings;
-        readonly NeonButton install, shaders, play, playDiag, settingsButton, cancel;
+        readonly NeonButton install, shaders, play, playDiag, settingsButton, controlsButton, cancel;
         readonly Label stateLabel, statusLabel;
         readonly NeonProgress progress;
         readonly TextBox log;
@@ -230,7 +235,10 @@ namespace AstralChainLauncher
                 (s, e) => OnPlay(true)); y += 58;
             shaders = MakeButton("Compile shaders", "", y, 50, OnShaders); y += 58;
             install = MakeButton("Install game", "Your keys, base game and v1.0.1 update", y, 50, OnInstall); y += 58;
-            settingsButton = MakeButton("Settings", "Cutscenes, sound, display and troubleshooting", y, 50, OnSettings);
+            settingsButton = MakeButton("Settings", "Game, sound and display", y, 50, OnSettings);
+            settingsButton.Width = 186;
+            controlsButton = MakeButton("Controls", "Keyboard keys", y, 50, OnControls);
+            controlsButton.Bounds = new Rectangle(246, y, 186, 50);
 
             var close = new GlyphButton { Glyph = "\u2715", AccessibleName = "Close", Location = new Point(1076, 8), Size = new Size(36, 30) };
             close.Click += (s, e) => Close();
@@ -388,6 +396,7 @@ namespace AstralChainLauncher
             play.Enabled = !busy && installed;
             playDiag.Enabled = !busy && installed;
             settingsButton.Enabled = !busy;
+            controlsButton.Enabled = !busy;
             report.Enabled = !busy && File.Exists(Path.Combine(project, @"build\game\run.txt"));
         }
 
@@ -462,7 +471,7 @@ namespace AstralChainLauncher
                 string run = Path.Combine(project, @"build\game");
                 string dump = Path.Combine(run, "crash.dmp");
                 if (diagnostics) try { File.Delete(dump); } catch { }
-                string env = "AC_PARALLEL=1;AC_IGNORE_FOCUS=;" + settings.Env(OptTarget.Game) +
+                string env = "AC_PARALLEL=1;AC_IGNORE_FOCUS=;" + ControlsForm.Env(settings) + ";" + settings.Env(OptTarget.Game) +
                     (diagnostics ? ";LARECOMP_VK_PROF=1;AC_CRASH_DUMP=1" : "");
                 bool consoles = settings.On("show_consoles");
                 string args = "-NoProfile -ExecutionPolicy Bypass -File " +
@@ -514,6 +523,17 @@ namespace AstralChainLauncher
                 {
                     settings.Save();
                     RefreshState();
+                }
+            }
+        }
+
+        void OnControls(object sender, EventArgs e)
+        {
+            using (var f = new ControlsForm(settings))
+            {
+                if (f.ShowDialog(this) == DialogResult.OK)
+                {
+                    try { settings.Save(); } catch { }
                 }
             }
         }
@@ -1297,6 +1317,182 @@ namespace AstralChainLauncher
                 else v = c.Text.Trim();
                 settings.Set(o.Key, v);
             }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------ controls window
+    // Keyboard keys for the Switch controller's buttons and sticks. Kept in launcher.ini as keys=A:74,B:75,... (Windows
+    // virtual-key codes) and passed to the game as AC_KEYS (runtime/hid_service.h); unchanged keys pass nothing.
+    class ControlsForm : Form
+    {
+        // name (as AC_KEYS), label, default key
+        static readonly string[][] Actions = {
+            new[] { "A", "A", "74" }, new[] { "B", "B", "75" }, new[] { "X", "X", "73" }, new[] { "Y", "Y", "85" },
+            new[] { "L", "L", "81" }, new[] { "R", "R", "69" }, new[] { "ZL", "ZL", "90" }, new[] { "ZR", "ZR", "67" },
+            new[] { "PLUS", "+ (Plus)", "13" }, new[] { "MINUS", "- (Minus)", "8" },
+            new[] { "LSTICK", "Left stick press", "49" }, new[] { "RSTICK", "Right stick press", "50" },
+            new[] { "LUP", "Left stick up", "87" }, new[] { "LDOWN", "Left stick down", "83" },
+            new[] { "LLEFT", "Left stick left", "65" }, new[] { "LRIGHT", "Left stick right", "68" },
+            new[] { "RUP", "Right stick up", "84" }, new[] { "RDOWN", "Right stick down", "71" },
+            new[] { "RLEFT", "Right stick left", "70" }, new[] { "RRIGHT", "Right stick right", "72" },
+            new[] { "DUP", "D-pad up", "38" }, new[] { "DDOWN", "D-pad down", "40" },
+            new[] { "DLEFT", "D-pad left", "37" }, new[] { "DRIGHT", "D-pad right", "39" },
+        };
+
+        readonly Settings settings;
+        readonly Dictionary<string, int> keys;
+        readonly Dictionary<string, NeonButton> buttons = new Dictionary<string, NeonButton>();
+        readonly Label hint;
+        string capturing;
+
+        [DllImport("user32.dll")] static extern uint MapVirtualKey(uint code, uint mapType);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetKeyNameText(int lParam, StringBuilder text, int size);
+
+        static Dictionary<string, int> Defaults()
+        {
+            return Actions.ToDictionary(a => a[0], a => int.Parse(a[2]));
+        }
+
+        static Dictionary<string, int> LoadKeys(Settings settings)
+        {
+            var keys = Defaults();
+            foreach (var part in (settings.Raw("keys") ?? "").Split(','))
+            {
+                var kv = part.Split(':');
+                int vk;
+                if (kv.Length == 2 && keys.ContainsKey(kv[0]) && int.TryParse(kv[1], out vk) && vk >= 0 && vk < 256) keys[kv[0]] = vk;
+            }
+            return keys;
+        }
+
+        static string Join(Dictionary<string, int> keys)
+        {
+            return string.Join(",", Actions.Select(a => a[0] + ":" + keys[a[0]]));
+        }
+
+        // "AC_KEYS=..." for the game, or "" when every key is the default
+        public static string Env(Settings settings)
+        {
+            var keys = LoadKeys(settings);
+            return Join(keys) == Join(Defaults()) ? "" : "AC_KEYS=" + Join(keys);
+        }
+
+        // The key's name on this keyboard layout ("J", "Enter", "Left Shift" ...)
+        public static string KeyName(int vk)
+        {
+            if (vk == 0) return "(none)";
+            uint scan = MapVirtualKey((uint)vk, 0);
+            bool extended = (vk >= 33 && vk <= 40) || vk == 45 || vk == 46 || vk == 111 || vk == 144;
+            var text = new StringBuilder(64);
+            if (scan != 0) GetKeyNameText((int)(scan << 16) | (extended ? 1 << 24 : 0), text, text.Capacity);
+            string name = text.ToString();
+            if (name.Length > 1 && name == name.ToUpperInvariant())  // ("ENTER" -> "Enter")
+                name = System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase(name.ToLowerInvariant());
+            return name.Length > 0 ? name : "Key " + vk;
+        }
+
+        public ControlsForm(Settings settings)
+        {
+            this.settings = settings;
+            keys = LoadKeys(settings);
+            Text = "Astral Chain PC controls";
+            Font = new Font("Segoe UI", 9F);
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.CenterParent;
+            ClientSize = new Size(640, 560);
+            BackColor = Color.FromArgb(14, 17, 28);
+            ForeColor = Theme.Text;
+
+            var header = new Label { Text = "CONTROLS", Font = new Font("Segoe UI Semibold", 12F), ForeColor = Theme.Text,
+                Location = new Point(1, 1), Size = new Size(638, 42), Padding = new Padding(14, 0, 0, 0),
+                TextAlign = ContentAlignment.MiddleLeft, BackColor = Color.FromArgb(9, 11, 20) };
+            header.MouseDown += (s, e) => { if (e.Button == MouseButtons.Left) Theme.Drag(this); };
+            var close = new GlyphButton { Glyph = "\u2715", AccessibleName = "Close", Location = new Point(598, 7), Size = new Size(34, 30) };
+            close.Click += (s, e) => DialogResult = DialogResult.Cancel;
+            Controls.Add(close);
+            Controls.Add(header);
+            Paint += (s, e) =>
+            {
+                using (var pen = new Pen(Color.FromArgb(150, Theme.Accent))) e.Graphics.DrawRectangle(pen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+                using (var line = new Pen(Theme.Accent, 2)) e.Graphics.DrawLine(line, 1, 43, 120, 43);
+            };
+
+            string[] titles = { "BUTTONS", "STICKS AND D-PAD" };
+            for (int col = 0; col < 2; col++)
+            {
+                int x = 20 + col * 310, y = 58;
+                Controls.Add(new Label { Text = titles[col], Font = new Font("Segoe UI", 10F, FontStyle.Bold), Location = new Point(x, y),
+                    AutoSize = true, ForeColor = Theme.Accent });
+                y += 30;
+                for (int i = col * 12; i < col * 12 + 12; i++)
+                {
+                    var a = Actions[i];
+                    Controls.Add(new Label { Text = a[1], Location = new Point(x, y + 6), AutoSize = true });
+                    var b = new NeonButton { Location = new Point(x + 150, y), Size = new Size(140, 30), AccessibleName = "Key for " + a[1] };
+                    string name = a[0];
+                    b.Click += (s, e) => StartCapture(name);
+                    buttons[name] = b;
+                    Controls.Add(b);
+                    y += 33;
+                }
+            }
+            hint = new Label { Location = new Point(20, 488), Size = new Size(600, 20), ForeColor = Theme.Dim,
+                Text = "Click a key, then press the new key (Esc: keep the old one). A key already in use swaps places." };
+            Controls.Add(hint);
+            ShowKeys();
+
+            var defaults = new NeonButton { Text = "Defaults", Location = new Point(14, 516), Size = new Size(100, 34) };
+            defaults.Click += (s, e) => { capturing = null; foreach (var kv in Defaults()) keys[kv.Key] = kv.Value; ShowKeys(); };
+            var ok = new NeonButton { Text = "Save", Primary = true, Location = new Point(418, 516), Size = new Size(100, 34) };
+            ok.Click += (s, e) => { settings.Set("keys", Join(keys)); DialogResult = DialogResult.OK; };
+            var cancelButton = new NeonButton { Text = "Cancel", Location = new Point(526, 516), Size = new Size(100, 34) };
+            cancelButton.Click += (s, e) => DialogResult = DialogResult.Cancel;
+            Controls.Add(defaults);
+            Controls.Add(ok);
+            Controls.Add(cancelButton);
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+        }
+
+        void ShowKeys()
+        {
+            foreach (var a in Actions)
+            {
+                var b = buttons[a[0]];
+                b.Text = capturing == a[0] ? "Press a key..." : KeyName(keys[a[0]]);
+                b.Primary = capturing == a[0];
+                b.Invalidate();
+            }
+        }
+
+        void StartCapture(string name)
+        {
+            capturing = name;
+            buttons[name].Focus();
+            ShowKeys();
+        }
+
+        // Every key press reaches here first (arrows, Tab, Enter and Alt included): the raw virtual-key code, as the
+        // game window receives it.
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            const int WM_KEYDOWN = 0x100, WM_SYSKEYDOWN = 0x104;
+            if (msg.Msg != WM_KEYDOWN && msg.Msg != WM_SYSKEYDOWN) return base.ProcessCmdKey(ref msg, keyData);
+            int vk = (int)msg.WParam & 0xFF;
+            if (capturing == null)
+            {
+                if (vk == 27) { DialogResult = DialogResult.Cancel; return true; }
+                return base.ProcessCmdKey(ref msg, keyData);
+            }
+            if (vk == 27) { capturing = null; ShowKeys(); return true; }
+            if (vk == 91 || vk == 92 || vk < 8) return true;  // (Windows keys; mouse buttons)
+            string other = keys.Where(kv => kv.Value == vk && kv.Key != capturing).Select(kv => kv.Key).FirstOrDefault();
+            if (other != null) keys[other] = keys[capturing];  // (swapped)
+            keys[capturing] = vk;
+            capturing = null;
+            ShowKeys();
+            return true;
         }
     }
 }
