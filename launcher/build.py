@@ -25,6 +25,10 @@ def main():
     command = [str(csc), '/nologo', '/target:winexe', '/optimize+', '/platform:anycpu', f'/out:{OUTPUT}',
                f'/win32manifest:{HERE/"launcher.manifest"}', *(f'/r:{FRAMEWORK/r}' for r in REFERENCES),
                str(HERE/'Launcher.cs')]
+    if (HERE/'background.jpg').is_file():  # (the key art, embedded: the exe stays one file)
+        command.insert(-1, f'/resource:{HERE/"background.jpg"},background.jpg')
+    if (HERE/'icon.ico').is_file():
+        command.insert(-1, f'/win32icon:{HERE/"icon.ico"}')
     result = subprocess.run(command, capture_output=True, text=True, errors='replace')
     print((result.stdout + result.stderr).strip())
     if result.returncode:

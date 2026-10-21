@@ -141,6 +141,8 @@ reasonable quality setting) and needs a few GB of disk. So it should be offered 
 
 `Astral Chain Launcher.exe` is built from `launcher/Launcher.cs` by `python launcher\build.py`, with the C# 5
 compiler of the .NET Framework 4 that ships with Windows. Rebuild and commit the exe whenever the source changes.
+`launcher/background.jpg` (the key art) is embedded in the exe and `launcher/icon.ico` is its icon; the window is
+borderless and draws its own buttons (`Theme`, `NeonButton`, `GlyphButton`, `NeonProgress`).
 
 - It runs the same steps as the .cmd files: `.venv` and `requirements.txt`, then `setup_game` (install;
   `--rebuild-if-stale` before each start; `--force-shaders` for **Compile shaders** when already compiled), then
