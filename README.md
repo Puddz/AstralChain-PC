@@ -43,6 +43,10 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   that works is kept.
 - **Setup from a ZIP download** stopped at "unreviewed Maxwell translator identity" (issue #2): a file check
   depended on line endings. Fixed; confirmed by the reporter.
+- **Green flashes in the title movie** (and noise or green in the tutorial clips): video frames were sometimes
+  drawn before the decoded picture reached the GPU, for up to 8 frames. Textures written by the CPU are now
+  checked every frame. In a recorded start, the title movie had about 50 green frames before and none after.
+  *Not yet confirmed in play; the tutorial clips are untested.*
 
 **2026-10-21**
 

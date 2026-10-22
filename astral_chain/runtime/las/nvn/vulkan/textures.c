@@ -650,7 +650,13 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (!t->addr || t->target == 10) return;
     uint64_t frame = vk_frame_counter();
     if (b->uploaded && b->checked_frame == frame) return;
-    if (b->uploaded && !b->dynamic && ((frame + ((uintptr_t)b >> 6)) & 7)) return;
+    // Textures not known to change were looked at every 8th frame only. A video frame buffer uploaded before the
+    // decoder first filled it (warm-up: empty, or an earlier texture's data) was then drawn as it was for up to 8
+    // frames: green flashes in the title movie, noise in the tutorial clips. With the write tracking below they are
+    // checked every frame (one query, no hashing unless written); the 8-frame rule stays for untracked memory.
+    static int watch = -1;
+    if (watch < 0) { const char *e = getenv("LARECOMP_VK_TEX_WATCH"); watch = !e || atoi(e) != 0; }
+    if (b->uploaded && !b->dynamic && (!watch || !b->wgen) && ((frame + ((uintptr_t)b >> 6)) & 7)) return;
     const FormatInfo *fi = t->layout.fmt;
     if (!fi || !fi->bpb) return;
     VkFmt mf = fmt_of(t->format);
@@ -672,8 +678,6 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     // The OS's page write tracking (exec.c vk_pages_changed, shared with the vertex cache): texture memory the CPU
     // hasn't written since the last check is not hashed at all (dynamic textures were fully hashed every frame,
     // ~2.4 MB a frame in the overworld). The periodic full hash stays as a safety net. LARECOMP_VK_TEX_WATCH=0: off.
-    static int watch = -1;
-    if (watch < 0) { const char *e = getenv("LARECOMP_VK_TEX_WATCH"); watch = !e || atoi(e) != 0; }
     if (watch && !always_full) {
         extern int vk_pages_changed(uint64_t addr, uint64_t size, uint32_t since, uint32_t *now);
         uint32_t now = 0;
@@ -684,7 +688,11 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
                 if (!periodic) { prof_tex_watch_skips++; return; }
                 if (b->dynamic) full_hash_budget = full_hash_budget >= total ? full_hash_budget - total : 0;  // (the others took theirs above)
             }
-        } else prof_tex_unknown++;
+            if (ch) full = true;  // (written: a sampled hash can miss the change)
+        } else {
+            prof_tex_unknown++;
+            b->wgen = 0;  // (untracked: back to the 8-frame rule above)
+        }
     }
     if (!full && !restyle) {
         prof_tex_samples++;
