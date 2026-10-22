@@ -18,6 +18,7 @@ build time by `astral_chain/shader_build.py`. The vendored file itself is unchan
 
 | Tool | Version | License |
 | --- | --- | --- |
+| [Python](https://www.python.org/) (CPython, the python.org build as published on [NuGet](https://www.nuget.org/packages/python)) | 3.14.9 | PSF License (see `tools\python\LICENSE.txt`) |
 | [Zig](https://ziglang.org/) (C compiler) | 0.17.0 | MIT |
 | [glslang](https://github.com/KhronosGroup/glslang) | 16.6.0 | BSD-3-Clause and others (see its archive) |
 | [NSTool](https://github.com/jakcron/nstool) | 1.9.2 | MIT |

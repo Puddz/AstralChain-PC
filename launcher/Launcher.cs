@@ -620,28 +620,12 @@ namespace AstralChainLauncher
         }
 
         // ---------------------------------------------------------------------------------------------- python
+        // Setup's own Python (tools\python, downloaded once) and .venv: astral_chain\get_python.ps1, as setup.cmd
         bool EnsurePython()
         {
-            if (File.Exists(venvPython)) return true;
-            Log("== Creating the Python environment");
-            foreach (var v in new[] { "3.14", "3.13", "3.12" })
-            {
-                if (CaptureOutput("py", "-" + v + " -c \"print('ok')\"", null).Trim() != "ok") continue;
-                return RunProcess("py", "-" + v + " -m venv .venv", null, true) == 0 && File.Exists(venvPython);
-            }
-            if (CaptureOutput("python", "-c \"import sys; print('ok' if sys.version_info >= (3, 12) else 'old')\"", null)
-                .Trim() == "ok")
-                return RunProcess("python", "-m venv .venv", null, true) == 0 && File.Exists(venvPython);
-            Ui(() =>
-            {
-                if (MessageBox.Show(this, "Python 3.12 or newer is needed to build the game.\n\nInstall it from " +
-                    "python.org (keep the \"py launcher\" option ticked), then press Install game again.\n\n" +
-                    "Open the download page now?", "Python needed", MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Information) == DialogResult.Yes)
-                    Process.Start("https://www.python.org/downloads/windows/");
-            });
-            Log("Python 3.12 or newer was not found.");
-            return false;
+            return Step("Getting Python", "powershell.exe",
+                "-NoProfile -ExecutionPolicy Bypass -File " + Quote(Path.Combine(project, @"astral_chain\get_python.ps1")),
+                null);
         }
 
         Dictionary<string, string> SetupEnv()

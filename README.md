@@ -36,6 +36,14 @@ Known issues are listed under [Known issues](#known-issues).
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-10-22**
+
+- **Python no longer needs to be installed** (issue #3). Setup downloads its own Python 3.14 into `tools\python`
+  (pinned, checked by SHA-256), so the version installed on your PC, if any, does not matter. An existing `.venv`
+  that works is kept.
+- **Setup from a ZIP download** stopped at "unreviewed Maxwell translator identity" (issue #2): a file check
+  depended on line endings. Fixed; confirmed by the reporter.
+
 **2026-10-21**
 
 - **Keyboard controls can be changed**: **Controls** in the launcher (click a key, press the new one).
@@ -73,10 +81,9 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 - Windows 10 or 11, 64-bit.
 - A GPU with Vulkan 1.3. Developed on an NVIDIA RTX 4090; other GPUs are untested.
-- [Python](https://www.python.org/downloads/windows/) 3.12 or newer, with the `py` launcher (the installer default).
 - About **35 GB** free during setup. About 11 GB stays afterwards.
-- An internet connection for the one-time setup. It downloads Zig, glslang and NSTool at pinned versions,
-  checked by SHA-256.
+- An internet connection for the one-time setup. It downloads Python, Zig, glslang and NSTool at pinned
+  versions, checked by SHA-256. No Python install is needed.
 - Your own dump:
   - the **base game** (title ID `01007300020FA000`), as an XCI or an NSP;
   - the **v1.0.1 update** NSP. Exactly v1.0.1 is required;
@@ -211,7 +218,7 @@ happens, then attach the zip that **Create report** makes. Otherwise include `bu
 | `astral_chain/patches/` | Code patches of this project (pchtxt) |
 | `third_party/` | Vendored sources: LASRecomp, Vulkan-Headers, VulkanMemoryAllocator, Dynamic-FPS patch |
 | `docs/` | How it works, troubleshooting, development notes |
-| `tools/` | *(created by setup)* Zig, glslang, NSTool |
+| `tools/` | *(created by setup)* Python, Zig, glslang, NSTool |
 | `game/` | *(created by setup)* your extracted update code, metadata and `romfs.bin` |
 | `build/` | *(created by setup)* the compiled game and its shader cache |
 | `userdata/` | *(created by setup)* saves, account profile, setup choices, launcher settings (`launcher.ini`) |

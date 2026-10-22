@@ -4,7 +4,7 @@
 
 | Message | What to do |
 | --- | --- |
-| `Python 3.12 or newer is required` | Install Python from python.org with the default options (the `py` launcher), then press **Install game** in the launcher (or run `setup.cmd`) again. |
+| `Python: the download does not match its pinned SHA-256`, or the Python download fails | Check the internet connection (setup downloads Python from api.nuget.org) and run setup again. |
 | `Setup needs about 35 GB free` | Free space on the drive that holds this folder, or move the folder to another drive. |
 | `... does not match its pinned SHA-256` | The download was damaged or changed upstream. Run setup again. If it repeats, open an issue. |
 | `nstool.exe failed` while reading a file | Check that `prod.keys` is from a console on a firmware at least as new as the game requires, and that the file is a complete dump. |
