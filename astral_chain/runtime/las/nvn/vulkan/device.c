@@ -616,6 +616,11 @@ static NvnTexture *g_last_presented;
 
 const float *vk_shot_crop(void) { return g_shot_crop; }
 
+// nvnWindowSetCrop: the part of the window texture that is shown. Astral Chain in handheld mode (AC_HANDHELD=1)
+// renders 1280x720 into the top left of its 1600x900 window textures and crops to it. An empty crop: the whole texture.
+static int g_present_crop[4];
+void backend_present_crop(const int crop[4]) { memcpy(g_present_crop, crop, sizeof g_present_crop); }
+
 void backend_present(NvnTexture *t);
 void backend_represent(void) {
     if (g_last_presented) backend_present(g_last_presented);
@@ -639,10 +644,19 @@ void backend_present(NvnTexture *t) {
         // Astral Chain: the game image fills the window at its own aspect ratio (letterboxed), rendered at the
         // game's resolution (render scale 1). No widescreen crop, overlay menu or dynamic resolution.
         double dw = g_vk.sc_extent.width, dh = g_vk.sc_extent.height, gw = t->width ? t->width : dw, gh = t->height ? t->height : dh;
+        float uv[4] = {0, 0, 1, 1};
+        const int *cr = g_present_crop;
+        if (t->width && t->height && cr[2] > 0 && cr[3] > 0 && cr[0] >= 0 && cr[1] >= 0 &&
+            cr[0] + cr[2] <= t->width && cr[1] + cr[3] <= t->height) {
+            uv[0] = (float)cr[0] / t->width; uv[1] = (float)cr[1] / t->height;
+            uv[2] = (float)cr[2] / t->width; uv[3] = (float)cr[3] / t->height;
+            gw = cr[2]; gh = cr[3];
+        }
+        memcpy(g_shot_crop, uv, sizeof uv);
         double k = dw / gw < dh / gh ? dw / gw : dh / gh, vw = gw * k, vh = gh * k, vx = (dw - vw) / 2, vy = (dh - vh) / 2;
         renderer_set_scale(1.0f, 1.0f);
         VkCommandBuffer cb = vk_cmd();
-        float pv[8] = {renderer_origin_lower_left() ? 1.0f : 0.0f, 0, 0, 0, 0, 0, 1, 1};
+        float pv[8] = {renderer_origin_lower_left() ? 1.0f : 0.0f, 0, 0, 0, uv[0], uv[1], uv[2], uv[3]};
         vk_present_draw(cb, b, (float)vx, (float)vy, (float)vw, (float)vh, pv);
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("LARECOMP_WINDOW_SHOT") ? atol(getenv("LARECOMP_WINDOW_SHOT")) : 0;

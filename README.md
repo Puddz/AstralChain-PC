@@ -47,6 +47,9 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   drawn before the decoded picture reached the GPU, for up to 8 frames. Textures written by the CPU are now
   checked every frame. In a recorded start, the title movie had about 50 green frames before and none after.
   *Not yet confirmed in play; the tutorial clips are untested.*
+- **Handheld mode** (Settings > Display, off by default; issue #4): the game runs as on a Switch out of its dock
+  and renders at 1280x720 instead of 1600x900 (36% fewer pixels), for GPUs that cannot hold 60 fps. The picture
+  is scaled to the window as before. *Its frame rate gain was not measured: the test PC's GPU is not the limit.*
 
 **2026-10-21**
 
@@ -130,7 +133,7 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 | **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
 | **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
 | **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
-| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, presentation mode, texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window |
+| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, presentation mode, handheld mode (1280x720), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window |
 | **Controls** | The keyboard keys for every button, stick direction and the D-pad. Click a key, then press the new one; a key already in use swaps places |
 | **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
 

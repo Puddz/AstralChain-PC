@@ -129,6 +129,7 @@ enum {
 void backend_init(void);
 void backend_execute(uint64_t handle);            // run a recorded command list
 void backend_present(NvnTexture *tex);            // show a texture in the window
+void backend_present_crop(const int crop[4]);     // the window's crop (x, y, width, height) for the next present
 void backend_texture_destroyed(NvnTexture *tex);
 void backend_texture_created(NvnTexture *tex);  // (initialized: may be uploaded before its first use)
 void backend_pool_written(uint64_t addr, uint64_t size);

@@ -52,6 +52,7 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_VK_PROF=1` | Per-2-s CPU/GPU breakdown, texture upload and tracking counters, vertex cache stats |
 | `LARECOMP_GPUPROF_AT=<frame>` / `LARECOMP_GPUPROF_DRAWS=1` | GPU time per pass, or per draw, of a frame |
 | `LARECOMP_GPUPROF_AUTO=1` | Also profile the frame after each frame slower than 250 ms (up to 12; profiling makes a frame slow) |
+| `AC_HANDHELD=1` | (launcher: *Handheld mode*) The game is told it runs handheld (operation mode 0, normal performance mode; `app_window.h`): it renders 1280x720 into its 1600x900 window textures and crops to it (`nvnWindowSetCrop`, honoured by the present in `device.c`) |
 | `AC_CUTSCENE_FPS=30` | Cutscenes as in the unmodified game: its fixed-step timer path at 30 FPS (default: 60 FPS, measured step) |
 | `AC_PROFILE=1` (+ `AC_PROFILE_THREAD=N`) | CPU sampling profiler. Report: `python -m astral_chain.profile_report <run>` |
 | `AC_PARALLEL_STATS=1` | Guest thread scheduling stats |

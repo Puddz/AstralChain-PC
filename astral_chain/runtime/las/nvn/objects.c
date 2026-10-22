@@ -675,7 +675,10 @@ NVN(nvnQueueAcquireTexture) {
 NVN(nvnQueuePresentTexture) {
     NvnWindow *w = HOST(NvnWindow, A(1));
     int i = (int)A(2);
-    if (i >= 0 && i < w->num) backend_present(HOST(NvnTexture, w->textures[i]));
+    if (i >= 0 && i < w->num) {
+        backend_present_crop(w->crop);  // (handheld mode: a 1280x720 crop of the 1600x900 window textures)
+        backend_present(HOST(NvnTexture, w->textures[i]));
+    }
     // Astral Chain: a Switch display refreshes at 60 Hz and the window shows a new image at most every
     // `interval` refreshes; the runtime parks the presenting guest thread until that vsync (nvn_hle.h).
     extern void nvn_present_pace(int interval);

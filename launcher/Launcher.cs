@@ -92,6 +92,10 @@ namespace AstralChainLauncher
                 "the game when the desktop is busy. Immediate: tearing, lowest latency.", OptKind.Choice, "mailbox",
                 OptTarget.Game, v => v == "mailbox" ? "" : "LARECOMP_VK_PRESENT=" + v);
             present.Choices = new[] { "mailbox|Mailbox (default)", "fifo|Vsync (FIFO)", "immediate|Immediate" };
+            Add("handheld", "Display", "Handheld mode: render at 1280x720",
+                "The game runs as on a Switch out of its dock: it renders at 1280x720 instead of 1600x900, for GPUs " +
+                "that cannot hold 60 fps. The picture is scaled to the window as before. Applies the next time you press Play.",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_HANDHELD=1"));
             Add("gpu_warm", "Shaders and performance", "Compile shaders for your GPU before playing",
                 "Takes about 10 s the first time and after driver updates; removes most shader pauses in play.",
                 OptKind.Check, "1", OptTarget.Setup, When("0", "AC_GPU_WARM=0"));

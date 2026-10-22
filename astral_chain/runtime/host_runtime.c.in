@@ -1192,6 +1192,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    reply_value(buffer,&request,count);c->x[0]=0;return;
   }
   if(kind==SESSION_APM && request.command==1) {
+   app_modes_load();
    reply_value(buffer,&request,app_performance_mode); c->x[0]=0; return;
   }
   if(kind==SESSION_APM_SESSION && request.command<=1 && request.argument_size>=4) {
@@ -1265,6 +1266,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    reply_value(buffer,&request,app_focus);c->x[0]=0;return;
   }
   if(kind==SESSION_COMMON_STATE && (request.command==5 || request.command==6)) {
+   app_modes_load();
    reply_value(buffer,&request,request.command==5 ? app_operation_mode : app_performance_mode);c->x[0]=0;return;
   }
   if(kind==SESSION_LM && request.command==0 && request.send_pid) {

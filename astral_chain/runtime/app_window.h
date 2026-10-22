@@ -43,6 +43,17 @@ static void app_enqueue(unsigned message) {
 static void app_set_focus(unsigned focus) {
  if(app_focus!=focus) {app_focus=focus;app_enqueue(15);printf("WINDOW focus=%u\n",focus);fflush(stdout);}
 }
+/* AC_HANDHELD=1: the game is told it runs handheld (operation mode 0, normal performance mode), as on a Switch out of
+ * its dock: it then renders at its handheld resolution, 1280x720, instead of the docked 1600x900. */
+static void app_modes_load(void) {
+ static int done;char v[4];
+ if(done) return;
+ done=1;
+ if(GetEnvironmentVariableA("AC_HANDHELD",v,sizeof v)==1 && v[0]=='1') {
+  app_operation_mode=0;app_performance_mode=0;
+  printf("[app] handheld mode (AC_HANDHELD=1)\n");fflush(stdout);
+ }
+}
 static void app_set_modes(unsigned operation,unsigned performance) {
  if(operation>1 || performance>1) boundary("invalid-application-mode",&state,state.pc);
  if(app_operation_mode!=operation) {
