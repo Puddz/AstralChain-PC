@@ -372,6 +372,7 @@ void *nvn_host_window(void) {
  SetWindowTextW(app_window,L"Astral Chain (native)");
  RECT r={0,0,1600,900};AdjustWindowRect(&r,WS_OVERLAPPEDWINDOW,FALSE);
  SetWindowPos(app_window,NULL,0,0,r.right-r.left,r.bottom-r.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+ {char v[8];DWORD n=GetEnvironmentVariableA("AC_FULLSCREEN",v,sizeof(v));if(n && n<sizeof(v) && atoi(v)) app_set_fullscreen(app_window,1);}
  app_pump();
  return app_window;
 }

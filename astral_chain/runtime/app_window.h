@@ -77,6 +77,26 @@ static DWORD WINAPI app_exit_watchdog(LPVOID unused) {
  for(int i=0;i<50 && GetTickCount64()-app_save_write_tick<1000;i++) Sleep(100);
  fflush(stdout);fflush(stderr);TerminateProcess(GetCurrentProcess(),0);return 0;
 }
+/* Fullscreen: a borderless window covering its monitor (no display mode change; the swapchain follows the window
+ * size and the picture keeps its aspect ratio, device.c). F11 or Alt+Enter toggles it (unless the key is a game key in
+ * the launcher's Controls); AC_FULLSCREEN=1 starts in it (nvn_host_window). */
+static int app_fullscreen;static WINDOWPLACEMENT app_windowed_place={sizeof(WINDOWPLACEMENT)};
+static void app_set_fullscreen(HWND window,int on) {
+ if(!window || on==app_fullscreen) return;
+ if(on) {
+  MONITORINFO info={sizeof info};
+  if(!GetWindowPlacement(window,&app_windowed_place) || !GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&info)) return;
+  SetWindowLongPtrW(window,GWL_STYLE,(GetWindowLongPtrW(window,GWL_STYLE)&~WS_OVERLAPPEDWINDOW)|WS_POPUP);
+  SetWindowPos(window,HWND_TOP,info.rcMonitor.left,info.rcMonitor.top,info.rcMonitor.right-info.rcMonitor.left,
+   info.rcMonitor.bottom-info.rcMonitor.top,SWP_FRAMECHANGED|SWP_NOOWNERZORDER);
+ } else {
+  SetWindowLongPtrW(window,GWL_STYLE,(GetWindowLongPtrW(window,GWL_STYLE)&~WS_POPUP)|WS_OVERLAPPEDWINDOW);
+  SetWindowPlacement(window,&app_windowed_place);
+  SetWindowPos(window,NULL,0,0,0,0,SWP_FRAMECHANGED|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOOWNERZORDER);
+ }
+ app_fullscreen=on;
+ printf("[app] %s\n",on ? "fullscreen" : "windowed");
+}
 static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,LPARAM lparam) {
  /* Dragging by the title bar is done here: Windows' own move loop runs inside this call, on the game's main thread
   * and under the kernel lock, and held the whole game (sound included) for as long as the button was down. */
@@ -112,6 +132,12 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
   return 0;
  }
  if((message==WM_KEYDOWN || message==WM_KEYUP || message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) && wparam<256) {
+  hid_keys_load();
+  int alt_enter=wparam==VK_RETURN && (lparam&(1<<29)) && !hid_key_mapped[VK_MENU];
+  if((wparam==VK_F11 && !hid_key_mapped[VK_F11]) || alt_enter) {
+   if((message==WM_KEYDOWN || message==WM_SYSKEYDOWN) && !(lparam&(1<<30))) app_set_fullscreen(window,!app_fullscreen);
+   return 0;
+  }
   if(app_input_focus && app_focus==1 && !app_exit_requested) {
    int down=message==WM_KEYDOWN || message==WM_SYSKEYDOWN;
    hid_keys[wparam]=down;keyboard_event((unsigned)wparam,lparam,down);

@@ -87,6 +87,10 @@ namespace AstralChainLauncher
             Add("cut_carry", "Sound", "Keep cutscene cuts on time at 60 fps",
                 "Off: cuts end as in the original code, each up to a frame early at 60 fps (sound drifts ahead).",
                 OptKind.Check, "1", OptTarget.Game, When("0", "AC_CUT_CARRY=0"));
+            Add("fullscreen", "Display", "Start in fullscreen",
+                "The game window covers the whole screen, without borders (the display mode is not changed). " +
+                "F11 or Alt+Enter switches between fullscreen and a window at any time.",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_FULLSCREEN=1"));
             var present = Add("present", "Display", "Presentation mode",
                 "Mailbox: no tearing, the game paces itself (default). Vsync (FIFO): waits for the display, can slow " +
                 "the game when the desktop is busy. Immediate: tearing, lowest latency.", OptKind.Choice, "mailbox",

@@ -42,6 +42,8 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   play; the next Play then redid all of "Preparing shaders" and "Compiling for your GPU". Now only what was added
   since the last time is done. On the test PC, with about 15% new records, the wait went from about 3 s to under
   1 s (the saving is larger on slower PCs). A new version still prepares everything once.
+- **Fullscreen** (issue #5): **F11** or **Alt+Enter** switches between a window and borderless fullscreen on the
+  window's monitor (the display mode is not changed). **Settings > Display > Start in fullscreen** starts in it.
 
 **2026-10-22**
 
@@ -140,7 +142,7 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 | **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
 | **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
 | **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
-| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, presentation mode, handheld mode (1280x720), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window |
+| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, presentation mode, handheld mode (1280x720), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window |
 | **Controls** | The keyboard keys for every button, stick direction and the D-pad. Click a key, then press the new one; a key already in use swaps places |
 | **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
 
@@ -158,6 +160,8 @@ Default keys (change them with **Controls**):
 | Left stick | W A S D |
 | Right stick | T F G H |
 | Left / right stick press | 1 / 2 |
+
+F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
 
 ### Texture compression (BC7)
 
