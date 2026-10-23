@@ -36,6 +36,19 @@ Known issues are listed under [Known issues](#known-issues).
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-10-24**
+
+- **Flickering light in the opening helicopter cutscene**: the whole picture jumped between two brightnesses. The
+  game asks for depth clamping, which was ignored, so an effect card it places right in front of the camera was
+  cut away in some frames and drawn in others. Depth clamping is now on. On a test save, that stretch of the
+  cutscene went from 150-200 brightness jumps per 500 frames to 1-2 (camera cuts). The cutscene now stays at the
+  darker of the two brightnesses. *Not yet confirmed in play.*
+- **Setup after picking the wrong file**: once a wrong base game or update had been picked, every retry failed with
+  the same "belongs to program" message. Setup now extracts again for any other file, and says which file to pick.
+- **Experimental features on a separate branch**: [`upscaling`](https://github.com/Puddz/AstralChain-PC/tree/upscaling)
+  has an AMD FSR 1 upscaling option, render resolutions from 1920x1080 to 3840x2160, and ultrawide sizes (21:9 and
+  32:9). They are not part of this version yet; see that branch's README.
+
 **2026-10-23**
 
 - **Shorter wait before the game after a play session.** The game records the shader combinations it meets in
@@ -268,6 +281,8 @@ their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
   style of the game, without official artwork. The default (`1-visor.jpg`) was chosen by the project's owner; the
   other five and the icon were made with OpenAI Codex's image generation for this project.
 - [AC-Recomp](https://github.com/swaymun/AC-Recomp): the macOS recompilation, whose setup flow inspired this one.
+- [AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT): the EASU and RCAS
+  shaders of the FSR 1 path (through LASRecomp), used by the experimental upscaling option.
 - [NSTool](https://github.com/jakcron/nstool), [Zig](https://ziglang.org/),
   [glslang](https://github.com/KhronosGroup/glslang), [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers),
   [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator),

@@ -11,6 +11,27 @@
 | [bc7enc](https://github.com/richgel999/bc7enc) | `third_party/bc7enc/` (`bc7enc.c`, `bc7enc.h`; the optional BC7 texture preparation) | commit `f66c2e489b07138f2673a2fb3d27c1aa1d565c48` | MIT or public domain, `third_party/bc7enc/LICENSE` |
 | [AstralChain-Dynamic-FPS](https://github.com/yogesh1239/AstralChain-Dynamic-FPS) | `third_party/AstralChain-Dynamic-FPS/1.0.1.pchtxt` (`mods/Dynamic-60fps/exefs/1.0.1.pchtxt`) | v1.1.1, commit `79965b4df077f64b27b74456d0db88c6afac5bbe` | MIT, `third_party/AstralChain-Dynamic-FPS/LICENSE` |
 
+### AMD FidelityFX Super Resolution 1
+
+The EASU and RCAS shaders in `astral_chain/runtime/las/nvn/vulkan/shaders.c` (from LASRecomp) are adapted from
+[AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR):
+
+> Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+> documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+> the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+> permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+> the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+> THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+> TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
 The Maxwell shader translator is LASRecomp's `runtime/nvn/maxwell/translate.c` with reviewed changes applied at
 build time by `astral_chain/shader_build.py`. The vendored file itself is unchanged.
 
