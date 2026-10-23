@@ -8,6 +8,9 @@
  *
  *   shader_precompile <shader folder> <threads> [<records file>...]
  *
+ * AC_PRECOMPILE_FROM=<bytes> (astral_chain/shader_cache.py, when only the last records file grew since a complete
+ * run): only the records after its first <bytes> are done (the rest, and every shader, are in the cache already).
+ *
  * Output: progress lines, then "done <variants matched> <variants without code> <compiled> <cached> <failed>". */
 #include <pthread.h>
 #include <stdatomic.h>
@@ -173,12 +176,13 @@ int main(int argc, char **argv) {
     maxwell_gmem_base = 0x7200000000ull;  // (as the runtime: HEAP_BASE, HEAP_MAX)
     maxwell_gmem_size = 0x100000000ull;
     int matched = 0, missing = 0;
-    for (int a = 3; a < argc; a++) {
+    long from = getenv("AC_PRECOMPILE_FROM") ? atol(getenv("AC_PRECOMPILE_FROM")) : -1;  // (only what was added)
+    for (int a = from >= 0 ? argc - 1 : 3; a < argc; a++) {
         size_t size = 0;
         uint8_t *data = read_file(argv[a], &size);
         uint32_t magic = 0;
         if (!data || size < 4 || (memcpy(&magic, data, 4), magic != WARM_MAGIC)) { free(data); continue; }
-        for (size_t off = 4; off + sizeof(WarmRec) <= size; off += sizeof(WarmRec)) {
+        for (size_t off = from > 4 ? (size_t)from : 4; off + sizeof(WarmRec) <= size; off += sizeof(WarmRec)) {
             uint32_t word;
             memcpy(&word, data + off, 4);
             if (word == WARM_MAGIC) { off += 4 - sizeof(WarmRec); continue; }  // (a session's header, see exec.c warm_load)
@@ -204,8 +208,8 @@ int main(int argc, char **argv) {
     // that the vertex shader leaves out; assume none are (each vertex shader is written for its fragment shaders).
     // Compute: exec.c compute_program (key: GLSL only).
     int translated = 0;
-    add_job("#version 460\nvoid main() {}\n", STAGE_FRAGMENT, false);  // (programs without a fragment shader: depth only)
-    for (int i = 0; i < ncodes; i++) {
+    if (from < 0) add_job("#version 460\nvoid main() {}\n", STAGE_FRAGMENT, false);  // (programs without a fragment shader: depth only)
+    for (int i = 0; i < ncodes && from < 0; i++) {
         Code *c = &codes[i];
         ShaderKey k = {0};
         k.glsl = 1;

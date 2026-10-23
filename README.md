@@ -36,6 +36,13 @@ Known issues are listed under [Known issues](#known-issues).
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-10-23**
+
+- **Shorter wait before the game after a play session.** The game records the shader combinations it meets in
+  play; the next Play then redid all of "Preparing shaders" and "Compiling for your GPU". Now only what was added
+  since the last time is done. On the test PC, with about 15% new records, the wait went from about 3 s to under
+  1 s (the saving is larger on slower PCs). A new version still prepares everything once.
+
 **2026-10-22**
 
 - **Python no longer needs to be installed** (issue #3). Setup downloads its own Python 3.14 into `tools\python`
@@ -183,7 +190,7 @@ keeps running but takes no keyboard input.
 - **Shaders.** Before the game starts the first time, setup translates all of the game's shaders ("Preparing
   shaders", about 20 s on a 16-thread CPU), then compiles them for your GPU and driver ("Compiling for your GPU"),
   together with the render-state combinations recorded so far. Later launches skip both unless something changed
-  (a game update, new recorded combinations, or a new graphics driver). A combination never seen before is linked
+  (a game update or a new graphics driver); new combinations recorded in play are done alone at the next launch. A combination never seen before is linked
   from the compiled shaders when first drawn, without a long pause. The cache is in `build\game\cache\`.
 
 ### Safety

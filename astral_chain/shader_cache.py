@@ -160,12 +160,18 @@ def precompile(tool: Path, shaders: Path, game_build: Path, glslang: Path) -> No
     # Nothing new since the last complete run (same tool, same records): skip the 2-second check of the cache
     stamp = game_build/'cache'/'spirv'/'precompiled.txt'
     state = _precompile_state(tool.parent.name, game_build)
-    if stamp.is_file() and stamp.read_text(encoding='ascii') == state:
+    done = stamp.read_text(encoding='ascii') if stamp.is_file() else ''
+    if done == state:
         return
+    env = dict(os.environ, AC_GLSLANG=str(glslang))
+    # Only programs.bin grew since (the game appends what it meets in play): only its new records are done
+    done, now = done.split(' '), state.split(' ')
+    if len(records) == 2 and len(done) == len(now) == 3 and done[:2] == now[:2] and done[2].isdigit() \
+            and 4 <= int(done[2]) <= int(now[2]):
+        env['AC_PRECOMPILE_FROM'] = done[2]
     for leftover in (game_build/'cache'/'spirv').glob('*.spv.*'):  # (stores whose rename failed, before spirv_cache.c retried)
         leftover.unlink(missing_ok=True)
     threads = max(1, (os.cpu_count() or 4) - 2)
-    env = dict(os.environ, AC_GLSLANG=str(glslang))
     process = subprocess.Popen([str(tool), str(shaders), str(threads), *records], cwd=game_build, env=env,
                                stdout=subprocess.PIPE, text=True)
     total = 0
@@ -232,17 +238,39 @@ def merge_records(game_build: Path, dry_run=False) -> dict:
     return sizes
 
 
-def _warm_state(game_build: Path, sizes=None) -> str:
-    """The build and record part of the warm-up's state (exec.c adds the GPU, driver and shader library use)."""
+def _warm_state(game_build: Path, sizes=None, record_sizes=None) -> str:
+    """The build and record part of the warm-up's state (exec.c adds the GPU, driver and shader library use).
+    record_sizes: the sizes of programs.bin and pipelines.bin to put in it instead of the current ones."""
     sizes = sizes or {}
     fingerprint = game_build/'build-fingerprint.txt'
     parts = [fingerprint.read_text(encoding='ascii').strip() if fingerprint.is_file() else '']
-    for name in ('programs.bin', 'pipelines.bin'):
+    for i, name in enumerate(('programs.bin', 'pipelines.bin')):
         path = game_build/'cache'/name
-        parts.append(f'{sizes.get(name) or (path.stat().st_size if path.is_file() else 0)}')
+        size = sizes.get(name) or (path.stat().st_size if path.is_file() else 0)
+        parts.append(f'{record_sizes[i] if record_sizes else size}')
     if os.environ.get('LARECOMP_GPL') == '0':
         parts.append('no-gpl')  # (asked for; the GPU's own support is in the part exec.c adds)
     return ' '.join(parts)
+
+
+def _warmed_record_sizes(game_build: Path):
+    """The sizes programs.bin and pipelines.bin had at the last warm-up if it was of this build and they only grew
+    since (the game appends what it meets in play), else None. exec.c then compiles only the records added since,
+    if the rest of that warm-up's state (GPU, driver) is still the same."""
+    warm = game_build/'cache'/'gpu_warm.txt'
+    if not warm.is_file():
+        return None
+    done = warm.read_text(encoding='utf-8', errors='replace').split(' | ')[0].split(' ')
+    now = _warm_state(game_build).split(' ')
+    if len(done) != len(now) or done[0] != now[0] or done[3:] != now[3:]:
+        return None
+    try:
+        old = (int(done[1]), int(done[2]))
+    except ValueError:
+        return None
+    if not all(0 < o <= int(n) for o, n in zip(old, now[1:3])):
+        return None
+    return old
 
 
 def status(game_build: Path) -> str:
@@ -271,12 +299,16 @@ def forget(game_build: Path) -> None:
 def warm_gpu(game_build: Path, shaders: Path, glslang: Path) -> None:
     """Compile for this GPU and driver before the game (the game's executable in its AC_GPU_WARM mode, exec.c
     vk_gpu_warm): shader libraries for every shader, the recorded programs and pipelines, into the driver's cache and
-    cache/vk_pipelines.bin. It skips itself when nothing changed (game build, records, GPU, driver)."""
+    cache/vk_pipelines.bin. It skips itself when nothing changed (game build, records, GPU, driver), and compiles
+    only the records added since when only they changed."""
     exe = game_build/'round-00'/'trace.exe'
     if not exe.is_file():
         return
     env = dict(os.environ, AC_GPU_WARM=str(shaders.resolve()), AC_GPU_WARM_STATE=_warm_state(game_build),
                AC_GLSLANG=str(glslang))
+    old = _warmed_record_sizes(game_build)
+    if old:
+        env.update(AC_GPU_WARM_PREV=_warm_state(game_build, record_sizes=old), AC_GPU_WARM_FROM=f'{old[0]} {old[1]}')
     process = subprocess.Popen([str(exe)], cwd=game_build, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                text=True, errors='replace')
     shown = False

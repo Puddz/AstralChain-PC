@@ -38,7 +38,9 @@
     without compiling, and its optimized version replaces it once built in the background;
   - before the game starts, the launcher runs the game's executable in a warm-up mode (`AC_GPU_WARM`) that builds all
     of that ahead of time for the GPU and driver in use: a shader library for every shader, and the recorded
-    programs and pipelines. The driver keeps its Vulkan cache per executable name, so the game's own cache fills;
+    programs and pipelines. The driver keeps its Vulkan cache per executable name, so the game's own cache fills.
+    When only the record files grew since (the game appends to them in play), only the added records are done
+    (`AC_GPU_WARM_FROM`; the shader check likewise, `AC_PRECOMPILE_FROM`);
   - GPU memory written by the CPU is tracked with Windows write-watch.
 - **Audio.** The game mixes its own audio. The runtime plays the PCM it outputs through Windows waveOut.
 - **Saves.** They live in `userdata/saves/<title>/<profile>/`. The runtime exposes them to the game as its save
