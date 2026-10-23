@@ -42,4 +42,8 @@
 0040F1D4 1F2003D5 // nop (was mov w8,#0x320)
 0040F1D8 1F2003D5 // nop (was csel w1,w19,w8,eq)
 0040F1DC 1F2003D5 // nop (was csel w2,w22,w20,eq)
+// main+0x9A30A0: a camera's size and aspect (called with 1280x720). With an AC_RESOLUTION wider than 16:9 the aspect
+// is that resolution's, so the 3D view widens (the site is the one theboy181's "21:9" mod changes, there to a fixed
+// 2.375; github.com/theboy181/switch-ptchtxt-mods). Otherwise the original width / height.
+009A30BC 611600D4 // svc #0xB3: s1 = aspect (was fdiv s1,s3,s1)
 @stop

@@ -11,7 +11,8 @@
    - `cutscene-catchup`: cutscenes may take larger steps after a stall, so they stay in sync with their audio;
    - `resolution`: the docked render size, the dynamic resolution levels and the size of the render targets' memory
      pool come from the runtime (svc #0xB3), so `AC_RESOLUTION` can change them at launch. Without it they are the
-     game's own values.
+     game's own values. A size wider than 16:9 (21:9, 32:9) also sets the 3D cameras' aspect, so the view widens;
+     the HUD keeps its 16:9 layout in the middle.
 3. **Translation** (`native_trace.py`, with LASRecomp's `lifter.py`). Every instruction of the executable segments
    is lifted from ARM64 to C, page by page. A page function `page_XXXX(Cpu *c)` dispatches on the guest PC. The
    play build uses three options:

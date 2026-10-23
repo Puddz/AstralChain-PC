@@ -99,10 +99,13 @@ namespace AstralChainLauncher
             var resolution = Add("resolution", "Display", "Render resolution (experimental)",
                 "The size the game draws its picture at. 1600x900 is the Switch's docked resolution (default, with " +
                 "the game's own dynamic resolution). Larger sizes are sharper and need a faster GPU; 3840x2160 is " +
-                "the largest. Handheld mode keeps 1280x720. Applies the next time you press Play.", OptKind.Choice,
+                "the largest. The 21:9 and 32:9 sizes are for ultrawide screens: the 3D view gets wider and the HUD " +
+                "stays 16:9 in the middle (untested on a real ultrawide monitor). Handheld mode keeps 1280x720. " +
+                "Applies the next time you press Play.", OptKind.Choice,
                 "1600x900", OptTarget.Game, v => v == "1600x900" ? "" : "AC_RESOLUTION=" + v);
             resolution.Choices = new[] { "1600x900|1600x900 (default)", "1920x1080|1920x1080", "2560x1440|2560x1440",
-                "3840x2160|3840x2160" };
+                "3840x2160|3840x2160", "2560x1080|2560x1080 (21:9)", "3440x1440|3440x1440 (21:9)",
+                "3840x1080|3840x1080 (32:9)", "5120x1440|5120x1440 (32:9)" };
             var upscaler = Add("upscaler", "Display", "Upscaling (experimental)",
                 "How the picture is enlarged to a bigger window or screen. Smooth: plain scaling (default). " +
                 "AMD FSR 1: edge-aware upscaling and sharpening, crisper on 1440p and 4K screens; works on any GPU. " +
