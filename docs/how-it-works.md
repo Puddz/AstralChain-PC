@@ -6,9 +6,12 @@
    plus `rtld` and `sdk`, which are byte-identical to the base game's. Its RomFS is a patch over the base game's.
    NSTool applies it (`--basenca`), and `romfs_tool.c` packs the merged tree into one read-only image,
    `game/romfs.bin`. The game reads that image at run time.
-2. **Patches.** Two pchtxt patches are applied to `main` before translation:
+2. **Patches.** Three pchtxt patches are applied to `main` before translation:
    - Dynamic-FPS: the measured frame time drives the game step, and the frame cap is 60;
-   - `cutscene-catchup`: cutscenes may take larger steps after a stall, so they stay in sync with their audio.
+   - `cutscene-catchup`: cutscenes may take larger steps after a stall, so they stay in sync with their audio;
+   - `resolution`: the docked render size, the dynamic resolution levels and the size of the render targets' memory
+     pool come from the runtime (svc #0xB3), so `AC_RESOLUTION` can change them at launch. Without it they are the
+     game's own values.
 3. **Translation** (`native_trace.py`, with LASRecomp's `lifter.py`). Every instruction of the executable segments
    is lifted from ARM64 to C, page by page. A page function `page_XXXX(Cpu *c)` dispatches on the guest PC. The
    play build uses three options:

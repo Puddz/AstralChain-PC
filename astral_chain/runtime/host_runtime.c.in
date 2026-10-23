@@ -97,7 +97,31 @@ static uint64_t heap_base=0x7200000000ull;
 static int heap_gpu_pinned;
 #define HEAP_BASE heap_base
 #define HEAP_LIMIT 0x100000000ull
-#define MEMORY_BUDGET (3ull*1024*1024*1024)
+/* AC_RESOLUTION=<width>x<height> (svc #0xB3, astral_chain/patches/resolution-1.0.1.pchtxt): the docked render size.
+ * The game's render targets come from one fixed pool (310 MB at 1600x900). It holds 1920x1080 (and the 1062p mod's
+ * 1888x1062) but not 2400x1350, so the targets take at most ~157 bytes per pixel: a larger size gets 160 bytes more
+ * per extra pixel, and the guest memory budget grows by the same. The heap has to stay within the 4 GB the renderer
+ * mirrors for shader global memory (HEAP_MAX; past it shaders read zeros): at most 8.6 million pixels (3840x2160 and
+ * a little more), larger sizes are scaled down to that. */
+static int res_w=-1,res_h;
+static uint64_t res_pool;
+static void res_config(void) {
+ if(res_w>=0) return;
+ char v[32];DWORD n=GetEnvironmentVariableA("AC_RESOLUTION",v,sizeof(v));int w=0,h=0;
+ res_w=1600;res_h=900;res_pool=0x13600000ull;
+ if(n && n<sizeof(v) && sscanf(v,"%dx%d",&w,&h)==2 && w>=640 && w<=7680 && h>=360 && h<=4320) {
+  res_w=w&~1;res_h=h&~1;
+  if((uint64_t)res_w*res_h>8640000ull) {
+   double k=sqrt(8640000.0/((double)res_w*res_h));res_w=(int)(res_w*k)&~1;res_h=(int)(res_h*k)&~1;
+  }
+  uint64_t pixels=(uint64_t)res_w*res_h;
+  if(pixels>1440000ull) res_pool=(0x13600000ull+(pixels-1440000ull)*160+0xfffff)&~0xfffffull;
+  printf("[app] render resolution %dx%d (AC_RESOLUTION), render target pool %llu MB\n",res_w,res_h,
+         (unsigned long long)(res_pool>>20));fflush(stdout);
+ }
+}
+static uint64_t memory_budget(void) {res_config();return 3ull*1024*1024*1024+(res_pool-0x13600000ull);}
+#define MEMORY_BUDGET memory_budget()
 static uint64_t heap_size;
 static int heap_reserved;
 enum { SESSION_SM=1, SESSION_LM, SESSION_LOGGER, SESSION_APM,
@@ -583,6 +607,29 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    pending[slot].track=0;cut_ends++;cut_carried+=rest;
   }
   return;
+ }
+ if(imm==0xB3) {
+  /* svc #0xB3 (astral_chain/patches/resolution-1.0.1.pchtxt): the docked render resolution (res_config). The patched
+   * site (by its address in main, loaded at 0x7000010000) says which register gets what. Without AC_RESOLUTION: the
+   * game's own 1600x900 and dynamic resolution levels 1440x810 and 1280x810; with it, that size at every level. */
+  res_config();
+  int custom=res_w!=1600 || res_h!=900;
+  int32_t w=res_w,h=res_h,l1w=custom?w:1440,l1h=custom?h:810,l2w=custom?w:1280;
+  uint64_t at=pc-0x7000010000ull;
+  int docked=(uint32_t)c->x[0]==(uint32_t)w;  /* (level sites: w0 = the render target's width) */
+  #define SETW(r,value) (c->x[r]=(uint32_t)(value))
+  switch(at) {
+   case 0x4328C0:SETW(8,w);return;
+   case 0x4328C8:SETW(8,h);return;
+   case 0x40D5E4:case 0x40FB04:SETW(9,w);return;
+   case 0x40D5F0:case 0x40FB14:SETW(9,h);return;
+   case 0x40F184:SETW(1,docked?w:(uint32_t)c->x[19]);SETW(2,docked?h:(uint32_t)c->x[20]);return;
+   case 0x40F1A4:SETW(20,630);SETW(22,l1h);SETW(1,docked?l1w:1024);SETW(2,docked?l1h:630);return;
+   case 0x40F1D0:SETW(1,docked?l2w:800);SETW(2,docked?l1h:630);return;
+   case 0x40E0B0:SETW(8,res_pool);return;  /* the render target pool's size */
+  }
+  #undef SETW
+  boundary("svc-b3-site",c,pc);
  }
  app_pump();
  if(++syscalls>SYSCALL_LIMIT) boundary("svc-budget",c,pc);

@@ -49,7 +49,8 @@ ROMFS_TOOL = TOOLS/'romfs-build.exe'
 
 LASRECOMP = PROJECT/'third_party'/'LASRecomp'
 PATCHES = (PROJECT/'third_party'/'AstralChain-Dynamic-FPS'/'1.0.1.pchtxt',
-           PROJECT/'astral_chain'/'patches'/'cutscene-catchup-1.0.1.pchtxt')
+           PROJECT/'astral_chain'/'patches'/'cutscene-catchup-1.0.1.pchtxt',
+           PROJECT/'astral_chain'/'patches'/'resolution-1.0.1.pchtxt')
 MAIN_SHA_101 = 'dc47cae835866379c597e1c507bf52ee0f865ec4412930dfdf1bbc20b6bb9c3b'
 PROGRAM_ID = '01007300020fa000'
 FREE_SPACE_GB = 35  # extracted RomFS (~10 GB) + its image (~10 GB) + NCAs + build, before the cleanup

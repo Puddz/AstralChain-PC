@@ -96,8 +96,15 @@ namespace AstralChainLauncher
                 "the game when the desktop is busy. Immediate: tearing, lowest latency.", OptKind.Choice, "mailbox",
                 OptTarget.Game, v => v == "mailbox" ? "" : "LARECOMP_VK_PRESENT=" + v);
             present.Choices = new[] { "mailbox|Mailbox (default)", "fifo|Vsync (FIFO)", "immediate|Immediate" };
+            var resolution = Add("resolution", "Display", "Render resolution (experimental)",
+                "The size the game draws its picture at. 1600x900 is the Switch's docked resolution (default, with " +
+                "the game's own dynamic resolution). Larger sizes are sharper and need a faster GPU; 3840x2160 is " +
+                "the largest. Handheld mode keeps 1280x720. Applies the next time you press Play.", OptKind.Choice,
+                "1600x900", OptTarget.Game, v => v == "1600x900" ? "" : "AC_RESOLUTION=" + v);
+            resolution.Choices = new[] { "1600x900|1600x900 (default)", "1920x1080|1920x1080", "2560x1440|2560x1440",
+                "3840x2160|3840x2160" };
             var upscaler = Add("upscaler", "Display", "Upscaling (experimental)",
-                "How the 1600x900 picture is enlarged to a bigger window or screen. Smooth: plain scaling (default). " +
+                "How the picture is enlarged to a bigger window or screen. Smooth: plain scaling (default). " +
                 "AMD FSR 1: edge-aware upscaling and sharpening, crisper on 1440p and 4K screens; works on any GPU. " +
                 "It has no effect when the window is not larger than the picture.", OptKind.Choice, "off",
                 OptTarget.Game, v => v == "fsr1" ? "AC_UPSCALER=fsr1" : "");
