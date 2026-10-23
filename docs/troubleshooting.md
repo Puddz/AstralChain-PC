@@ -10,7 +10,7 @@
 | `nstool.exe failed` while reading a file | Check that `prod.keys` is from a console on a firmware at least as new as the game requires, and that the file is a complete dump. |
 | `The base game file has no Astral Chain Program/Control NCA` | You picked the update, or another game, as the base. |
 | `The update is not Astral Chain v1.0.1` | Only the v1.0.1 update (version 65536) is supported. |
-| `belongs to program ..., not Astral Chain` | The file is a different game. |
+| `... is for another game: its ... belongs to program ..., not Astral Chain` | The file you picked (base game or update, as the message says) is for a different game: an emulator accepts it as that game's update, so working there does not mean it is Astral Chain's. Pick the Astral Chain file (update: title ID 01007300020FA800, v1.0.1). Setup before 2026-10-23 kept the first file's extracted contents and reported the same error with any file picked after it; update, or delete `game\work`, and run setup again. |
 | The build fails | Press **Install game** (or run `setup.cmd`) again (finished steps are skipped). If it fails again, open an issue with the last 30 lines. |
 
 To start over completely, delete `game\`, `build\` and `tools\`. Keep `userdata\`: it holds your saves.
