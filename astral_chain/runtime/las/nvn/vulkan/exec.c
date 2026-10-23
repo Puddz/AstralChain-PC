@@ -1387,6 +1387,17 @@ static int stagelib_n;
 static pthread_mutex_t stagelib_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t hash_words(uint64_t h, const void *p, size_t n);
 
+// Depth clamp (nvnCommandBufferSetDepthClamp): Astral Chain turns it on in every command buffer and never off (counted
+// through the opening cutscenes and play), so its pipelines clamp depth instead of clipping at the near and far planes,
+// as on the Switch. Without it, an effect card the game places at the near plane in the opening helicopter cutscene (a
+// black card that dims the view) was clipped in some frames and drawn in others as the camera moved: the whole picture
+// flickered between two brightnesses. LARECOMP_VK_DEPTH_CLAMP=0: off.
+static VkBool32 game_depth_clamp(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("LARECOMP_VK_DEPTH_CLAMP"); on = g_vk.depth_clamp && !(e && !atoi(e)); }
+    return on ? VK_TRUE : VK_FALSE;
+}
+
 static VkPipeline gpl_build_stage(int stage, const uint32_t *spv, size_t n) {
     VkBindingInfo binds[MAX_BIND];
     int nb = vk_reflect(spv, n, binds, MAX_BIND);
@@ -1407,7 +1418,7 @@ static VkPipeline gpl_build_stage(int stage, const uint32_t *spv, size_t n) {
     VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .pNext = &li};
     VkPipelineViewportStateCreateInfo vs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
     VkPipelineRasterizationStateCreateInfo rs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                                                 .polygonMode = VK_POLYGON_MODE_FILL, .lineWidth = 1};
+                                                 .depthClampEnable = game_depth_clamp(), .polygonMode = VK_POLYGON_MODE_FILL, .lineWidth = 1};
     VkPipelineDepthStencilStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                                            .dynamicStateCount = NDYN, .pDynamicStates = DYN};
@@ -1992,7 +2003,7 @@ static VkResult create_pipeline(const PipeKey *k, VkPipeline *out) {
                                                  .topology = topo_class_base(k->topo_class)};
     VkPipelineViewportStateCreateInfo vs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
     VkPipelineRasterizationStateCreateInfo rs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                                                 .polygonMode = k->poly_fill ? VK_POLYGON_MODE_FILL : VK_POLYGON_MODE_LINE, .lineWidth = 1};
+                                                 .depthClampEnable = game_depth_clamp(), .polygonMode = k->poly_fill ? VK_POLYGON_MODE_FILL : VK_POLYGON_MODE_LINE, .lineWidth = 1};
     VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
                                                .rasterizationSamples = (VkSampleCountFlagBits)k->samples, .alphaToCoverageEnable = k->a2c};
     VkPipelineDepthStencilStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
