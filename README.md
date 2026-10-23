@@ -45,9 +45,16 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   darker of the two brightnesses. *Not yet confirmed in play.*
 - **Setup after picking the wrong file**: once a wrong base game or update had been picked, every retry failed with
   the same "belongs to program" message. Setup now extracts again for any other file, and says which file to pick.
-- **Experimental features on a separate branch**: [`upscaling`](https://github.com/Puddz/AstralChain-PC/tree/upscaling)
-  has an AMD FSR 1 upscaling option, render resolutions from 1920x1080 to 3840x2160, and ultrawide sizes (21:9 and
-  32:9). They are not part of this version yet; see that branch's README.
+- **Ultrawide render sizes** (this branch; issue #4): 2560x1080 and 3440x1440 (21:9), 3840x1080 and 5120x1440
+  (32:9). See [Experimental options](#experimental-options-this-branch). *Untested on a real ultrawide monitor.*
+
+**On this branch since 2026-10-23**
+
+- **Render resolution** (issue #4): 1920x1080, 2560x1440 and 3840x2160 besides the default 1600x900.
+- **AMD FSR 1 upscaling** option.
+
+This is the experimental [`upscaling`](https://github.com/Puddz/AstralChain-PC/tree/upscaling) branch: everything in
+the main version plus the options under [Experimental options](#experimental-options-this-branch).
 
 **2026-10-23**
 
@@ -155,7 +162,7 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 | **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
 | **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
 | **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
-| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, presentation mode, handheld mode (1280x720), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window |
+| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, presentation mode, handheld mode (1280x720), render resolution and upscaling (see [Experimental options](#experimental-options-this-branch)), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window |
 | **Controls** | The keyboard keys for every button, stick direction and the D-pad. Click a key, then press the new one; a key already in use swaps places |
 | **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
 
@@ -175,6 +182,20 @@ Default keys (change them with **Controls**):
 | Left / right stick press | 1 / 2 |
 
 F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
+
+### Experimental options (this branch)
+
+All are in **Settings > Display** and off by default; they apply the next time you press **Play**.
+
+| Setting | What it does |
+| --- | --- |
+| **Render resolution** | The size the game draws at: 1600x900 (default, the Switch's docked size, with the game's own dynamic resolution), 1920x1080, 2560x1440 or 3840x2160, at a fixed size. Larger sizes need a faster GPU and more video memory. Measured on an RTX 4090 in the highway chase: about 60 fps at every size |
+| **Render resolution, ultrawide** | 2560x1080 or 3440x1440 (21:9), 3840x1080 or 5120x1440 (32:9). The 3D view gets wider (nothing is stretched), the HUD keeps its 16:9 layout in the middle, and the window opens at that shape; in fullscreen on an ultrawide screen the picture fills it. Checked in screenshots of the street and the opening cutscene; cutscene movies, menus and real ultrawide monitors are untested |
+| **Upscaling** | *Smooth* (default) scales the picture to a larger window or screen; *AMD FSR 1* uses edge-aware upscaling and sharpening, crisper on 1440p and 4K screens. Works on any GPU |
+
+The resolution comes in through a code patch (`astral_chain/patches/resolution-1.0.1.pchtxt`): the game asks the
+runtime for its render size, dynamic resolution levels, render target memory and camera aspect, so the size can be
+changed at launch without a rebuild. Without the setting, the game's own values are used.
 
 ### Texture compression (BC7)
 
@@ -283,6 +304,11 @@ their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - [AC-Recomp](https://github.com/swaymun/AC-Recomp): the macOS recompilation, whose setup flow inspired this one.
 - [AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT): the EASU and RCAS
   shaders of the FSR 1 path (through LASRecomp), used by the experimental upscaling option.
+- KeatonTheBot's "1062p (no dynamic res)" mod ([Kenji-NX/switch-pchtxt-mods](https://github.com/Kenji-NX/switch-pchtxt-mods)):
+  the code sites for the render size, dynamic resolution levels and render target memory that the resolution patch
+  changes. The patch itself is this project's own.
+- theboy181's "21:9" mod ([switch-ptchtxt-mods](https://github.com/theboy181/switch-ptchtxt-mods)), commissioned by
+  Kilgharrah: the camera aspect site used for the ultrawide sizes. The patch itself is this project's own.
 - [NSTool](https://github.com/jakcron/nstool), [Zig](https://ziglang.org/),
   [glslang](https://github.com/KhronosGroup/glslang), [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers),
   [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator),
