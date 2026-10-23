@@ -158,8 +158,13 @@ def ask_file(label, types):
 
 # ---------------------------------------------------------------------------------------------------- 2/3. NCAs
 def unpack(container, folder, inputs):
-    """The NCAs (and ticket) of an XCI's secure partition or an NSP, into folder."""
-    if folder.is_dir() and any(folder.glob('*.nca')):
+    """The NCAs (and ticket) of an XCI's secure partition or an NSP, into folder. NCAs already there are reused only
+    if they came from this same file (source.txt: its path, size and date), not from a file picked before."""
+    stat = Path(container).stat()
+    origin = f'{Path(container).resolve()}\n{stat.st_size}\n{stat.st_mtime_ns}\n'
+    marker = folder/'source.txt'
+    if folder.is_dir() and any(folder.glob('*.nca')) and marker.is_file() \
+            and marker.read_text(encoding='utf-8', errors='replace') == origin:
         return
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
@@ -174,6 +179,7 @@ def unpack(container, folder, inputs):
     run([NSTOOL, '-k', inputs['keys'], '-x', source, str(folder) + os.sep, container])
     if not any(folder.glob('*.nca')):
         raise SetupError(f'No NCAs found in {container.name}.')
+    marker.write_text(origin, encoding='utf-8')
 
 
 def nca_kind(nca, inputs, tik):
@@ -196,7 +202,14 @@ def find_ncas(folder, inputs):
             continue
         kind, program = nca_kind(nca, inputs, tik)
         if program and program != PROGRAM_ID:
-            raise SetupError(f'{nca.name} belongs to program {program}, not Astral Chain ({PROGRAM_ID}).')
+            shutil.rmtree(folder, ignore_errors=True)  # (a retry with another file starts afresh)
+            if SETTINGS.is_file():  # (and setup.cmd asks for the file again instead of reusing the saved path)
+                saved = json.loads(SETTINGS.read_text(encoding='utf-8'))
+                saved.pop(folder.name, None)
+                SETTINGS.write_text(json.dumps(saved, indent=2) + '\n', encoding='utf-8')
+            raise SetupError(f'The {folder.name} file you picked is for another game: its {nca.name} belongs to program '
+                             f'{program}, not Astral Chain ({PROGRAM_ID}). Pick the Astral Chain '
+                             f'{"base game" if folder.name == "base" else "v1.0.1 update"} file.')
         if kind in ('Program', 'Control'):
             found[kind] = nca
     return found, tik
