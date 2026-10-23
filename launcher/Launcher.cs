@@ -96,6 +96,16 @@ namespace AstralChainLauncher
                 "the game when the desktop is busy. Immediate: tearing, lowest latency.", OptKind.Choice, "mailbox",
                 OptTarget.Game, v => v == "mailbox" ? "" : "LARECOMP_VK_PRESENT=" + v);
             present.Choices = new[] { "mailbox|Mailbox (default)", "fifo|Vsync (FIFO)", "immediate|Immediate" };
+            var upscaler = Add("upscaler", "Display", "Upscaling (experimental)",
+                "How the 1600x900 picture is enlarged to a bigger window or screen. Smooth: plain scaling (default). " +
+                "AMD FSR 1: edge-aware upscaling and sharpening, crisper on 1440p and 4K screens; works on any GPU. " +
+                "It has no effect when the window is not larger than the picture.", OptKind.Choice, "off",
+                OptTarget.Game, v => v == "fsr1" ? "AC_UPSCALER=fsr1" : "");
+            upscaler.Choices = new[] { "off|Smooth (default)", "fsr1|AMD FSR 1" };
+            var sharpen = Add("fsr_sharpness", "Display", "FSR 1 sharpening",
+                "How much FSR 1 sharpens after upscaling. Only used with AMD FSR 1.", OptKind.Choice, "0.2",
+                OptTarget.Game, v => v == "0.2" ? "" : "AC_FSR_SHARPNESS=" + v);
+            sharpen.Choices = new[] { "0|Strong", "0.2|Normal (default)", "0.5|Light", "1|Very light" };
             Add("handheld", "Display", "Handheld mode: render at 1280x720",
                 "The game runs as on a Switch out of its dock: it renders at 1280x720 instead of 1600x900, for GPUs " +
                 "that cannot hold 60 fps. The picture is scaled to the window as before. Applies the next time you press Play.",

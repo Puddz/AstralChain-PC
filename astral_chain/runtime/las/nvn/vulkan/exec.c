@@ -4671,6 +4671,15 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     uint32_t ow = (uint32_t)lround(ow_d), oh = (uint32_t)lround(oh_d);
     if (ow > 16384) ow = 16384;
     if (oh > 16384) oh = 16384;
+    // Astral Chain: AC_UPSCALER=fsr1 (launcher: Upscaling) turns FSR 1 on; AC_FSR_SHARPNESS: RCAS strength in stops
+    // (0 sharpest, 2 softest; default 0.2, AMD's)
+    static float sharpness = -1;
+    if (sharpness < 0) {
+        const char *u = getenv("AC_UPSCALER"), *sh = getenv("AC_FSR_SHARPNESS");
+        if (u && !strcmp(u, "fsr1")) g_settings.upscaler = UPSCALE_FSR1;
+        sharpness = sh ? (float)atof(sh) : 0.2f;
+        if (!(sharpness >= 0) || sharpness > 2) sharpness = 0.2f;
+    }
     bool fsr = g_settings.upscaler == UPSCALE_FSR1 && (ow > b->width + 1 || oh > b->height + 1);  // (an upscale only)
     if (!smaa && !fsr) return v;
     extern void vk_frame_suspend(void);
@@ -4695,7 +4704,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         float pe[8] = {iw / ow, ih / oh, 0.5f * iw / ow - 0.5f, 0.5f * ih / oh - 0.5f, iw, ih};
         VkImageView ei[3] = {v};
         post_pass(cb, "easu.frag", ei, 1, e, pe, false);
-        float pr[8] = {exp2f(-0.2f), 0, 0, 0, (float)ow, (float)oh};  // (sharpness 0.2 stops: AMD's default)
+        float pr[8] = {exp2f(-sharpness), 0, 0, 0, (float)ow, (float)oh};
         VkImageView ri_[3] = {post_view(e)};
         post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
         v = post_view(r);

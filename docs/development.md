@@ -52,6 +52,7 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_VK_PROF=1` | Per-2-s CPU/GPU breakdown, texture upload and tracking counters, vertex cache stats |
 | `LARECOMP_GPUPROF_AT=<frame>` / `LARECOMP_GPUPROF_DRAWS=1` | GPU time per pass, or per draw, of a frame |
 | `LARECOMP_GPUPROF_AUTO=1` | Also profile the frame after each frame slower than 250 ms (up to 12; profiling makes a frame slow) |
+| `AC_UPSCALER=fsr1` | (launcher: *Upscaling*) AMD FSR 1 (EASU upscale, RCAS sharpen; exec.c `post_process`) when the picture is shown larger than it is rendered; `AC_FSR_SHARPNESS=<stops>` (0 strongest - 2, default 0.2) |
 | `AC_FULLSCREEN=1` | (launcher: *Start in fullscreen*) Borderless fullscreen on the window's monitor from the start (`app_window.h` `app_set_fullscreen`, also F11 / Alt+Enter) |
 | `AC_HANDHELD=1` | (launcher: *Handheld mode*) The game is told it runs handheld (operation mode 0, normal performance mode; `app_window.h`): it renders 1280x720 into its 1600x900 window textures and crops to it (`nvnWindowSetCrop`, honoured by the present in `device.c`) |
 | `AC_CUTSCENE_FPS=30` | Cutscenes as in the unmodified game: its fixed-step timer path at 30 FPS (default: 60 FPS, measured step) |
