@@ -103,14 +103,14 @@ static int heap_gpu_pinned;
  * per extra pixel, and the guest memory budget grows by the same. The heap has to stay within the 4 GB the renderer
  * mirrors for shader global memory (HEAP_MAX; past it shaders read zeros): at most 8.6 million pixels (3840x2160 and
  * a little more), larger sizes are scaled down to that. */
-static int res_w=-1,res_h;
+static int res_w=-1,res_h,res_fixed;  /* res_fixed: AC_RESOLUTION given (no dynamic resolution) */
 static uint64_t res_pool;
 static void res_config(void) {
  if(res_w>=0) return;
  char v[32];DWORD n=GetEnvironmentVariableA("AC_RESOLUTION",v,sizeof(v));int w=0,h=0;
  res_w=1600;res_h=900;res_pool=0x13600000ull;
  if(n && n<sizeof(v) && sscanf(v,"%dx%d",&w,&h)==2 && w>=640 && w<=7680 && h>=360 && h<=4320) {
-  res_w=w&~1;res_h=h&~1;
+  res_w=w&~1;res_h=h&~1;res_fixed=1;
   if((uint64_t)res_w*res_h>8640000ull) {
    double k=sqrt(8640000.0/((double)res_w*res_h));res_w=(int)(res_w*k)&~1;res_h=(int)(res_h*k)&~1;
   }
@@ -613,7 +613,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    * site (by its address in main, loaded at 0x7000010000) says which register gets what. Without AC_RESOLUTION: the
    * game's own 1600x900 and dynamic resolution levels 1440x810 and 1280x810; with it, that size at every level. */
   res_config();
-  int custom=res_w!=1600 || res_h!=900;
+  int custom=res_fixed;
   int32_t w=res_w,h=res_h,l1w=custom?w:1440,l1h=custom?h:810,l2w=custom?w:1280;
   uint64_t at=pc-0x7000010000ull;
   int docked=(uint32_t)c->x[0]==(uint32_t)w;  /* (level sites: w0 = the render target's width) */

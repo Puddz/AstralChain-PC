@@ -4795,6 +4795,101 @@ void renderer_save_texture_tex(TexBackend *b, const char *path) {
     vmaDestroyImage(g_vk.vma, img, mem);
 }
 
+// LARECOMP_CAPTURE=<first frame>,<count>: the game image of <count> consecutive frames from <first> on, copied on the
+// GPU into host memory without waiting for it (the game keeps its speed, unlike screenshots, which wait for each
+// frame), then written as frames/cap_N.png after the last one (one long pause there). For flicker that depends on
+// timing. Memory: width x height x 4 bytes per frame (5.8 MB at 1600x900).
+void renderer_capture_tex(TexBackend *b, uint64_t frame) {
+    static long first = -2, count, n;
+    static VkBuffer *buf;  // one per frame (one buffer of several GB could not be read whole)
+    static VmaAllocation *mem;
+    static uint8_t **ptr;
+    static VkImage img;
+    static VmaAllocation imem;
+    static VkImageView tv;
+    static uint32_t w, h;
+    static uint64_t *at;
+    if (first == -2) {
+        const char *e = getenv("LARECOMP_CAPTURE");
+        first = -1;
+        if (e && (sscanf(e, "%ld,%ld", &first, &count) != 2 || count <= 0)) first = -1;
+    }
+    if (first < 0 || (long)frame < first || n >= count) return;
+    if (!b || !b->image || (b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) return;
+    extern const float *vk_shot_crop(void);
+    const float *crop = vk_shot_crop();
+    vk_end_pass();
+    VkCommandBuffer cb = vk_cmd();
+    if (!buf) {
+        w = (uint32_t)(b->width * crop[2]); h = (uint32_t)(b->height * crop[3]);
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
+                                .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = (uint64_t)w * h * 4,
+                                 .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo bai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                       .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+        VmaAllocationInfo info;
+        at = calloc((size_t)count, sizeof *at);
+        buf = calloc((size_t)count, sizeof *buf);
+        mem = calloc((size_t)count, sizeof *mem);
+        ptr = calloc((size_t)count, sizeof *ptr);
+        bool ok = w && h && at && buf && mem && ptr && vmaCreateImage(g_vk.vma, &ci, &ai, &img, &imem, NULL) == VK_SUCCESS;
+        for (long i = 0; ok && i < count; i++) {
+            ok = vmaCreateBuffer(g_vk.vma, &bi, &bai, &buf[i], &mem[i], &info) == VK_SUCCESS;
+            if (ok) ptr[i] = info.pMappedData;
+        }
+        if (!ok) {
+            LOG("[capture] %ld frames of %ux%u: no memory for them\n", count, w, h);
+            first = -1;
+            return;
+        }
+        VkImageViewCreateInfo vci = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = img, .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                     .format = VK_FORMAT_R8G8B8A8_UNORM, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        VK_CHECK(vkCreateImageView(g_vk.dev, &vci, NULL, &tv));
+        vk_image_init_layout(cb, img, VK_IMAGE_ASPECT_COLOR_BIT);
+        LOG("[capture] %ld frames of %ux%u from frame %ld\n", count, w, h, first);
+    }
+    vk_full_barrier(cb);
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = tv, .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {w, h}}, .layerCount = 1,
+                          .colorAttachmentCount = 1, .pColorAttachments = &ca};
+    vkCmdBeginRendering(cb, &ri);
+    VkDescriptorSet ds = vk_alloc_set(present_set_layout);
+    VkDescriptorImageInfo ii = {vk_default_sampler(true), raw_view(b), VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wr = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0, .descriptorCount = 1,
+                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii};
+    vkUpdateDescriptorSets(g_vk.dev, 1, &wr, 0, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_pipeline(VK_FORMAT_R8G8B8A8_UNORM));
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_layout, 0, 1, &ds, 0, NULL);
+    VkViewport vp = {0, 0, (float)w, (float)h, 0, 1};
+    VkRect2D sc = {{0, 0}, {w, h}};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    vkCmdSetScissor(cb, 0, 1, &sc);
+    float pv[8] = {renderer_origin_lower_left() ? 1.0f : 0.0f, 0, 0, 0, crop[0], crop[1], crop[2], crop[3]};
+    vkCmdPushConstants(cb, present_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 32, pv);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    vkCmdEndRendering(cb);
+    vk_full_barrier(cb);
+    VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {w, h, 1}};
+    vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_GENERAL, buf[n], 1, &c);
+    ss_forget();
+    at[n++] = frame;
+    if (n < count) return;
+    renderer_flush();
+    mkdir("frames", 0755);
+    for (long i = 0; i < count; i++) {
+        char path[64];
+        snprintf(path, sizeof path, "frames/cap_%05llu.png", (unsigned long long)at[i]);
+        vmaInvalidateAllocation(g_vk.vma, mem[i], 0, VK_WHOLE_SIZE);
+        vk_save_png(path, ptr[i], w, h);
+        vmaDestroyBuffer(g_vk.vma, buf[i], mem[i]);
+    }
+    LOG("[capture] wrote %ld frames (%llu to %llu)\n", count, (unsigned long long)at[0], (unsigned long long)at[count - 1]);
+}
+
 // ================================================================== executor (renderer.m exec_list)
 static void exec_list(uint64_t handle, int depth) {
     uint64_t p = handle;

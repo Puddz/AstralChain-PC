@@ -218,6 +218,10 @@ static void hid_publish(uint64_t now,int focused) {
   if(scripted&(1ull<<18)) sample.lx=32767;
   if(scripted&(1ull<<17)) sample.ly=32767;
   if(scripted&(1ull<<19)) sample.ly=-32767;
+  if(scripted&(1ull<<20)) sample.rx=-32767;  /* right stick (camera) */
+  if(scripted&(1ull<<22)) sample.rx=32767;
+  if(scripted&(1ull<<21)) sample.ry=32767;
+  if(scripted&(1ull<<23)) sample.ry=-32767;
  }
  hid_ring_write((HidRing*)(npad+0x28),&sample);
  hid_ring_write((HidRing*)(npad+0x1408),&sample);

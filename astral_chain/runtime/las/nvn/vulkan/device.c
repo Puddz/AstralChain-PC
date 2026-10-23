@@ -773,6 +773,10 @@ void backend_present(NvnTexture *t) {
         // a series (SCREENSHOT_FROM) runs on until LARECOMP_WINDOW_SHOT exits
         if (getenv("LARECOMP_EXIT_AFTER_SHOT") && !shot_from) { fflush(stderr); _exit(0); }
     }
+    {
+        extern void renderer_capture_tex(TexBackend *b, uint64_t frame);
+        renderer_capture_tex(b, total_frames);  // LARECOMP_CAPTURE (exec.c)
+    }
     double now = SDL_GetTicks() / 1000.0;
     static double fps_iv = -1, prev_present, max_gap;
     if (fps_iv < 0) fps_iv = getenv("LARECOMP_FPS_INTERVAL") ? atof(getenv("LARECOMP_FPS_INTERVAL")) : 2.0;
