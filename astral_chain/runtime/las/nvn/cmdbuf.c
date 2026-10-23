@@ -254,7 +254,10 @@ PLAIN(nvnCommandBufferSetPointSize, CMD_SET_POINT_SIZE)
 PLAIN(nvnCommandBufferSetSampleMask, CMD_SET_SAMPLE_MASK)
 PLAIN(nvnCommandBufferSetRenderEnable, CMD_SET_RENDER_ENABLE)
 NVN(nvnCommandBufferSetRenderEnableConditional) { (void)c; }
-NVN(nvnCommandBufferSetDepthClamp) { (void)c; }
+NVN(nvnCommandBufferSetDepthClamp) {  // always on in Astral Chain: the pipelines clamp (vulkan/exec.c game_depth_clamp)
+    static int warned;
+    if (!A(1) && !warned++) LOG("[nvn] SetDepthClamp(false): not followed (the pipelines keep depth clamp on)\n");
+}
 NVN(nvnCommandBufferSetRasterizerDiscard) { (void)c; }
 NVN(nvnCommandBufferSetConservativeRasterEnable) { (void)c; }
 NVN(nvnCommandBufferSetConservativeRasterDilate) { (void)c; }
