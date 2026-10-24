@@ -80,9 +80,42 @@ CRS_REVIEWED = (
 GUARD_ORIGINAL = ('        sp(&s, "  for (uint guard = 0u; guard < 100000u; guard++) {\\n  switch (pc) {\\n");',
                   '        sp(&s, "  for (uint guard = 0; guard < 100000u; guard++) {\\n  switch (pc) {\\n");')
 GUARD_REVIEWED = tuple(
-    '        sp(&s, "  for (uint guard = 0u; guard < %uu; guard++) {\\n  switch (pc) {\\n", '
-    'getenv("LARECOMP_SHADER_GUARD") ? (unsigned)strtoul(getenv("LARECOMP_SHADER_GUARD"), NULL, 0) : 16384u);'
+    '        sp(&s, "%s  for (uint guard = 0u; guard < %uu; guard++) {\\n%s  switch (pc) {\\n", '
+    'c->bar_wait ? "  bool bar_wait = false;\\n" : "", '
+    'getenv("LARECOMP_SHADER_GUARD") ? (unsigned)strtoul(getenv("LARECOMP_SHADER_GUARD"), NULL, 0) : 16384u, '
+    'c->bar_wait ? "  if (subgroupAll(bar_wait)) { barrier(); bar_wait = false; }\\n  if (!bar_wait) {\\n" : "");'
     for _ in range(2))
+# Compute barriers (BAR.SYNC). Maxwell reconverges a warp at SYNC before it reaches a barrier; in the translated state
+# machine a thread that took a branch (a bounds check, say) can reach the barrier one loop iteration later than the
+# rest of its warp, and a host barrier() in a divergent warp is undefined: on NVIDIA it can release before those
+# threads have stored to shared memory, so the others read stale shared memory (Astral Chain's average brightness,
+# 72c18fb800, summed garbage for the 16 threads past its 240 values: 1e30, inf or NaN, and the exposure flickered).
+# Here a thread at a barrier parks (bar_wait, its pc set past the barrier) and does nothing more until every live
+# thread of its subgroup is parked; then they run barrier() together, converged, at the top of the loop: every live
+# thread passes there each iteration (a branch's continue would skip a check at the bottom).
+BAR_ORIGINAL = (
+    '        (void)is_branch_target_op;',
+    '        else if (c->stage == STAGE_COMPUTE) sp(&c->body, "    barrier();\\n");',
+    '        sp(&s, "    exit_now = true; break;\\n  default: exit_now = true; break;\\n  }\\n  if (exit_now) break;\\n  }\\n");',
+)
+BAR_REVIEWED = (
+    '        if (c->glsl && stage == STAGE_COMPUTE && (w & 0xfff8000000000000ull) == 0xf0a8000000000000ull) {  // BAR\n'
+    '            size_t nx = i + 1;\n'
+    '            if (nx % 4 == 0) nx++;\n'
+    '            if (nx < end) label[nx] = 1;\n'
+    '            any_branch = true;\n'
+    '            c->bar_wait = true;\n'
+    '        }\n'
+    '        (void)is_branch_target_op;',
+    '        else if (c->stage == STAGE_COMPUTE) {\n'
+    '            uint32_t nx = pc + 8;\n'
+    '            if ((nx / 8) % 4 == 0) nx += 8;\n'
+    '            sp(&c->body, "    bar_wait = true; pc = %uu; break;\\n", nx);\n'
+    '        }',
+    '        sp(&s, c->bar_wait ? "    exit_now = true; break;\\n  default: exit_now = true; break;\\n  }\\n  if (exit_now) break;\\n  }\\n'
+    '  }\\n" '
+    ': "    exit_now = true; break;\\n  default: exit_now = true; break;\\n  }\\n  if (exit_now) break;\\n  }\\n");',
+)
 # Compute instructions the game needs that the translator lacks (shared memory, shared/global atomics, LEA.HI):
 # runtime/las/maxwell_ext.h, included before emit_insn (helpers) and in its opcode chain (cases).
 EXT_ORIGINAL = (
@@ -95,7 +128,8 @@ EXT_ORIGINAL = (
 )
 EXT_REVIEWED = (
     '    uint32_t cbuf_need[18];  // highest constant vec4 index + 1 per cbuf (array size of the GLSL block)\n'
-    '    bool uses_shared;        // (Astral Chain) LDS/STS/ATOMS: shared uint smem_[]\n} Ctx;',
+    '    bool uses_shared;        // (Astral Chain) LDS/STS/ATOMS: shared uint smem_[]\n'
+    '    bool bar_wait;           // (Astral Chain) GLSL compute with BAR: threads park at barriers (BAR_REVIEWED)\n} Ctx;',
     '#define MAXWELL_EXT_DEFS\n#include "maxwell_ext.h"\n#undef MAXWELL_EXT_DEFS\n\n'
     '// ------------------------------------------------------------------ instruction translation\n',
     '#include "maxwell_ext.h"\n'
@@ -139,6 +173,8 @@ def prepare_translator(reference: Path, output: Path) -> Path:
                (VOTE_ORIGINAL, VOTE_REVIEWED, 1), (TINT_ORIGINAL, TINT_REVIEWED, 2), (ALPHA_ORIGINAL, ALPHA_REVIEWED, 1)]
     patches += [(o, r, 1) for o, r in zip(CRS_ORIGINAL + GUARD_ORIGINAL + EXT_ORIGINAL,
                                           CRS_REVIEWED + GUARD_REVIEWED + EXT_REVIEWED)]
+    patches += [(BAR_ORIGINAL[0], BAR_REVIEWED[0], 1), (BAR_ORIGINAL[1], BAR_REVIEWED[1], 1),
+                (BAR_ORIGINAL[2], BAR_REVIEWED[2], 2)]
     for original, replacement, expected in patches:
         if text.count(original) != expected:
             raise ValueError('expected exactly one reviewed translator patch location')
