@@ -53,7 +53,8 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   this branch too). Click in the game window to give it the mouse: it turns the camera, left click attacks (ZR),
   right click calls the Legion (ZL), the wheel changes weapons. Hold Alt to get the cursor back. Sensitivity,
   invert and the button icons are in **Settings > Mouse and keyboard**. New default keys: Shift sprints, Space
-  dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives).
+  dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives). Keys you had changed in Controls
+  stay on their actions; a new default that would clash with one of them is left empty.
 
 **2026-10-27**
 
