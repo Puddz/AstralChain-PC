@@ -33,7 +33,8 @@ static void mouse_clear(void) {
 static int mouse_captured,mouse_alt_free,mouse_look_on=-1,mouse_invert;
 static unsigned mouse_swallow;  /* (buttons held when the mouse was taken: not game input until released) */
 static double mouse_sens=1.0,mouse_acc_x,mouse_acc_y,mouse_vel_x,mouse_vel_y;
-static uint64_t mouse_look_tick,mouse_wheel_until[2];
+static uint64_t mouse_look_tick,mouse_move_tick,mouse_wheel_until[2],mouse_wheel_gap[2];
+static unsigned mouse_wheel_queue[2];
 static HWND mouse_window;
 static void mouse_config(void) {
  if(mouse_look_on>=0) return;
@@ -49,12 +50,13 @@ static void mouse_clip(void) {
 static void mouse_keys_clear(void) {
  static const uint8_t vks[]={IB_VK_LBUTTON,IB_VK_RBUTTON,IB_VK_MBUTTON,IB_VK_XBUTTON1,IB_VK_XBUTTON2,IB_VK_WHEEL_UP,IB_VK_WHEEL_DOWN};
  for(unsigned i=0;i<sizeof(vks);i++) hid_keys[vks[i]]=0;
- mouse_wheel_until[0]=mouse_wheel_until[1]=0;
+ mouse_wheel_until[0]=mouse_wheel_until[1]=mouse_wheel_gap[0]=mouse_wheel_gap[1]=0;
+ mouse_wheel_queue[0]=mouse_wheel_queue[1]=0;
 }
 static void mouse_set_captured(HWND window,int on) {
  if(on==mouse_captured) return;
  mouse_captured=on;mouse_window=window;
- mouse_acc_x=mouse_acc_y=mouse_vel_x=mouse_vel_y=0;mouse_look_tick=0;
+ mouse_acc_x=mouse_acc_y=mouse_vel_x=mouse_vel_y=0;mouse_look_tick=mouse_move_tick=0;
  mouse_keys_clear();
  if(on) {
   static int registered;
@@ -78,10 +80,16 @@ static void mouse_raw_input(LPARAM lparam) {
  if(raw.header.dwType!=RIM_TYPEMOUSE || (raw.data.mouse.usFlags&MOUSE_MOVE_ABSOLUTE)) return;
  mouse_acc_x+=raw.data.mouse.lLastX;mouse_acc_y+=raw.data.mouse.lLastY;
 }
-/* The wheel presses its binding for 0.12 s per notch. */
-static void mouse_wheel_expire(uint64_t now) {
- for(unsigned i=0;i<2;i++) if(mouse_wheel_until[i] && now>=mouse_wheel_until[i]) {
-  mouse_wheel_until[i]=0;hid_keys[i ? IB_VK_WHEEL_DOWN : IB_VK_WHEEL_UP]=0;
+/* Each wheel notch is one press of its binding: held 0.06 s, then released 0.05 s before the next queued notch, so
+ * the game sees every notch (it reads the buttons once a frame; a notch that only made the press longer was lost). */
+static void mouse_wheel_step(uint64_t now) {
+ for(unsigned i=0;i<2;i++) {
+  uint8_t *key=&hid_keys[i ? IB_VK_WHEEL_DOWN : IB_VK_WHEEL_UP];
+  if(mouse_wheel_until[i]) {
+   if(now<mouse_wheel_until[i]) continue;
+   mouse_wheel_until[i]=0;*key=0;mouse_wheel_gap[i]=now+960000;  /* 0.05 s */
+  }
+  if(mouse_wheel_queue[i] && now>=mouse_wheel_gap[i]) {mouse_wheel_queue[i]--;*key=1;mouse_wheel_until[i]=now+1152000;}  /* 0.06 s */
  }
 }
 /* Mouse movement -> right stick: speed (counts per second) to deflection, full tilt at 1500 counts/s at 100%. The game's
@@ -90,14 +98,23 @@ static void mouse_wheel_expire(uint64_t now) {
 static void mouse_look_stick(int32_t *rx,int32_t *ry,uint64_t now) {
  mouse_config();
  if(!mouse_captured || !mouse_look_on) {mouse_acc_x=mouse_acc_y=0;mouse_look_tick=now;return;}
- double dt=mouse_look_tick ? (double)(now-mouse_look_tick)/19200000.0 : 1/60.0;
+ uint64_t previous=mouse_look_tick;
  mouse_look_tick=now;
- if(dt<0.002) dt=0.002;
- if(dt>0.1) dt=0.1;
- if(mouse_acc_x==0 && mouse_acc_y==0) {mouse_vel_x=mouse_vel_y=0;return;}
- /* (light smoothing: the game reads the stick once a frame, the mouse reports in uneven bursts) */
- mouse_vel_x=0.5*mouse_vel_x+0.5*mouse_acc_x/dt;mouse_vel_y=0.5*mouse_vel_y+0.5*mouse_acc_y/dt;
- mouse_acc_x=mouse_acc_y=0;
+ /* A sample with no new report keeps the last speed for up to 25 ms: a 125 Hz mouse reports about as often as the
+  * samples are made (125 Hz), so many samples fall between two reports, and dropping to zero there made the camera
+  * move in stops and starts. The speed is measured over the time since the last report taken. */
+ int moving=mouse_move_tick && now-mouse_move_tick<480000;  /* 25 ms */
+ if(mouse_acc_x==0 && mouse_acc_y==0) {
+  if(!moving) {mouse_vel_x=mouse_vel_y=0;mouse_move_tick=0;return;}
+ } else {
+  uint64_t since=moving ? mouse_move_tick : previous;
+  double dt=since ? (double)(now-since)/19200000.0 : 1/60.0;
+  if(dt<0.002) dt=0.002;
+  if(dt>0.1) dt=0.1;
+  /* (light smoothing: the game reads the stick once a frame, the mouse reports in uneven bursts) */
+  mouse_vel_x=0.5*mouse_vel_x+0.5*mouse_acc_x/dt;mouse_vel_y=0.5*mouse_vel_y+0.5*mouse_acc_y/dt;
+  mouse_acc_x=mouse_acc_y=0;mouse_move_tick=now;
+ }
  double x=mouse_vel_x*mouse_sens/1500.0,y=-mouse_vel_y*mouse_sens/1500.0;
  if(mouse_invert) y=-y;
  double m=sqrt(x*x+y*y);
@@ -115,9 +132,11 @@ static void hid_mouse_event(HWND window,UINT message,WPARAM wparam,LPARAM lparam
   int32_t *delta=message==WM_MOUSEWHEEL ? &mouse_wheel_y : &mouse_wheel_x;
   int16_t notch=(int16_t)HIWORD(wparam);
   *remainder+=notch;*delta=*remainder/WHEEL_DELTA;*remainder%=WHEEL_DELTA;
-  if(mouse_captured && message==WM_MOUSEWHEEL && notch) {
-   unsigned down=notch<0;
-   hid_keys[down ? IB_VK_WHEEL_DOWN : IB_VK_WHEEL_UP]=1;mouse_wheel_until[down]=rt_ticks()+2304000;  /* 0.12 s */
+  if(mouse_captured && message==WM_MOUSEWHEEL && *delta) {  /* (whole notches: fine-step wheels send parts of one) */
+   unsigned down=*delta<0;
+   mouse_wheel_queue[down]+=(unsigned)(*delta<0 ? -*delta : *delta);
+   if(mouse_wheel_queue[down]>8) mouse_wheel_queue[down]=8;
+   mouse_wheel_step(rt_ticks());
   }
  } else {
   int32_t x=(int16_t)LOWORD(lparam),y=(int16_t)HIWORD(lparam);

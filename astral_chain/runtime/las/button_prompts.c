@@ -257,13 +257,10 @@ static void draw_keycap(Canvas *cv, float x0, float y0, float x1, float y1, unsi
     cut_text(cv, key_label(vk, buf), x0 + pad, y0 + pad, x1 - pad, y1 - pad);
 }
 
-/* The binding shown for an action: the main one, else the alternative. With mouse camera on, a mouse binding wins
- * over a keyboard one (for attacks: the mouse is in the right hand). */
+/* The binding shown for an action: the main one, else the alternative (as the README and the launcher say; a mouse
+ * alternative preferred over a keyboard main one made L and R show the mouse side buttons instead of Q and E). */
 static unsigned shown(int action) {
-    unsigned a = map[0][action], b = map[1][action];
-    if (!a) return b;
-    if (b && ib_is_mouse(b) && !ib_is_mouse(a) && mouse_look && action != IB_DUP && action != IB_DDOWN) return b;
-    return a;
+    return map[0][action] ? map[0][action] : map[1][action];
 }
 
 /* Several key caps side by side (two directions), or a four-key cluster (all directions). */

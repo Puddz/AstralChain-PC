@@ -125,7 +125,8 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
  if(message==WM_INPUT) {mouse_raw_input(lparam);return DefWindowProcW(window,message,wparam,lparam);}
  if(message==WM_SETCURSOR && mouse_captured && LOWORD(lparam)==HTCLIENT) {SetCursor(NULL);return TRUE;}
  if(message==WM_MOVE || message==WM_EXITSIZEMOVE) mouse_clip();
- if(message==WM_CAPTURECHANGED) {if(mouse_buttons) mouse_clear();return 0;}
+ /* (capture taken away with a button down: no game button stays held, and that button presses nothing until let go) */
+ if(message==WM_CAPTURECHANGED) {if(mouse_buttons) {unsigned held=mouse_buttons;mouse_clear();mouse_keys_clear();mouse_swallow=held;}return 0;}
  if((message==WM_ACTIVATEAPP && !wparam) || (message==WM_SIZE && wparam==SIZE_MINIMIZED) || message==WM_CLOSE) {
   mouse_clear();if(window && GetCapture()==window) ReleaseCapture();
   mouse_set_captured(window,0);mouse_alt_free=0;
@@ -148,7 +149,7 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
    /* (holding Alt gives the mouse back, unless Alt is a game key; letting go takes it again) */
    if(wparam==VK_MENU && !hid_key_mapped[VK_MENU]) {
     if(down && mouse_captured) {mouse_set_captured(window,0);mouse_alt_free=1;}
-    else if(!down && mouse_alt_free) {mouse_alt_free=0;mouse_set_captured(window,1);}
+    else if(!down && mouse_alt_free) {mouse_alt_free=0;mouse_set_captured(window,1);mouse_swallow=mouse_buttons;}  /* (as a click) */
    }
   }
   /* (Alt and F10 open the window menu: not when they are game keys. Alt+F4 still closes. Alt alone frees the mouse

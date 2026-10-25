@@ -44,7 +44,8 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 - **Keyboard and mouse button icons in the game.** The button prompts show the keys and mouse buttons you set instead
   of the Switch buttons (**Settings > Mouse and keyboard > Button icons** to keep the Switch ones).
 - **Controls**: two bindings per action (main and alternative), mouse buttons and wheel included. New defaults:
-  Shift sprints, Space dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives).
+  Shift sprints, Space dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives). Keys you had
+  changed in Controls stay on their actions; a new default that would clash with one of them is left empty.
 
 **2026-10-24**
 
