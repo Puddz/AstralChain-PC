@@ -8,30 +8,29 @@ static unsigned hid_active,hid_revision,hid_styles,hid_ids=1;
  * no handheld device. It does not change the FullKey controller's connection. */
 static uint64_t hid_handheld_mode;
 static uint64_t hid_joy_hold_type;
+/* Held keys by Windows virtual-key code. Mouse buttons and wheel use their codes too (las/input_bindings.h); they are
+ * only set while the game has the mouse (mouse.h). */
 static uint8_t hid_keys[256];
-/* Keyboard mapping (the launcher's Controls): AC_KEYS="A:74,B:75,..." with Windows virtual-key codes, 0 for none.
- * Order: the FullKey buttons of bits 0-15, then the stick directions of bits 16-23. */
-static const char *const hid_key_names[24]={"A","B","X","Y","LSTICK","RSTICK","L","R","ZL","ZR","PLUS","MINUS",
- "DLEFT","DUP","DRIGHT","DDOWN","LLEFT","LUP","LRIGHT","LDOWN","RLEFT","RUP","RRIGHT","RDOWN"};
-static uint8_t hid_key_map[24]={'J','K','I','U','1','2','Q','E','Z','C',VK_RETURN,VK_BACK,VK_LEFT,VK_UP,VK_RIGHT,VK_DOWN,
- 'A','W','D','S','F','T','H','G'};
+/* Keyboard and mouse mapping (the launcher's Controls): two bindings per action, las/input_bindings.h. */
+#include "las/input_bindings.h"
+static uint8_t hid_key_map[2][IB_ACTIONS];
 static uint8_t hid_key_mapped[256];
+static unsigned hid_mouse_bound;  /* (a mouse button or the wheel is bound: clicking the window takes the mouse) */
 static void hid_keys_load(void) {
  static int loaded;
  if(loaded) return;
  loaded=1;
- const char *e=getenv("AC_KEYS");
- for(const char *p=e;p && *p;) {
-  char name[16];int vk=0;
-  if(sscanf(p,"%15[^:,]:%d",name,&vk)==2 && vk>=0 && vk<256)
-   for(unsigned i=0;i<24;i++) if(!strcmp(name,hid_key_names[i])) hid_key_map[i]=(uint8_t)vk;
-  p=strchr(p,',');
-  if(p) p++;
+ int custom=ib_load(hid_key_map);
+ for(unsigned s=0;s<2;s++) for(unsigned i=0;i<IB_ACTIONS;i++) {
+  unsigned vk=hid_key_map[s][i];
+  if(vk) hid_key_mapped[vk]=1;
+  if(vk && ib_is_mouse(vk)) hid_mouse_bound=1;
  }
- for(unsigned i=0;i<24;i++) if(hid_key_map[i]) hid_key_mapped[hid_key_map[i]]=1;
- if(e && *e) printf("[input] keyboard mapping from AC_KEYS\n");
+ if(custom) printf("[input] key mapping from AC_KEYS / AC_KEYS2\n");
 }
-static int hid_key(unsigned i) { return hid_key_map[i] && hid_keys[hid_key_map[i]]; }
+static int hid_key(unsigned i) {
+ return (hid_key_map[0][i] && hid_keys[hid_key_map[0][i]]) || (hid_key_map[1][i] && hid_keys[hid_key_map[1][i]]);
+}
 static uint64_t hid_last_tick,hid_sampling;
 static unsigned hid_touch_active;
 static uint64_t hid_touch_last_tick,hid_touch_sampling;
@@ -194,6 +193,7 @@ static void hid_publish(uint64_t now,int focused) {
  if(previous!=(connected ? 1u : 0u) && hid_style_events[0] && !SetEvent(hid_style_events[0]))
   boundary("hid-style-event",&state,state.pc);
  HidSample sample={0};sample.sample=++hid_sampling;sample.attributes=connected ? 3 : 0;
+ mouse_wheel_expire(now);
  if(connected && focused) {
   hid_keys_load();
   for(unsigned i=0;i<16;i++) if(hid_key(i)) sample.buttons|=1ull<<i;
@@ -202,6 +202,7 @@ static void hid_publish(uint64_t now,int focused) {
   if(sample.lx && sample.ly) {sample.lx=sample.lx>0 ? 23170 : -23170;sample.ly=sample.ly>0 ? 23170 : -23170;}
   if(sample.rx && sample.ry) {sample.rx=sample.rx>0 ? 23170 : -23170;sample.ry=sample.ry>0 ? 23170 : -23170;}
   hid_xinput(&sample);
+  mouse_look_stick(&sample.rx,&sample.ry,now);
   if(sample.lx<0) sample.buttons|=1ull<<16;
   if(sample.ly>0) sample.buttons|=1ull<<17;
   if(sample.lx>0) sample.buttons|=1ull<<18;

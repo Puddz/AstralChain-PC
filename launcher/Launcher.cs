@@ -100,6 +100,22 @@ namespace AstralChainLauncher
                 "The game runs as on a Switch out of its dock: it renders at 1280x720 instead of 1600x900, for GPUs " +
                 "that cannot hold 60 fps. The picture is scaled to the window as before. Applies the next time you press Play.",
                 OptKind.Check, "0", OptTarget.Game, When("1", "AC_HANDHELD=1"));
+            Add("mouse_look", "Mouse and keyboard", "Mouse moves the camera",
+                "Click in the game window to give it the mouse: the cursor hides and the mouse turns the camera (and " +
+                "steers the Legion while ZL is held). Hold Alt, or switch to another window, to get the cursor back. " +
+                "Off: the mouse buttons still work, the camera stays on the keys.",
+                OptKind.Check, "1", OptTarget.Game, When("0", "AC_MOUSE_LOOK=0"));
+            var sens = Add("mouse_sens", "Mouse and keyboard", "Mouse camera sensitivity (%)",
+                "How fast the camera turns for a given mouse movement. 100 is the default; higher turns faster.",
+                OptKind.Number, "100", OptTarget.Game, v => v == "100" ? "" : "AC_MOUSE_SENS=" + v);
+            sens.Min = 10; sens.Max = 500;
+            Add("mouse_invert", "Mouse and keyboard", "Invert mouse up and down",
+                "Moving the mouse forward looks down.", OptKind.Check, "0", OptTarget.Game, When("1", "AC_MOUSE_INVERT=1"));
+            var prompts = Add("prompts", "Mouse and keyboard", "Button icons in the game",
+                "Keyboard and mouse: the game's button icons show the keys and mouse buttons set in Controls. " +
+                "Switch: the original controller icons (for playing with a controller).",
+                OptKind.Choice, "keyboard", OptTarget.Game, v => v == "switch" ? "AC_PROMPTS=switch" : "");
+            prompts.Choices = new[] { "keyboard|Keyboard and mouse (default)", "switch|Switch controller" };
             Add("gpu_warm", "Shaders and performance", "Compile shaders for your GPU before playing",
                 "Takes about 10 s the first time and after driver updates; removes most shader pauses in play.",
                 OptKind.Check, "1", OptTarget.Setup, When("0", "AC_GPU_WARM=0"));
@@ -1342,42 +1358,47 @@ namespace AstralChainLauncher
     }
 
     // ------------------------------------------------------------------------------------------------ controls window
-    // Keyboard keys for the Switch controller's buttons and sticks. Kept in launcher.ini as keys=A:74,B:75,... (Windows
-    // virtual-key codes) and passed to the game as AC_KEYS (runtime/hid_service.h); unchanged keys pass nothing.
+    // Keyboard keys and mouse buttons for the Switch controller's buttons and sticks, two per action (main and
+    // alternative). Kept in launcher.ini as keys=A:74,... and keys2=... (Windows virtual-key codes; mouse buttons 1 2 4 5
+    // 6, wheel 14 / 15) and passed to the game as AC_KEYS / AC_KEYS2 (runtime/las/input_bindings.h, which holds the same
+    // defaults); unchanged ones pass nothing. The game's button icons show the main binding (button_prompts.c).
     class ControlsForm : Form
     {
-        // name (as AC_KEYS), label, default key
+        // name (as AC_KEYS), label, default main, default alternative
         static readonly string[][] Actions = {
-            new[] { "A", "A", "74" }, new[] { "B", "B", "75" }, new[] { "X", "X", "73" }, new[] { "Y", "Y", "85" },
-            new[] { "L", "L", "81" }, new[] { "R", "R", "69" }, new[] { "ZL", "ZL", "90" }, new[] { "ZR", "ZR", "67" },
-            new[] { "PLUS", "+ (Plus)", "13" }, new[] { "MINUS", "- (Minus)", "8" },
-            new[] { "LSTICK", "Left stick press", "49" }, new[] { "RSTICK", "Right stick press", "50" },
-            new[] { "LUP", "Left stick up", "87" }, new[] { "LDOWN", "Left stick down", "83" },
-            new[] { "LLEFT", "Left stick left", "65" }, new[] { "LRIGHT", "Left stick right", "68" },
-            new[] { "RUP", "Right stick up", "84" }, new[] { "RDOWN", "Right stick down", "71" },
-            new[] { "RLEFT", "Right stick left", "70" }, new[] { "RRIGHT", "Right stick right", "72" },
-            new[] { "DUP", "D-pad up", "38" }, new[] { "DDOWN", "D-pad down", "40" },
-            new[] { "DLEFT", "D-pad left", "37" }, new[] { "DRIGHT", "D-pad right", "39" },
+            new[] { "A", "A (interact)", "74", "0" }, new[] { "B", "B (dodge)", "75", "32" },
+            new[] { "X", "X (item)", "73", "0" }, new[] { "Y", "Y (switch Legion)", "85", "0" },
+            new[] { "L", "L (Legion action)", "81", "5" }, new[] { "R", "R (dismiss Legion)", "69", "6" },
+            new[] { "ZL", "ZL (Legion)", "2", "90" }, new[] { "ZR", "ZR (attack)", "1", "67" },
+            new[] { "PLUS", "+ (IRIS)", "13", "9" }, new[] { "MINUS", "- (pause menu)", "8", "27" },
+            new[] { "LSTICK", "Left stick press", "16", "49" }, new[] { "RSTICK", "Right stick press", "4", "50" },
+            new[] { "LUP", "Move up", "87", "0" }, new[] { "LDOWN", "Move down", "83", "0" },
+            new[] { "LLEFT", "Move left", "65", "0" }, new[] { "LRIGHT", "Move right", "68", "0" },
+            new[] { "RUP", "Camera up", "84", "0" }, new[] { "RDOWN", "Camera down", "71", "0" },
+            new[] { "RLEFT", "Camera left", "70", "0" }, new[] { "RRIGHT", "Camera right", "72", "0" },
+            new[] { "DUP", "D-pad up", "38", "14" }, new[] { "DDOWN", "D-pad down", "40", "15" },
+            new[] { "DLEFT", "D-pad left", "37", "0" }, new[] { "DRIGHT", "D-pad right", "39", "0" },
         };
+        static readonly string[] SettingKeys = { "keys", "keys2" }, EnvNames = { "AC_KEYS", "AC_KEYS2" };
 
         readonly Settings settings;
-        readonly Dictionary<string, int> keys;
-        readonly Dictionary<string, NeonButton> buttons = new Dictionary<string, NeonButton>();
+        readonly Dictionary<string, int>[] keys;
+        readonly Dictionary<string, NeonButton> buttons = new Dictionary<string, NeonButton>();  // "name/slot"
         readonly Label hint;
-        string capturing;
+        string capturing;  // "name/slot"
 
         [DllImport("user32.dll")] static extern uint MapVirtualKey(uint code, uint mapType);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetKeyNameText(int lParam, StringBuilder text, int size);
 
-        static Dictionary<string, int> Defaults()
+        static Dictionary<string, int> Defaults(int slot)
         {
-            return Actions.ToDictionary(a => a[0], a => int.Parse(a[2]));
+            return Actions.ToDictionary(a => a[0], a => int.Parse(a[2 + slot]));
         }
 
-        static Dictionary<string, int> LoadKeys(Settings settings)
+        static Dictionary<string, int> LoadKeys(Settings settings, int slot)
         {
-            var keys = Defaults();
-            foreach (var part in (settings.Raw("keys") ?? "").Split(','))
+            var keys = Defaults(slot);
+            foreach (var part in (settings.Raw(SettingKeys[slot]) ?? "").Split(','))
             {
                 var kv = part.Split(':');
                 int vk;
@@ -1391,17 +1412,32 @@ namespace AstralChainLauncher
             return string.Join(",", Actions.Select(a => a[0] + ":" + keys[a[0]]));
         }
 
-        // "AC_KEYS=..." for the game, or "" when every key is the default
+        // "AC_KEYS=...;AC_KEYS2=..." for the game, only for a slot that differs from the defaults
         public static string Env(Settings settings)
         {
-            var keys = LoadKeys(settings);
-            return Join(keys) == Join(Defaults()) ? "" : "AC_KEYS=" + Join(keys);
+            var parts = new List<string>();
+            for (int slot = 0; slot < 2; slot++)
+            {
+                var keys = LoadKeys(settings, slot);
+                if (Join(keys) != Join(Defaults(slot))) parts.Add(EnvNames[slot] + "=" + Join(keys));
+            }
+            return string.Join(";", parts);
         }
 
-        // The key's name on this keyboard layout ("J", "Enter", "Left Shift" ...)
+        // The key's name on this keyboard layout ("J", "Enter", "Left Shift" ...), or the mouse button's
         public static string KeyName(int vk)
         {
-            if (vk == 0) return "(none)";
+            switch (vk)
+            {
+                case 0: return "(none)";
+                case 1: return "Left click";
+                case 2: return "Right click";
+                case 4: return "Middle click";
+                case 5: return "Mouse back";
+                case 6: return "Mouse forward";
+                case 14: return "Wheel up";
+                case 15: return "Wheel down";
+            }
             uint scan = MapVirtualKey((uint)vk, 0);
             bool extended = (vk >= 33 && vk <= 40) || vk == 45 || vk == 46 || vk == 111 || vk == 144;
             var text = new StringBuilder(64);
@@ -1415,21 +1451,21 @@ namespace AstralChainLauncher
         public ControlsForm(Settings settings)
         {
             this.settings = settings;
-            keys = LoadKeys(settings);
+            keys = new[] { LoadKeys(settings, 0), LoadKeys(settings, 1) };
             Text = "Astral Chain PC controls";
             Font = new Font("Segoe UI", 9F);
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(640, 560);
+            ClientSize = new Size(900, 580);
             BackColor = Color.FromArgb(14, 17, 28);
             ForeColor = Theme.Text;
 
             var header = new Label { Text = "CONTROLS", Font = new Font("Segoe UI Semibold", 12F), ForeColor = Theme.Text,
-                Location = new Point(1, 1), Size = new Size(638, 42), Padding = new Padding(14, 0, 0, 0),
+                Location = new Point(1, 1), Size = new Size(898, 42), Padding = new Padding(14, 0, 0, 0),
                 TextAlign = ContentAlignment.MiddleLeft, BackColor = Color.FromArgb(9, 11, 20) };
             header.MouseDown += (s, e) => { if (e.Button == MouseButtons.Left) Theme.Drag(this); };
-            var close = new GlyphButton { Glyph = "\u2715", AccessibleName = "Close", Location = new Point(598, 7), Size = new Size(34, 30) };
+            var close = new GlyphButton { Glyph = "✕", AccessibleName = "Close", Location = new Point(858, 7), Size = new Size(34, 30) };
             close.Click += (s, e) => DialogResult = DialogResult.Cancel;
             Controls.Add(close);
             Controls.Add(header);
@@ -1442,32 +1478,53 @@ namespace AstralChainLauncher
             string[] titles = { "BUTTONS", "STICKS AND D-PAD" };
             for (int col = 0; col < 2; col++)
             {
-                int x = 20 + col * 310, y = 58;
+                int x = 20 + col * 440, y = 56;
                 Controls.Add(new Label { Text = titles[col], Font = new Font("Segoe UI", 10F, FontStyle.Bold), Location = new Point(x, y),
                     AutoSize = true, ForeColor = Theme.Accent });
+                Controls.Add(new Label { Text = "MAIN", Location = new Point(x + 150, y + 3), AutoSize = true, ForeColor = Theme.Dim });
+                Controls.Add(new Label { Text = "ALTERNATIVE", Location = new Point(x + 284, y + 3), AutoSize = true, ForeColor = Theme.Dim });
                 y += 30;
                 for (int i = col * 12; i < col * 12 + 12; i++)
                 {
                     var a = Actions[i];
                     Controls.Add(new Label { Text = a[1], Location = new Point(x, y + 6), AutoSize = true });
-                    var b = new NeonButton { Location = new Point(x + 150, y), Size = new Size(140, 30), AccessibleName = "Key for " + a[1] };
-                    string name = a[0];
-                    b.Click += (s, e) => StartCapture(name);
-                    buttons[name] = b;
-                    Controls.Add(b);
+                    for (int slot = 0; slot < 2; slot++)
+                    {
+                        var b = new NeonButton { Location = new Point(x + 146 + slot * 134, y), Size = new Size(128, 30),
+                            AccessibleName = (slot == 0 ? "Main" : "Alternative") + " key for " + a[1] };
+                        string id = a[0] + "/" + slot;
+                        b.MouseDown += (s, e) => OnButtonMouse(id, e.Button);
+                        b.MouseWheel += (s, e) => OnWheel(e.Delta);
+                        b.Click += (s, e) => { if (!(e is MouseEventArgs)) StartCapture(id); };  // (keyboard / accessibility)
+                        buttons[id] = b;
+                        Controls.Add(b);
+                    }
                     y += 33;
                 }
             }
-            hint = new Label { Location = new Point(20, 488), Size = new Size(600, 20), ForeColor = Theme.Dim,
-                Text = "Click a key, then press the new key (Esc: keep the old one). A key already in use swaps places." };
+            MouseDown += (s, e) => { if (capturing != null) { if (e.Button == MouseButtons.Left) { capturing = null; ShowKeys(); } else OnButtonMouse(null, e.Button); } };
+            MouseWheel += (s, e) => OnWheel(e.Delta);
+            hint = new Label { Location = new Point(20, 490), Size = new Size(860, 38), ForeColor = Theme.Dim,
+                Text = "Click a box, then press a key, a mouse button or turn the wheel (clicking the box again: left click; " +
+                       "Esc: keep the old one; Delete: none). One already in use swaps places.\n" +
+                       "In the game, a click takes the mouse: it then moves the camera. Hold Alt or switch windows to get it back." };
             Controls.Add(hint);
             ShowKeys();
 
-            var defaults = new NeonButton { Text = "Defaults", Location = new Point(14, 516), Size = new Size(100, 34) };
-            defaults.Click += (s, e) => { capturing = null; foreach (var kv in Defaults()) keys[kv.Key] = kv.Value; ShowKeys(); };
-            var ok = new NeonButton { Text = "Save", Primary = true, Location = new Point(418, 516), Size = new Size(100, 34) };
-            ok.Click += (s, e) => { settings.Set("keys", Join(keys)); DialogResult = DialogResult.OK; };
-            var cancelButton = new NeonButton { Text = "Cancel", Location = new Point(526, 516), Size = new Size(100, 34) };
+            var defaults = new NeonButton { Text = "Defaults", Location = new Point(14, 536), Size = new Size(100, 34) };
+            defaults.Click += (s, e) =>
+            {
+                capturing = null;
+                for (int slot = 0; slot < 2; slot++) foreach (var kv in Defaults(slot)) keys[slot][kv.Key] = kv.Value;
+                ShowKeys();
+            };
+            var ok = new NeonButton { Text = "Save", Primary = true, Location = new Point(678, 536), Size = new Size(100, 34) };
+            ok.Click += (s, e) =>
+            {
+                for (int slot = 0; slot < 2; slot++) settings.Set(SettingKeys[slot], Join(keys[slot]));
+                DialogResult = DialogResult.OK;
+            };
+            var cancelButton = new NeonButton { Text = "Cancel", Location = new Point(786, 536), Size = new Size(100, 34) };
             cancelButton.Click += (s, e) => DialogResult = DialogResult.Cancel;
             Controls.Add(defaults);
             Controls.Add(ok);
@@ -1479,19 +1536,50 @@ namespace AstralChainLauncher
         void ShowKeys()
         {
             foreach (var a in Actions)
-            {
-                var b = buttons[a[0]];
-                b.Text = capturing == a[0] ? "Press a key..." : KeyName(keys[a[0]]);
-                b.Primary = capturing == a[0];
-                b.Invalidate();
-            }
+                for (int slot = 0; slot < 2; slot++)
+                {
+                    string id = a[0] + "/" + slot;
+                    var b = buttons[id];
+                    b.Text = capturing == id ? "Press..." : KeyName(keys[slot][a[0]]);
+                    b.Primary = capturing == id;
+                    b.Invalidate();
+                }
         }
 
-        void StartCapture(string name)
+        void StartCapture(string id)
         {
-            capturing = name;
-            buttons[name].Focus();
+            capturing = id;
+            buttons[id].Focus();
             ShowKeys();
+        }
+
+        // Binds vk to the action being captured; a binding already used by another one swaps places with it.
+        void Assign(int vk)
+        {
+            if (capturing == null) return;
+            string name = capturing.Split('/')[0];
+            int slot = capturing.EndsWith("/1") ? 1 : 0;
+            if (vk != 0)
+                for (int s = 0; s < 2; s++)
+                    foreach (var other in keys[s].Where(kv => kv.Value == vk && !(s == slot && kv.Key == name)).Select(kv => kv.Key).ToList())
+                        keys[s][other] = keys[slot][name];
+            keys[slot][name] = vk;
+            capturing = null;
+            ShowKeys();
+        }
+
+        void OnButtonMouse(string id, MouseButtons button)
+        {
+            int vk = button == MouseButtons.Left ? 1 : button == MouseButtons.Right ? 2 : button == MouseButtons.Middle ? 4 :
+                     button == MouseButtons.XButton1 ? 5 : button == MouseButtons.XButton2 ? 6 : 0;
+            if (vk == 0) return;
+            if (capturing != null && (vk != 1 || id == capturing)) { Assign(vk); return; }
+            if (vk == 1 && id != null) StartCapture(id);  // (a left click on a box starts or moves the capture)
+        }
+
+        void OnWheel(int delta)
+        {
+            if (capturing != null && delta != 0) Assign(delta > 0 ? 14 : 15);
         }
 
         // Every key press reaches here first (arrows, Tab, Enter and Alt included): the raw virtual-key code, as the
@@ -1507,12 +1595,9 @@ namespace AstralChainLauncher
                 return base.ProcessCmdKey(ref msg, keyData);
             }
             if (vk == 27) { capturing = null; ShowKeys(); return true; }
-            if (vk == 91 || vk == 92 || vk < 8) return true;  // (Windows keys; mouse buttons)
-            string other = keys.Where(kv => kv.Value == vk && kv.Key != capturing).Select(kv => kv.Key).FirstOrDefault();
-            if (other != null) keys[other] = keys[capturing];  // (swapped)
-            keys[capturing] = vk;
-            capturing = null;
-            ShowKeys();
+            if (vk == 46) { Assign(0); return true; }  // (Delete: none)
+            if (vk == 91 || vk == 92 || vk < 8) return true;  // (Windows keys; mouse buttons come as clicks)
+            Assign(vk);
             return true;
         }
     }
