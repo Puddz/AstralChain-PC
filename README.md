@@ -36,6 +36,16 @@ Known issues are listed under [Known issues](#known-issues).
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-10-25**
+
+- **Mouse support.** Click in the game window to give it the mouse: it turns the camera, left click attacks (ZR),
+  right click calls the Legion (ZL), the wheel changes weapons. Hold Alt to get the cursor back. Sensitivity and
+  invert in **Settings > Mouse and keyboard**.
+- **Keyboard and mouse button icons in the game.** The button prompts show the keys and mouse buttons you set instead
+  of the Switch buttons (**Settings > Mouse and keyboard > Button icons** to keep the Switch ones).
+- **Controls**: two bindings per action (main and alternative), mouse buttons and wheel included. New defaults:
+  Shift sprints, Space dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives).
+
 **2026-10-24**
 
 - **Flickering light in the opening helicopter cutscene**: the whole picture jumped between two brightnesses. The
@@ -161,18 +171,27 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 
 `Play Astral Chain.cmd` and `Play Astral Chain (diagnostics).cmd` still work, with console windows.
 
-Default keys (change them with **Controls**):
+Default keys and mouse buttons (change them with **Controls**; every action has a main and an alternative binding):
 
-| Switch | Keyboard |
-| --- | --- |
-| A / B / X / Y | J / K / I / U |
-| L / R | Q / E |
-| ZL / ZR | Z / C |
-| + / - | Enter / Backspace |
-| D-pad | Arrow keys |
-| Left stick | W A S D |
-| Right stick | T F G H |
-| Left / right stick press | 1 / 2 |
+| Switch | What it does | Main | Alternative |
+| --- | --- | --- | --- |
+| ZR | Attack | Left click | C |
+| ZL | Legion (summon, send, recall; hold to steer it) | Right click | Z |
+| A / B / X / Y | Interact / dodge / item / switch Legion | J / K / I / U | B: Space |
+| L / R | Legion action / dismiss Legion | Q / E | Mouse back / forward |
+| + / - | IRIS / pause menu | Enter / Backspace | Tab / Esc |
+| Left stick | Move | W A S D | |
+| Right stick | Camera | Mouse (see below) and T F G H | |
+| Left / right stick press | Sprint or crouch / re-centre the camera | Shift / Middle click | 1 / 2 |
+| D-pad | Up and down: weapons | Arrow keys | Up and down: mouse wheel |
+
+**Mouse.** Click in the game window to give it the mouse: the cursor hides and the mouse turns the camera (and
+steers your Legion while ZL is held). Hold **Alt**, or switch to another window, to get the cursor back; click again
+to resume. Sensitivity and invert are in **Settings > Mouse and keyboard**.
+
+**Button icons.** The game's button prompts show your keys and mouse buttons instead of the Switch buttons (the main
+binding of each action). **Settings > Mouse and keyboard > Button icons** brings back the Switch icons for playing with
+a controller.
 
 F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
 

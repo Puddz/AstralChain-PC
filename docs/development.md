@@ -70,7 +70,11 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_BC7_PRECOMPUTE=1` | (setup; launcher: *prepared at setup*) `setup_game` encodes every ASTC texture to BC7 into `build\game\cache\bc7` (`bc7_cache.py`, once) |
 | `LARECOMP_BC7_CACHE=0` | Ignore the precomputed BC7 textures (GPU conversion only) |
 | `LARECOMP_BC7_LOG=1` | One `[bc7key]` line per ASTC texture upload: hash, layout, precomputed hit or miss |
-| `AC_KEYS=A:74,B:75,...` | (launcher **Controls**) Keyboard keys as Windows virtual-key codes: `A B X Y LSTICK RSTICK L R ZL ZR PLUS MINUS DLEFT DUP DRIGHT DDOWN LLEFT LUP LRIGHT LDOWN RLEFT RUP RRIGHT RDOWN` (`hid_service.h`); unlisted ones keep their default, 0 for none |
+| `AC_KEYS=A:74,B:75,...` | (launcher **Controls**) Main bindings as Windows virtual-key codes: `A B X Y LSTICK RSTICK L R ZL ZR PLUS MINUS DLEFT DUP DRIGHT DDOWN LLEFT LUP LRIGHT LDOWN RLEFT RUP RRIGHT RDOWN`; unlisted ones keep their default, 0 for none. Mouse buttons are 1 2 4 5 6 (left, right, middle, back, forward), the wheel 14 / 15 (up / down). Defaults and parser: `runtime/las/input_bindings.h` (kept in step with `ControlsForm`) |
+| `AC_KEYS2=...` | The alternative bindings, same format |
+| `AC_MOUSE_LOOK=0` | (launcher: *Mouse moves the camera* off) The mouse keeps its buttons but does not drive the right stick (`mouse.h`: raw input, speed to stick tilt, 20% minimum against the game's dead zone) |
+| `AC_MOUSE_SENS=<percent>` / `AC_MOUSE_INVERT=1` | Mouse camera sensitivity (100: full tilt at 1500 counts/s) and inverted up/down |
+| `AC_PROMPTS=switch` | (launcher: *Button icons*) Keep the Switch button icons. Otherwise `las/button_prompts.c` redraws the game's button icon atlas (ui_core `core.wtp` texture 0, 256x512 RGBA8, found by its content hash through the `texpatch` hooks of `textures.c`) with the main bindings |
 | `LARECOMP_ASTC_VERIFY=<n>` | Read back the first n texture levels the GPU decodes and compare them with the CPU decoder (`ASTC verify` lines; slow) |
 | `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
 | `LARECOMP_GPL=0` | No shader libraries (`VK_EXT_graphics_pipeline_library`): pipelines are compiled whole at their first draw |
@@ -151,6 +155,8 @@ would take longer. `python -m astral_chain.bc7_cache --keys <file>` lists the pr
 | `data/pipeline_variants.bin` | Known pipelines (a program's code hashes and keys, and the render state; `pipelines.bin` format; no game data). Merged into the cache at launch. Grows from test runs |
 | `runtime/host_runtime.c.in` | Kernel and services runtime |
 | `runtime/guest_threads.h` | Guest threads and the parallel scheduler |
+| `runtime/hid_service.h`, `runtime/mouse.h`, `runtime/las/input_bindings.h` | Controller emulation: keys, mouse buttons and mouse camera, XInput pads |
+| `runtime/las/button_prompts.c` | Keyboard and mouse button icons (redraws the game's button icon atlas at upload) |
 | `runtime/nvn_hle.h` | NVN entry points |
 | `runtime/las/nvn/vulkan/` | Renderer: `exec.c` commands, draws and the pipeline warm-up, `textures.c` uploads, `astc_gpu.c` ASTC decoding on the GPU, `bc7_gpu.c` the optional BC7 recompression, `shaders.c` SPIR-V cache, `device.c` swapchain |
 | `runtime/las/maxwell_ext.h` | Maxwell instructions added to the translator (LDS/STS, atomics, VOTE, SUST, TLD...) |
@@ -172,9 +178,10 @@ borderless and draws its own buttons (`Theme`, `NeonButton`, `GlyphButton`, `Neo
   precompile and warm-up stamps with what a launch would write; a new driver is only noticed by the warm-up).
 - Settings are stored in `userdata\launcher.ini` and become the variables of the tables above. The option list is
   `Options` in `Launcher.cs`.
-- **Controls** (`ControlsForm`) stores `keys=A:74,...` (virtual-key codes, as the game window receives them) and
-  passes `AC_KEYS` only when a key differs from the defaults. Mapped Alt and F10 no longer open the game window's
-  system menu.
+- **Controls** (`ControlsForm`) stores `keys=A:74,...` and `keys2=...` (virtual-key codes, as the game window
+  receives them; mouse buttons and wheel as in `las/input_bindings.h`) and passes `AC_KEYS` / `AC_KEYS2` only when a
+  binding differs from the defaults, which must match `input_bindings.h`. Mapped Alt and F10 no longer open the game
+  window's system menu; unmapped Alt frees the mouse while held.
 - Diagnostics mode adds `LARECOMP_VK_PROF=1` and `AC_CRASH_DUMP=1`. **Create report** zips `run.txt`,
   `stderr.log`, `trace.log` (last 8 MB each), `launcher.log`, `crash.dmp` and a system summary into `reports\`,
   with the Windows user name replaced in paths.
