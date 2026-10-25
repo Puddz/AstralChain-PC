@@ -28,7 +28,7 @@ shaders, keys or firmware, and never will. Everything the setup produces comes f
 | Stability | Driver watchdog plus a GPU hang stop. No driver resets since 2026-10-19 across dozens of test runs |
 | Saving | Works (tested in File 01) |
 | Shader pauses | Shaders are compiled for your GPU before the game starts. Simulated first play of an area never recorded: 7 pauses over 50 ms, 0.49 s in total (26 and 8.0 s before 2026-10-21) |
-| Controllers | Keyboard, and Xbox-style pads through XInput (every connected pad is read). Other pads (Switch Pro Controller, DualSense, DualShock 4, 8BitDo) go through SDL3: tested with a virtual SDL pad only, not yet with a real one |
+| Controllers | Keyboard and mouse, and Xbox-style pads through XInput (every connected pad is read). Other pads (Switch Pro Controller, DualSense, DualShock 4, 8BitDo) go through SDL3: tested with a virtual SDL pad only, not yet with a real one |
 | Not yet tested | The rest of File 03 and everything after it |
 
 Known issues are listed under [Known issues](#known-issues).
@@ -49,6 +49,11 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   controller change: Windows had placed one of the program's own thread stacks where the game then put one of its
   thread stacks. The game now places its memory around such allocations. Forced in a test (a large block reserved
   there on purpose): the game stopped without the fix and played with it.
+- **Mouse support, keyboard and mouse button icons, two bindings per action** (on main since 2026-10-25, now on
+  this branch too). Click in the game window to give it the mouse: it turns the camera, left click attacks (ZR),
+  right click calls the Legion (ZL), the wheel changes weapons. Hold Alt to get the cursor back. Sensitivity,
+  invert and the button icons are in **Settings > Mouse and keyboard**. New default keys: Shift sprints, Space
+  dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives).
 
 **2026-10-27**
 
@@ -72,8 +77,6 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 - **Brightness pumping in a dialogue after the opening street fight**: the picture brightened over a few frames
   and snapped back. A compute shader that averages the scene's brightness read stale data (threads of a group passed
   a barrier early); the measured average is now steady in every frame. *Not yet confirmed in play.*
-
-Mouse support and keyboard/mouse button prompts (main, 2026-10-25) are not on this branch yet.
 
 **2026-10-24**
 
@@ -207,18 +210,27 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 
 `Play Astral Chain.cmd` and `Play Astral Chain (diagnostics).cmd` still work, with console windows.
 
-Default keys (change them with **Controls**):
+Default keys and mouse buttons (change them with **Controls**; every action has a main and an alternative binding):
 
-| Switch | Keyboard |
-| --- | --- |
-| A / B / X / Y | J / K / I / U |
-| L / R | Q / E |
-| ZL / ZR | Z / C |
-| + / - | Enter / Backspace |
-| D-pad | Arrow keys |
-| Left stick | W A S D |
-| Right stick | T F G H |
-| Left / right stick press | 1 / 2 |
+| Switch | What it does | Main | Alternative |
+| --- | --- | --- | --- |
+| ZR | Attack | Left click | C |
+| ZL | Legion (summon, send, recall; hold to steer it) | Right click | Z |
+| A / B / X / Y | Interact / dodge / item / switch Legion | J / K / I / U | B: Space |
+| L / R | Legion action / dismiss Legion | Q / E | Mouse back / forward |
+| + / - | IRIS / pause menu | Enter / Backspace | Tab / Esc |
+| Left stick | Move | W A S D | |
+| Right stick | Camera | Mouse (see below) and T F G H | |
+| Left / right stick press | Sprint or crouch / re-centre the camera | Shift / Middle click | 1 / 2 |
+| D-pad | Up and down: weapons | Arrow keys | Up and down: mouse wheel |
+
+**Mouse.** Click in the game window to give it the mouse: the cursor hides and the mouse turns the camera (and
+steers your Legion while ZL is held). Hold **Alt**, or switch to another window, to get the cursor back; click again
+to resume. Sensitivity and invert are in **Settings > Mouse and keyboard**.
+
+**Button icons.** The game's button prompts show your keys and mouse buttons instead of the Switch buttons (the main
+binding of each action). **Settings > Mouse and keyboard > Button icons** brings back the Switch icons for playing with
+a controller.
 
 F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
 

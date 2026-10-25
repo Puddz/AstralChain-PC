@@ -122,9 +122,13 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
   if(app_input_focus && app_focus==1 && !app_exit_requested) hid_mouse_event(window,message,wparam,lparam);
   return message==WM_XBUTTONDOWN || message==WM_XBUTTONUP ? TRUE : 0;
  }
+ if(message==WM_INPUT) {mouse_raw_input(lparam);return DefWindowProcW(window,message,wparam,lparam);}
+ if(message==WM_SETCURSOR && mouse_captured && LOWORD(lparam)==HTCLIENT) {SetCursor(NULL);return TRUE;}
+ if(message==WM_MOVE || message==WM_EXITSIZEMOVE) mouse_clip();
  if(message==WM_CAPTURECHANGED) {if(mouse_buttons) mouse_clear();return 0;}
  if((message==WM_ACTIVATEAPP && !wparam) || (message==WM_SIZE && wparam==SIZE_MINIMIZED) || message==WM_CLOSE) {
   mouse_clear();if(window && GetCapture()==window) ReleaseCapture();
+  mouse_set_captured(window,0);mouse_alt_free=0;
  }
  if(message==WM_ACTIVATEAPP) {
   app_input_focus=wparam!=0;
@@ -141,14 +145,22 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
   if(app_input_focus && app_focus==1 && !app_exit_requested) {
    int down=message==WM_KEYDOWN || message==WM_SYSKEYDOWN;
    hid_keys[wparam]=down;keyboard_event((unsigned)wparam,lparam,down);
+   /* (holding Alt gives the mouse back, unless Alt is a game key; letting go takes it again) */
+   if(wparam==VK_MENU && !hid_key_mapped[VK_MENU]) {
+    if(down && mouse_captured) {mouse_set_captured(window,0);mouse_alt_free=1;}
+    else if(!down && mouse_alt_free) {mouse_alt_free=0;mouse_set_captured(window,1);}
+   }
   }
-  /* (Alt and F10 open the window menu: not when they are game keys. Alt+F4 still closes.) */
+  /* (Alt and F10 open the window menu: not when they are game keys. Alt+F4 still closes. Alt alone frees the mouse
+   * instead: letting go of it does not enter the window menu, whose loop would hold the game.) */
   hid_keys_load();
+  if(message==WM_SYSKEYUP && wparam==VK_MENU) return 0;
   if((message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) && !((wparam==VK_MENU || wparam==VK_F10) && hid_key_mapped[wparam]))
    return DefWindowProcW(window,message,wparam,lparam);
   return 0;
  }
  if(message==WM_SIZE) {
+  mouse_clip();
   app_set_focus(wparam==SIZE_MINIMIZED ? 3 : 1);
   if(app_focus==3) {memset(hid_keys,0,sizeof(hid_keys));memset(keyboard_keys,0,sizeof(keyboard_keys));hid_publish(rt_ticks(),0);keyboard_publish(rt_ticks(),0);}
   return 0;
