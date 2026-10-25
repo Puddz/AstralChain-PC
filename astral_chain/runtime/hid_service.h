@@ -193,7 +193,7 @@ static void hid_publish(uint64_t now,int focused) {
  if(previous!=(connected ? 1u : 0u) && hid_style_events[0] && !SetEvent(hid_style_events[0]))
   boundary("hid-style-event",&state,state.pc);
  HidSample sample={0};sample.sample=++hid_sampling;sample.attributes=connected ? 3 : 0;
- mouse_wheel_expire(now);
+ mouse_wheel_step(now);
  if(connected && focused) {
   hid_keys_load();
   for(unsigned i=0;i<16;i++) if(hid_key(i)) sample.buttons|=1ull<<i;

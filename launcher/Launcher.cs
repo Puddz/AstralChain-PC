@@ -1395,15 +1395,49 @@ namespace AstralChainLauncher
             return Actions.ToDictionary(a => a[0], a => int.Parse(a[2 + slot]));
         }
 
-        static Dictionary<string, int> LoadKeys(Settings settings, int slot)
+        // The one-binding defaults of launchers before the alternative bindings (keys= without keys2=)
+        static readonly Dictionary<string, int> OldDefaults = new Dictionary<string, int> {
+            { "A", 74 }, { "B", 75 }, { "X", 73 }, { "Y", 85 }, { "L", 81 }, { "R", 69 }, { "ZL", 90 }, { "ZR", 67 },
+            { "PLUS", 13 }, { "MINUS", 8 }, { "LSTICK", 49 }, { "RSTICK", 50 }, { "LUP", 87 }, { "LDOWN", 83 },
+            { "LLEFT", 65 }, { "LRIGHT", 68 }, { "RUP", 84 }, { "RDOWN", 71 }, { "RLEFT", 70 }, { "RRIGHT", 72 },
+            { "DUP", 38 }, { "DDOWN", 40 }, { "DLEFT", 37 }, { "DRIGHT", 39 },
+        };
+
+        static Dictionary<string, int> Parse(string line, Dictionary<string, int> keys)
         {
-            var keys = Defaults(slot);
-            foreach (var part in (settings.Raw(SettingKeys[slot]) ?? "").Split(','))
+            foreach (var part in (line ?? "").Split(','))
             {
                 var kv = part.Split(':');
                 int vk;
                 if (kv.Length == 2 && keys.ContainsKey(kv[0]) && int.TryParse(kv[1], out vk) && vk >= 0 && vk < 256) keys[kv[0]] = vk;
             }
+            return keys;
+        }
+
+        static Dictionary<string, int> LoadKeys(Settings settings, int slot)
+        {
+            if (settings.Raw("keys") != null && settings.Raw("keys2") == null) return Migrate(settings.Raw("keys"))[slot];
+            return Parse(settings.Raw(SettingKeys[slot]), Defaults(slot));
+        }
+
+        // A keys= line saved before the alternative bindings lists every key, changed or not. Read as it is, it replaced
+        // the new main bindings (no mouse) while the new alternatives came on top (Space dodging as well as doing what
+        // it was set to). Instead: the new defaults, with the keys the player had changed from the old defaults put on
+        // their actions; a key then used twice is kept only where the player put it, else in the main binding.
+        static Dictionary<string, int>[] Migrate(string line)
+        {
+            var saved = Parse(line, new Dictionary<string, int>(OldDefaults));
+            var keys = new[] { Defaults(0), Defaults(1) };
+            var changed = Actions.Select(a => a[0]).Where(n => saved[n] != OldDefaults[n]).ToList();
+            foreach (var n in changed) keys[0][n] = saved[n];
+            var used = new HashSet<int>(changed.Select(n => saved[n]).Where(vk => vk != 0));
+            foreach (var slot in new[] { 0, 1 })
+                foreach (var a in Actions)
+                {
+                    int vk = keys[slot][a[0]];
+                    if (vk == 0 || (slot == 0 && changed.Contains(a[0]))) continue;
+                    if (used.Contains(vk)) keys[slot][a[0]] = 0; else used.Add(vk);
+                }
             return keys;
         }
 
