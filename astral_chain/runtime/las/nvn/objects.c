@@ -1,4 +1,5 @@
 // NVN objects, builders, and state objects (everything except command recording).
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -7,6 +8,7 @@
 
 void renderer_sync(void);
 uint64_t renderer_wait_target(uint64_t seq);
+uint64_t renderer_fence_seq(void);
 int renderer_seq_done(uint64_t seq);
 
 static uint64_t next_debug_id = 1;
@@ -112,9 +114,113 @@ NVN(nvnQueueGetTotalCommandMemoryUsed) { RET(0); }
 NVN(nvnQueueGetTotalControlMemoryUsed) { RET(0); }
 NVN(nvnQueueGetTotalComputeMemoryUsed) { RET(0); }
 NVN(nvnQueueResetMemoryUsageCounts) { (void)c; }
+// ================================================================== asynchronous submission (AC_ASYNC_SUBMIT=1)
+// The game's render thread recorded a frame and then translated and submitted it (backend_execute) itself: in busy
+// scenes (the street after the opening helicopter, ~3000 draws a frame) that was about half of its frame time, and
+// the game's other threads waited for it. With AC_ASYNC_SUBMIT=1 submissions, fences and presents go, in order, to
+// a worker thread, and the render thread goes on recording the next frame, as a GPU runs behind the CPU on the Switch
+// (the game must keep command memory and the data a frame reads until that frame's fence: it does so for the GPU).
+// Other NVN calls run alongside only when they are known not to touch the backend (command recording, state objects,
+// getters: nvn_async_safe); any other first waits for the queue to empty (nvn_async_drain), so object creation and
+// destruction, pools and QueueFinish see the backend as before. A fence wait whose fence job has not run yet waits
+// for it. At most one present is queued ahead of the worker.
+enum { AJ_EXEC, AJ_FENCE, AJ_PRESENT, AQ_SIZE = 1024 };
+typedef struct { int kind; uint64_t handle; NvnSync *sync; NvnTexture *tex; int crop[4]; } AsyncJob;
+static AsyncJob aq[AQ_SIZE];
+static uint64_t aq_head, aq_tail;  // jobs done (the worker advances aq_head after running one), jobs queued
+static int aq_presents;            // presents queued and not yet run
+static int aq_on = -1;
+static pthread_mutex_t aq_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t aq_more = PTHREAD_COND_INITIALIZER, aq_less = PTHREAD_COND_INITIALIZER;
+uint64_t nvn_async_drains, nvn_async_waits;  // (stats)
+
+static void *aq_worker(void *arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&aq_lock);
+        while (aq_head == aq_tail) pthread_cond_wait(&aq_more, &aq_lock);
+        AsyncJob j = aq[aq_head % AQ_SIZE];
+        pthread_mutex_unlock(&aq_lock);
+        if (j.kind == AJ_EXEC) backend_execute(j.handle);
+        else if (j.kind == AJ_FENCE) j.sync->seq = renderer_fence_seq();
+        else { backend_present_crop(j.crop); backend_present(j.tex); }
+        pthread_mutex_lock(&aq_lock);
+        aq_head++;
+        if (j.kind == AJ_PRESENT) aq_presents--;
+        pthread_cond_broadcast(&aq_less);
+        pthread_mutex_unlock(&aq_lock);
+    }
+    return NULL;
+}
+static bool aq_enabled(void) {
+    if (aq_on < 0) {
+        const char *e = getenv("AC_ASYNC_SUBMIT");
+        aq_on = e && atoi(e) != 0;
+        if (aq_on) {
+            pthread_t t;
+            if (pthread_create(&t, NULL, aq_worker, NULL)) { LOG("[nvn] async submission: no worker thread\n"); aq_on = 0; }
+            else LOG("[nvn] async submission on (AC_ASYNC_SUBMIT)\n");
+        }
+    }
+    return aq_on;
+}
+static uint64_t aq_push(AsyncJob j) {  // the job's number (done when aq_head reaches it)
+    pthread_mutex_lock(&aq_lock);
+    while (aq_tail - aq_head == AQ_SIZE || (j.kind == AJ_PRESENT && aq_presents >= 1)) pthread_cond_wait(&aq_less, &aq_lock);
+    aq[aq_tail % AQ_SIZE] = j;
+    uint64_t id = ++aq_tail;
+    if (j.kind == AJ_PRESENT) aq_presents++;
+    pthread_cond_signal(&aq_more);
+    pthread_mutex_unlock(&aq_lock);
+    return id;
+}
+static void aq_wait(uint64_t id) {
+    pthread_mutex_lock(&aq_lock);
+    if (aq_head < id) nvn_async_waits++;
+    while (aq_head < id) pthread_cond_wait(&aq_less, &aq_lock);
+    pthread_mutex_unlock(&aq_lock);
+}
+static bool aq_job_done(uint64_t id) {
+    pthread_mutex_lock(&aq_lock);
+    bool d = aq_head >= id;
+    pthread_mutex_unlock(&aq_lock);
+    return d;
+}
+// Runtime (nvn_hle.h): before an NVN call that is not nvn_async_safe.
+void nvn_async_drain(void) {
+    if (aq_on <= 0) return;
+    pthread_mutex_lock(&aq_lock);
+    if (aq_head != aq_tail) nvn_async_drains++;
+    while (aq_head != aq_tail) pthread_cond_wait(&aq_less, &aq_lock);
+    pthread_mutex_unlock(&aq_lock);
+}
+// NVN functions that may run while the worker translates earlier submissions: they only touch guest memory, the
+// command buffer being recorded or their own small objects (or, for the queued ones, order themselves).
+int nvn_async_safe(const char *name) {
+    static const char *const prefixes[] = {"nvnCommandBuffer", "nvnBlendState", "nvnChannelMaskState", "nvnColorState",
+        "nvnDepthStencilState", "nvnMultisampleState", "nvnPolygonState", "nvnVertexAttribState", "nvnVertexStreamState",
+        "nvnTextureView", "nvnBufferBuilder", "nvnSamplerBuilder", "nvnTextureBuilder"};
+    static const char *const names[] = {"nvnQueueSubmitCommands", "nvnQueueFenceSync", "nvnQueuePresentTexture",
+        "nvnSyncWait", "nvnQueueWaitSync", "nvnQueueFlush", "nvnWindowAcquireTexture", "nvnWindowGetCrop",
+        "nvnDeviceGetTextureHandle", "nvnDeviceGetImageHandle", "nvnDeviceGetTexelFetchHandle",
+        "nvnBufferInitialize", "nvnBufferFinalize", "nvnBufferMap", "nvnBufferGetAddress", "nvnBufferGetSize",
+        "nvnBufferFlushMappedRange", "nvnBufferInvalidateMappedRange", "nvnBufferGetMemoryPool", "nvnBufferGetMemoryOffset",
+        "nvnTextureGetWidth", "nvnTextureGetHeight", "nvnTextureGetSamples", "nvnTextureGetZCullStorageSize",
+        "nvnTextureWriteTexels", "nvnMemoryPoolGetFlags"};
+    for (unsigned i = 0; i < sizeof prefixes / sizeof *prefixes; i++)
+        if (!strncmp(name, prefixes[i], strlen(prefixes[i]))) return 1;
+    for (unsigned i = 0; i < sizeof names / sizeof *names; i++)
+        if (!strcmp(name, names[i])) return 1;
+    return 0;
+}
+
 NVN(nvnQueueSubmitCommands) {
     int n = (int)A(1);
     const uint64_t *handles = AP(2);
+    if (aq_enabled()) {
+        for (int i = 0; i < n; i++) aq_push((AsyncJob){.kind = AJ_EXEC, .handle = handles[i]});
+        return;
+    }
     for (int i = 0; i < n; i++) backend_execute(handles[i]);
 }
 NVN(nvnQueueFlush) { (void)c; }
@@ -131,7 +237,12 @@ static NvnSync *sync_of(uint64_t guest) {
 }
 uint64_t renderer_fence_seq(void);
 void renderer_wait_seq(uint64_t seq);
-NVN(nvnQueueFenceSync) { NvnSync *s = sync_of(A(1)); s->signaled = 1; s->seq = renderer_fence_seq(); }
+NVN(nvnQueueFenceSync) {
+    NvnSync *s = sync_of(A(1));
+    s->signaled = 1;
+    if (aq_on > 0) { s->async_job = aq_push((AsyncJob){.kind = AJ_FENCE, .sync = s}); return; }
+    s->seq = renderer_fence_seq();
+}
 void nvn_sync_set_seq(uint64_t guest, uint64_t seq) { NvnSync *s = sync_of(guest); s->signaled = 1; s->seq = seq; }
 NVN(nvnQueueWaitSync) { RET(1); }
 
@@ -151,7 +262,12 @@ NVN(nvnSyncWait) {  // NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED
     if (whole) { renderer_sync(); RET(0); return; }
     // Astral Chain: guest threads share one host thread here, so a blocking wait would stop every guest thread
     // until the GPU finishes. Park only this one; a zero timeout polls (NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED 2).
-    uint64_t target = renderer_wait_target(sync_of(A(0))->seq);
+    NvnSync *sy = sync_of(A(0));
+    if (sy->async_job && !aq_job_done(sy->async_job)) {  // (AC_ASYNC_SUBMIT: its fence job has not run yet)
+        if (!A(1)) { RET(2); return; }
+        aq_wait(sy->async_job);
+    }
+    uint64_t target = renderer_wait_target(sy->seq);
     if (renderer_seq_done(target)) { RET(0); return; }
     if (!A(1)) { RET(2); return; }
     RET(1);  // NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED, delivered when the thread resumes
@@ -676,8 +792,14 @@ NVN(nvnQueuePresentTexture) {
     NvnWindow *w = HOST(NvnWindow, A(1));
     int i = (int)A(2);
     if (i >= 0 && i < w->num) {
-        backend_present_crop(w->crop);  // (handheld mode: a 1280x720 crop of the 1600x900 window textures)
-        backend_present(HOST(NvnTexture, w->textures[i]));
+        if (aq_on > 0) {
+            AsyncJob j = {.kind = AJ_PRESENT, .tex = HOST(NvnTexture, w->textures[i])};
+            memcpy(j.crop, w->crop, sizeof j.crop);
+            aq_push(j);
+        } else {
+            backend_present_crop(w->crop);  // (handheld mode: a 1280x720 crop of the 1600x900 window textures)
+            backend_present(HOST(NvnTexture, w->textures[i]));
+        }
     }
     // Astral Chain: a Switch display refreshes at 60 Hz and the window shows a new image at most every
     // `interval` refreshes; the runtime parks the presenting guest thread until that vsync (nvn_hle.h).

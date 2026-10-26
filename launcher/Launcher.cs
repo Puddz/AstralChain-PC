@@ -119,6 +119,11 @@ namespace AstralChainLauncher
             Add("gpu_warm", "Shaders and performance", "Compile shaders for your GPU before playing",
                 "Takes about 10 s the first time and after driver updates; removes most shader pauses in play.",
                 OptKind.Check, "1", OptTarget.Setup, When("0", "AC_GPU_WARM=0"));
+            Add("async_submit", "Shaders and performance", "Prepare graphics on a separate thread (experimental)",
+                "The game's frames are turned into Vulkan work on a thread of their own while the game goes on with the " +
+                "next frame, instead of on the game's render thread. Helps where many things are drawn (the street " +
+                "after the opening helicopter). Turn it off if you see graphics problems.", OptKind.Check, "0",
+                OptTarget.Game, When("1", "AC_ASYNC_SUBMIT=1"));
             var bc7 = Add("bc7", "Shaders and performance", "Texture compression (BC7)",
                 "Saves about 2.5 GB of video memory (7.2 GB -> 4.7 GB on the highway chase), for GPUs with 8 GB or " +
                 "less.\n" +
