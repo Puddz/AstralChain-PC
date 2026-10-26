@@ -67,6 +67,7 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_SKIP_UNBUILT=1` | Skip draws whose pipeline is still compiling, instead of waiting for it |
 | `LARECOMP_TEX_FULLHASH=1` | Hash every texture fully at each check (slow; rules change detection in or out) |
 | `AC_ASYNC_SUBMIT=1` | (launcher: *Prepare graphics on a separate thread*) Queue submissions, fences and presents to a worker thread that runs the Vulkan backend (`objects.c`); other NVN calls wait for the queue unless `nvn_async_safe`. The profile line counts the waits (`async drains`, `fence waits`) |
+| `LARECOMP_VK_WB_DIFF=0` | Copy GPU-written ranges back whole, as before (`exec.c` `wbd_*`: ranges of 256 KB or more are compared on the GPU with a device-local shadow and only changed pages are written to a persistent host copy). `LARECOMP_VK_WB_PACK=0`: the other ranges one copy each instead of one copy per submission |
 | `LARECOMP_VK_WW_BATCH=0` | One write tracking query per texture check, as before the batched checks (`exec.c` `ww_written_pages`); the profile line's `write watch` part counts the queries by caller |
 | `AC_GPU_HANG_MS=<ms>` | GPU hang stop threshold (default 1200) |
 | `LARECOMP_DUMP_TEX=<min width>` | Level-0 data of up to 24 textures (as uploaded, unswizzled) to `tex_*.bin` in the run folder |

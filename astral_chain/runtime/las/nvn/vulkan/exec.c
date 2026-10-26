@@ -2852,7 +2852,15 @@ static void gmem_sync(void) {
 }
 
 // Ranges storing shaders may have written in the pending submission; copied back at its end.
-typedef struct { uint64_t seq, addr, size; VkBuffer buf; VmaAllocation mem; void *ptr; } GmemWb;
+// Packed staging (LARECOMP_VK_WB_PACK, default on): the ranges of one submission share one host allocation (WbBlock,
+// freed when its last range is applied or dropped).
+typedef struct { VkBuffer buf; VmaAllocation mem; int refs; } WbBlock;
+typedef struct { uint64_t seq, addr, size; VkBuffer buf; VmaAllocation mem; void *ptr; WbBlock *blk; } GmemWb;
+static void wb_release(VkBuffer buf, VmaAllocation mem, WbBlock *blk) {  // (caller holds lazy_lock)
+    if (!blk) { vmaDestroyBuffer(g_vk.vma, buf, mem); return; }
+    if (--blk->refs == 0) { vmaDestroyBuffer(g_vk.vma, blk->buf, blk->mem); free(blk); }
+}
+static pthread_mutex_t lazy_lock;
 static GmemWb wb_pending[64], wb_flight[256];
 static int wb_npend, wb_nflight;
 static void gmem_wb_note(uint64_t addr, uint64_t size) {
@@ -2862,9 +2870,229 @@ static void gmem_wb_note(uint64_t addr, uint64_t size) {
     if (wb_npend == 64) FATAL("heap mirror: more than 64 GPU-written ranges in one submission\n");
     wb_pending[wb_npend++] = (GmemWb){.addr = addr, .size = size};
 }
+// Packed: each GPU -> host copy waits on the PCIe link, and the copies were one per range (~12-17 a frame). A GPU
+// behind a slower link (an RTX 5070 Ti over OCuLink, PCIe 4.0 x4) spent 8 ms of a 10 ms frame on them, 19 ms with the
+// Legion out (42 fps); a desktop RTX 4090 ~1.9 ms. Packed, the ranges are copied into a device-local scratch buffer
+// first and then cross to the host as one copy.
+static VkBuffer wb_scratch;
+static VmaAllocation wb_scratch_mem;
+static VkDeviceSize wb_scratch_size;
+static struct { VkBuffer buf; VmaAllocation mem; uint64_t seq; } wb_old[8];
+static int wb_nold;
+static void wb_free_old(void) {
+    uint64_t done = vk_completed_seq();
+    int k = 0;
+    for (int i = 0; i < wb_nold; i++) {
+        if (wb_old[i].seq > done) { wb_old[k++] = wb_old[i]; continue; }
+        vmaDestroyBuffer(g_vk.vma, wb_old[i].buf, wb_old[i].mem);
+    }
+    wb_nold = k;
+}
+// Changed pages only (LARECOMP_VK_WB_DIFF, default on). Compute shaders bind whole storage pools (24.5, 16.8 and
+// 6.1 MB in the street after the opening helicopter) and every pool a storing shader binds is copied back: 47.5 MB
+// a frame, ~2 ms on a desktop RTX 4090 and 8-19 ms behind PCIe 4.0 x4 (an RTX 5070 Ti over OCuLink: 42 fps with the
+// Legion out), while only 1-3 of their ~6000 pages change between copies. For ranges of 256 KB or more, a device-local
+// shadow keeps what was last copied and a persistent host buffer the same bytes; a compute pass compares the range
+// with the shadow page by page and writes only changed pages to both. The host buffer then always holds the GPU's
+// newest bytes of the range, which is what a fence waiter on the Switch's shared memory would read as well.
+typedef struct { uint64_t addr, size, used; VkBuffer shadow; VmaAllocation shadow_mem; WbBlock *host; void *ptr; } WbDiff;
+enum { WBD_MAX = 16, WBD_MIN = 256 << 10 };
+static WbDiff wbd[WBD_MAX];
+static uint64_t wbd_clock;
+static VkPipeline wbd_pipe;
+static VkPipelineLayout wbd_layout;
+static VkDescriptorSetLayout wbd_set_layout;
+static int wbd_state;  // 0 not tried, 1 ready, 2 off / unavailable
+static const char *WBD_GLSL =
+    "#version 450\n"
+    "layout(local_size_x = 256) in;\n"
+    "layout(std430, set = 0, binding = 0) readonly buffer Src { uint s[]; };\n"
+    "layout(std430, set = 0, binding = 1) buffer Shadow { uint sh[]; };\n"
+    "layout(std430, set = 0, binding = 2) writeonly buffer Host { uint h[]; };\n"
+    "layout(push_constant) uniform P { uint src_off; uint words; } pc;\n"
+    "shared uint changed;\n"
+    "void main() {\n"
+    "    if (gl_LocalInvocationIndex == 0u) changed = 0u;\n"
+    "    barrier();\n"
+    "    uint base = gl_WorkGroupID.x * 1024u + gl_LocalInvocationIndex;\n"
+    "    uint v[4];\n"
+    "    bool d = false;\n"
+    "    for (uint k = 0u; k < 4u; k++) {\n"
+    "        uint i = base + k * 256u;\n"
+    "        v[k] = i < pc.words ? s[pc.src_off + i] : 0u;\n"
+    "        if (i < pc.words && v[k] != sh[i]) d = true;\n"
+    "    }\n"
+    "    if (d) atomicOr(changed, 1u);\n"
+    "    barrier();\n"
+    "    if (changed == 0u) return;\n"
+    "    for (uint k = 0u; k < 4u; k++) {\n"
+    "        uint i = base + k * 256u;\n"
+    "        if (i < pc.words) { sh[i] = v[k]; h[i] = v[k]; }\n"
+    "    }\n"
+    "}\n";
+static bool wbd_ready(void) {
+    if (wbd_state) return wbd_state == 1;
+    wbd_state = 2;
+    const char *e = getenv("LARECOMP_VK_WB_DIFF");
+    if (e && !atoi(e)) { LOG("[vk] write-backs: whole ranges (LARECOMP_VK_WB_DIFF=0)\n"); return false; }
+    VkShaderModule m = vk_compile_glsl(WBD_GLSL, STAGE_COMPUTE, "wbdiff");
+    if (!m) { LOG("[vk] write-backs: diff shader failed, whole ranges\n"); return false; }
+    VkDescriptorSetLayoutBinding b[3];
+    for (int i = 0; i < 3; i++) b[i] = (VkDescriptorSetLayoutBinding){(uint32_t)i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL};
+    VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 3, .pBindings = b};
+    VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &wbd_set_layout));
+    VkPushConstantRange r = {VK_SHADER_STAGE_COMPUTE_BIT, 0, 8};
+    VkPipelineLayoutCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
+                                     .pSetLayouts = &wbd_set_layout, .pushConstantRangeCount = 1, .pPushConstantRanges = &r};
+    VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &pi, NULL, &wbd_layout));
+    VkComputePipelineCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+                                      .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                                                .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = m, .pName = "main"},
+                                      .layout = wbd_layout};
+    VkResult res = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &wbd_pipe);
+    vkDestroyShaderModule(g_vk.dev, m, NULL);
+    if (res != VK_SUCCESS) { LOG("[vk] write-backs: diff pipeline failed (%d), whole ranges\n", res); return false; }
+    LOG("[vk] write-backs: changed pages only (large ranges)\n");
+    wbd_state = 1;
+    return true;
+}
+// The range's diff record, created (zeroed shadow and host copy) on first use; the least recently used one makes
+// room. Caller holds lazy_lock (the host buffer's references).
+static WbDiff *wbd_get(VkCommandBuffer cb, uint64_t addr, uint64_t size) {
+    WbDiff *d = NULL, *lru = &wbd[0];
+    for (int i = 0; i < WBD_MAX; i++) {
+        if (wbd[i].host && wbd[i].addr == addr && wbd[i].size == size) { d = &wbd[i]; break; }
+        if (!wbd[i].host) { lru = &wbd[i]; break; }
+        if (wbd[i].used < lru->used) lru = &wbd[i];
+    }
+    if (!d) {
+        d = lru;
+        if (d->host) {  // (earlier submissions may still use the shadow: freed once they are done)
+            if (wb_nold == 8) { pthread_mutex_unlock(&lazy_lock); vk_wait_seq(vk_pending_seq() - 1); pthread_mutex_lock(&lazy_lock); wb_free_old(); }
+            wb_old[wb_nold].buf = d->shadow; wb_old[wb_nold].mem = d->shadow_mem; wb_old[wb_nold++].seq = vk_pending_seq() - 1;
+            wb_release(VK_NULL_HANDLE, VK_NULL_HANDLE, d->host);
+            memset(d, 0, sizeof *d);
+        }
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size,
+                                 .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateBuffer(g_vk.vma, &bi, &ai, &d->shadow, &d->shadow_mem, NULL) != VK_SUCCESS) { memset(d, 0, sizeof *d); return NULL; }
+        WbBlock *h = calloc(1, sizeof *h);
+        VmaAllocationCreateInfo hi = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                      .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+        VmaAllocationInfo info;
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        if (vmaCreateBuffer(g_vk.vma, &bi, &hi, &h->buf, &h->mem, &info) != VK_SUCCESS) {
+            vmaDestroyBuffer(g_vk.vma, d->shadow, d->shadow_mem); free(h); memset(d, 0, sizeof *d); return NULL;
+        }
+        memset(info.pMappedData, 0, size);
+        vkCmdFillBuffer(cb, d->shadow, 0, VK_WHOLE_SIZE, 0);
+        VkMemoryBarrier2 fb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                               .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT, .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                               .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT};
+        VkDependencyInfo fd = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &fb};
+        vkCmdPipelineBarrier2(cb, &fd);
+        h->refs = 1;  // (the record's own reference)
+        d->host = h; d->ptr = info.pMappedData; d->addr = addr; d->size = size;
+    }
+    d->used = ++wbd_clock;
+    return d;
+}
 static void gmem_wb_record(VkCommandBuffer cb, uint64_t seq) {
+    if (wb_nold) wb_free_old();
     if (!wb_npend) return;
     vk_full_barrier(cb);
+    {
+        uint64_t bytes = 0;
+        for (int i = 0; i < wb_npend; i++) bytes += wb_pending[i].size;
+        gp_mark(cb, "(write-backs: copies, %d ranges, %.2f MB)", wb_npend, bytes / 1048576.0);
+    }
+    if (wbd_ready()) {
+        int k = 0, ndiff = 0;
+        VkDeviceSize align = g_vk.props.limits.minStorageBufferOffsetAlignment;
+        if (!align) align = 1;
+        pthread_mutex_lock(&lazy_lock);
+        for (int i = 0; i < wb_npend; i++) {
+            GmemWb *w = &wb_pending[i];
+            WbDiff *d = w->size >= WBD_MIN && !(w->size & 3) && !(w->addr & 3) ? wbd_get(cb, w->addr, w->size) : NULL;
+            if (!d) { wb_pending[k++] = *w; continue; }
+            uint64_t src = w->addr - HEAP_BASE, bound = src & ~(align - 1);
+            VkDescriptorSet ds = vk_alloc_set(wbd_set_layout);
+            VkDescriptorBufferInfo bis[3] = {{gmem_buf, bound, src - bound + w->size}, {d->shadow, 0, w->size}, {d->host->buf, 0, w->size}};
+            VkWriteDescriptorSet wr[3];
+            for (int j = 0; j < 3; j++)
+                wr[j] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = (uint32_t)j,
+                                               .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &bis[j]};
+            vkUpdateDescriptorSets(g_vk.dev, 3, wr, 0, NULL);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, wbd_pipe);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, wbd_layout, 0, 1, &ds, 0, NULL);
+            uint32_t pc[2] = {(uint32_t)((src - bound) / 4), (uint32_t)(w->size / 4)};
+            vkCmdPushConstants(cb, wbd_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, pc);
+            vkCmdDispatch(cb, (uint32_t)((w->size / 4 + 1023) / 1024), 1, 1);
+            w->buf = VK_NULL_HANDLE; w->mem = VK_NULL_HANDLE; w->blk = d->host; d->host->refs++;
+            w->ptr = d->ptr; w->seq = seq;
+            if (wb_nflight == 256) FATAL("heap mirror: too many GPU write-backs in flight\n");
+            wb_flight[wb_nflight++] = *w;
+            ndiff++;
+        }
+        pthread_mutex_unlock(&lazy_lock);
+        wb_npend = k;
+        if (ndiff) {
+            VkMemoryBarrier2 cb2 = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                    .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT, .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                                    .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT};
+            VkDependencyInfo dd = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &cb2};
+            vkCmdPipelineBarrier2(cb, &dd);
+        }
+        if (!wb_npend) return;
+    }
+    static int pack = -1;
+    if (pack < 0) { const char *e = getenv("LARECOMP_VK_WB_PACK"); pack = !e || atoi(e) != 0; }
+    VkDeviceSize total = 0, off[64];
+    for (int i = 0; i < wb_npend; i++) { off[i] = total; total += (wb_pending[i].size + 255) & ~255ull; }
+    if (pack && total > wb_scratch_size) {  // (grown, never shrunk; the barrier above orders reuse after earlier copies)
+        if (wb_scratch) {  // (earlier submissions may still copy through it: freed once they are done)
+            if (wb_nold == 8) { vk_wait_seq(vk_pending_seq() - 1); wb_free_old(); }
+            wb_old[wb_nold].buf = wb_scratch; wb_old[wb_nold].mem = wb_scratch_mem; wb_old[wb_nold++].seq = vk_pending_seq() - 1;
+        }
+        wb_scratch = VK_NULL_HANDLE;
+        VkDeviceSize sz = 1;
+        while (sz < total) sz <<= 1;
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = sz,
+                                 .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateBuffer(g_vk.vma, &bi, &ai, &wb_scratch, &wb_scratch_mem, NULL) == VK_SUCCESS) wb_scratch_size = sz;
+        else { wb_scratch = VK_NULL_HANDLE; wb_scratch_size = 0; }
+    }
+    if (pack && wb_scratch) {
+        WbBlock *blk = calloc(1, sizeof *blk);
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = total, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                      .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+        VmaAllocationInfo info;
+        VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &blk->buf, &blk->mem, &info));
+        VkBufferCopy cps[64];
+        for (int i = 0; i < wb_npend; i++) cps[i] = (VkBufferCopy){wb_pending[i].addr - HEAP_BASE, off[i], wb_pending[i].size};
+        vkCmdCopyBuffer(cb, gmem_buf, wb_scratch, (uint32_t)wb_npend, cps);
+        VkMemoryBarrier2 tb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                               .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT, .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                               .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT};
+        VkDependencyInfo td = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &tb};
+        vkCmdPipelineBarrier2(cb, &td);
+        VkBufferCopy one = {0, 0, total};
+        vkCmdCopyBuffer(cb, wb_scratch, blk->buf, 1, &one);
+        pthread_mutex_lock(&lazy_lock);
+        for (int i = 0; i < wb_npend; i++) {
+            GmemWb *w = &wb_pending[i];
+            w->buf = VK_NULL_HANDLE; w->mem = VK_NULL_HANDLE; w->blk = blk; blk->refs++;
+            w->ptr = (uint8_t *)info.pMappedData + off[i];
+            w->seq = seq;
+            if (wb_nflight == 256) FATAL("heap mirror: too many GPU write-backs in flight\n");
+            wb_flight[wb_nflight++] = *w;
+        }
+        pthread_mutex_unlock(&lazy_lock);
+        wb_npend = 0;
+    }
     for (int i = 0; i < wb_npend; i++) {
         GmemWb *w = &wb_pending[i];
         VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = w->size, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
@@ -2873,11 +3101,14 @@ static void gmem_wb_record(VkCommandBuffer cb, uint64_t seq) {
         VmaAllocationInfo info;
         VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &w->buf, &w->mem, &info));
         w->ptr = info.pMappedData;
+        w->blk = NULL;
         w->seq = seq;
         VkBufferCopy cp = {w->addr - HEAP_BASE, 0, w->size};
         vkCmdCopyBuffer(cb, gmem_buf, w->buf, 1, &cp);
+        pthread_mutex_lock(&lazy_lock);  // (fence polls on guest threads apply wb_flight)
         if (wb_nflight == 256) FATAL("heap mirror: too many GPU write-backs in flight\n");
         wb_flight[wb_nflight++] = *w;
+        pthread_mutex_unlock(&lazy_lock);
     }
     wb_npend = 0;
     VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -2896,13 +3127,13 @@ static void gmem_wb_record(VkCommandBuffer cb, uint64_t seq) {
 // a newer write-back of exactly the same range takes over the older entry and re-protects only the pages that were
 // resolved; pages of older entries whose bytes the new range covers completely are dropped without a copy. File I/O on
 // guest buffers resolves its range first (nvn_lazy_flush_hook). LARECOMP_VK_LAZY_WB=0: copy at completion.
-typedef struct { uint64_t addr, size, seq, lo, hi; VkBuffer buf; VmaAllocation mem; void *ptr; uint8_t *done; uint32_t left, faults; } Lazy;
+typedef struct { uint64_t addr, size, seq, lo, hi; VkBuffer buf; VmaAllocation mem; void *ptr; uint8_t *done; uint32_t left, faults; WbBlock *blk; } Lazy;
 enum { LAZY_MAX = 512, LAZY_HOT_MAX = 1024 };
 static Lazy lazy_tab[LAZY_MAX], lazy_free[LAZY_MAX];
 static int lazy_nfree;
 static struct { uint64_t addr, size; } lazy_hot[LAZY_HOT_MAX];  // ranges the CPU reads: eager write-back
 static int lazy_nhot;
-static pthread_mutex_t lazy_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t lazy_lock = PTHREAD_MUTEX_INITIALIZER;  // (declared with the write-back staging above)
 extern int nvn_page_protect(uint64_t addr, uint64_t size, int noaccess);
 extern void (*nvn_lazy_flush_hook)(uint64_t addr, uint64_t size);
 extern int (*nvn_lazy_fault_hook)(uint64_t addr);
@@ -3012,7 +3243,7 @@ static void gmem_writeback_apply(uint64_t done) {
     for (int i = 0; i < wb_nflight; i++) {
         GmemWb *w = &wb_flight[i];
         if (w->seq > done) { wb_flight[k++] = *w; continue; }
-        if (!nvn_guest_readable(w->addr, w->size)) { vmaDestroyBuffer(g_vk.vma, w->buf, w->mem); continue; }
+        if (!nvn_guest_readable(w->addr, w->size)) { wb_release(w->buf, w->mem, w->blk); continue; }
         nvn_heap_mirror_clean(w->addr, w->size);
         uint64_t lo = w->addr & ~4095ull, hi = (w->addr + w->size + 4095) & ~4095ull;
         uint32_t pages = (uint32_t)((hi - lo) >> 12);
@@ -3035,13 +3266,13 @@ static void gmem_writeback_apply(uint64_t done) {
             }
             memset(o->done, 0, pages);
             lazy_free[lazy_nfree++] = *o;
-            o->seq = w->seq; o->buf = w->buf; o->mem = w->mem; o->ptr = w->ptr; o->left = pages; o->faults = 0;
+            o->seq = w->seq; o->buf = w->buf; o->mem = w->mem; o->ptr = w->ptr; o->blk = w->blk; o->left = pages; o->faults = 0;
             continue;
         }
         if (same >= 0 || overlap) lazy_supersede(w->addr, w->addr + w->size, lazy);
         uint8_t *bits = lazy && lazy_n < LAZY_MAX ? calloc(pages, 1) : NULL;
         if (bits && nvn_page_protect(lo, hi - lo, 1)) {
-            lazy_tab[lazy_n++] = (Lazy){w->addr, w->size, w->seq, lo, hi, w->buf, w->mem, w->ptr, bits, pages};
+            lazy_tab[lazy_n++] = (Lazy){w->addr, w->size, w->seq, lo, hi, w->buf, w->mem, w->ptr, bits, pages, 0, w->blk};
             continue;
         }
         free(bits);
@@ -3052,10 +3283,10 @@ static void gmem_writeback_apply(uint64_t done) {
         nvn_heap_mirror_clean(w->addr, w->size);  // (after the copy: the mirror holds these bytes already)
         stat_wb_bytes += w->size;
         stat_wb_ranges++;
-        vmaDestroyBuffer(g_vk.vma, w->buf, w->mem);
+        wb_release(w->buf, w->mem, w->blk);
     }
     wb_nflight = k;
-    for (int i = 0; i < lazy_nfree; i++) vmaDestroyBuffer(g_vk.vma, lazy_free[i].buf, lazy_free[i].mem);
+    for (int i = 0; i < lazy_nfree; i++) wb_release(lazy_free[i].buf, lazy_free[i].mem, lazy_free[i].blk);
     lazy_nfree = 0;
     pthread_mutex_unlock(&lazy_lock);
 }
