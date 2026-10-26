@@ -950,6 +950,11 @@ const char *renderer_stats(void) {
                      (unsigned long long)prof_ww_calls, prof_ww_qpc / 1e6, prof_ww_pages / 256.0, (unsigned long long)prof_ww_direct,
                      (unsigned long long)prof_ww_span, (unsigned long long)prof_ww_mirror, (unsigned long long)prof_ww_clean);
             prof_ww_calls = prof_ww_qpc = prof_ww_pages = prof_ww_mirror = prof_ww_clean = prof_ww_direct = prof_ww_span = 0;
+            extern uint64_t nvn_async_drains, nvn_async_waits;  // (objects.c, AC_ASYNC_SUBMIT)
+            n = strlen(stats_text);
+            snprintf(stats_text + n, sizeof stats_text - n, " | async drains %llu fence waits %llu", (unsigned long long)nvn_async_drains,
+                     (unsigned long long)nvn_async_waits);
+            nvn_async_drains = nvn_async_waits = 0;
         }
         pthread_mutex_lock(&wait_tab_lock);
         for (int i = 0; i < 12 && wait_tab[i].why; i++) {

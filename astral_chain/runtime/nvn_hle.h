@@ -10,7 +10,10 @@
 #define NVN_HLE_MAX 4096u
 #define NVN_HLE_NAME 128u
 typedef void (*NvnHostFunction)(Cpu *);
-static struct {char name[NVN_HLE_NAME];NvnHostFunction host;uint64_t calls;} nvn_thunks[NVN_HLE_MAX];
+static struct {char name[NVN_HLE_NAME];NvnHostFunction host;uint64_t calls;int async_safe;} nvn_thunks[NVN_HLE_MAX];
+/* AC_ASYNC_SUBMIT (las/nvn/objects.c): calls that may run while the submission worker is busy, and the wait for it */
+int nvn_async_safe(const char *name);
+void nvn_async_drain(void);
 static unsigned nvn_thunk_count;
 static uint64_t nvn_bootstrap_address;
 static int nvn_hle_configured;
@@ -49,7 +52,7 @@ static uint64_t nvn_register(const char *name) {
  for(unsigned i=0;i<nvn_thunk_count;i++)if(!strcmp(nvn_thunks[i].name,name))return NVN_HLE_BASE+i*NVN_HLE_STRIDE;
  if(nvn_thunk_count>=NVN_HLE_MAX)boundary("nvn-thunk-table-exhausted",&state,state.pc);
  unsigned index=nvn_thunk_count++;
- memcpy(nvn_thunks[index].name,name,strlen(name)+1);
+ memcpy(nvn_thunks[index].name,name,strlen(name)+1);nvn_thunks[index].async_safe=nvn_async_safe(name);
  for(unsigned i=0;i<sizeof(nvn_host_table)/sizeof(nvn_host_table[0]);i++)
   if(!strcmp(nvn_host_table[i].name,name))nvn_thunks[index].host=nvn_host_table[i].host;
  if(!nvn_thunks[index].host && nvn_linked)nvn_thunks[index].host=nvn_linked_lookup(name);
@@ -141,6 +144,7 @@ static int hle_intercept_body(Cpu *c) {
   boundary("nvn-unimplemented",c,c->pc);
  }
  uint64_t return_address=c->x[30],in[4]={c->x[0],c->x[1],c->x[2],c->x[3]};
+ if(!nvn_thunks[index].async_safe) nvn_async_drain();
  nvn_thunks[index].host(c);c->pc=return_address;
  /* Bounded call trace: the first 4096 host calls, then every 65536th. */
  static uint64_t traced;traced++;
@@ -244,6 +248,7 @@ void plat_thread_background(void) {SetThreadPriority(GetCurrentThread(),THREAD_P
  * write-tracking API (plat_written_pages) and the GPU heap mirror. */
 #define TRACK_PAGES (HEAP_LIMIT/4096)
 static uint32_t *track_gen,*track_api_seen,*track_mirror_seen,track_clock;
+static SRWLOCK track_srw=SRWLOCK_INIT;
 static int track_ready(void) {
  if(!track_gen) {
   track_gen=calloc(TRACK_PAGES,4);track_api_seen=calloc(TRACK_PAGES,4);track_mirror_seen=calloc(TRACK_PAGES,4);
@@ -280,20 +285,20 @@ static int written_pages(uint64_t addr,uint64_t size,uint64_t *pages,int max,uin
  }
  return n>max ? max : n; /* n == max: the caller treats the whole range as written */
 }
-int plat_written_pages(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {
+static int plat_written_pages_u(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {
  return written_pages(addr,size,pages,max,page,1);
 }
 /* Batched queries (the backend's texture checks, exec.c ww_span): a query costs ~6 us of fixed cost however small
  * its range, against ~2.3 ns a page. The caller harvests a wide span once (plat_write_harvest), then asks about the
  * ranges inside it without a system call each (plat_written_pages_harvested): writes after that harvest are seen
  * at the next one. */
-int plat_write_harvest(uint64_t addr,uint64_t size) {
+static int plat_write_harvest_u(uint64_t addr,uint64_t size) {
  if(!size || addr<heap_base || size>HEAP_LIMIT || addr-heap_base>HEAP_LIMIT-size) return -1;
  uint64_t lo=addr&~4095ull,hi=(addr+size+4095)&~4095ull;
  if(hi-heap_base>HEAP_LIMIT) hi=heap_base+HEAP_LIMIT;
  track_harvest(lo,hi);return 0;
 }
-int plat_written_pages_harvested(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {
+static int plat_written_pages_harvested_u(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {
  return written_pages(addr,size,pages,max,page,0);
 }
 /* GPU heap mirror: only ranges the GPU reads are kept current (bound storage
@@ -303,7 +308,7 @@ int plat_written_pages_harvested(uint64_t addr,uint64_t size,uint64_t *pages,int
 static uint8_t *track_interest;
 static struct {uint64_t lo,hi;} track_ranges[8192];
 static unsigned track_nranges;
-void nvn_heap_mirror_interest(uint64_t addr,uint64_t size) {
+static void nvn_heap_mirror_interest_u(uint64_t addr,uint64_t size) {
  if(!size || addr<heap_base || addr-heap_base>=HEAP_LIMIT) return;
  track_ready();
  if(!track_interest) {track_interest=calloc(TRACK_PAGES,1);if(!track_interest) boundary("mirror-interest-allocation",&state,state.pc);}
@@ -335,7 +340,7 @@ void nvn_heap_mirror_interest(uint64_t addr,uint64_t size) {
  if(k>a+1) {memmove(&track_ranges[a+1],&track_ranges[k],(track_nranges-k)*sizeof(track_ranges[0]));track_nranges-=k-a-1;}
 }
 /* Pages written since the mirror last copied them, within the registered ranges. */
-int nvn_heap_mirror_dirty(uint64_t limit,uint64_t *pages,int max) {
+static int nvn_heap_mirror_dirty_u(uint64_t limit,uint64_t *pages,int max) {
  static unsigned range_cursor;static uint64_t page_cursor;
  track_ready();
  /* One GetWriteWatch per span of ranges less than 8 MB apart: a call per range cost ~10% of the main
@@ -362,17 +367,26 @@ int nvn_heap_mirror_dirty(uint64_t limit,uint64_t *pages,int max) {
  range_cursor=0;page_cursor=0;return n;
 }
 /* A new mirror holds nothing: every registered range is copied again. */
-void nvn_heap_mirror_mark_all(uint64_t limit) {
+static void nvn_heap_mirror_mark_all_u(uint64_t limit) {
  (void)limit;track_ready();
  for(unsigned r=0;r<track_nranges;r++)
   for(uint64_t i=track_ranges[r].lo;i<track_ranges[r].hi;i++) track_mirror_seen[i]=~track_gen[i];
 }
 /* After the GPU's results were copied into guest memory: the mirror already holds them. */
-void nvn_heap_mirror_clean(uint64_t addr,uint64_t size) {
+static void nvn_heap_mirror_clean_u(uint64_t addr,uint64_t size) {
  uint64_t lo=addr&~4095ull,hi=(addr+size+4095)&~4095ull;
  track_harvest(lo,hi);prof_ww_clean++;
  for(uint64_t a=lo;a<hi;a+=4096) {uint64_t i=(a-heap_base)>>12;track_mirror_seen[i]=track_gen[i];}
 }
+/* The write tracker is used by the backend (its own thread with AC_ASYNC_SUBMIT) and by fence polls on guest threads
+ * (write-backs: nvn_heap_mirror_clean): one lock around its entry points. */
+int plat_written_pages(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {AcquireSRWLockExclusive(&track_srw);int r=plat_written_pages_u(addr,size,pages,max,page);ReleaseSRWLockExclusive(&track_srw);return r;}
+int plat_write_harvest(uint64_t addr,uint64_t size) {AcquireSRWLockExclusive(&track_srw);int r=plat_write_harvest_u(addr,size);ReleaseSRWLockExclusive(&track_srw);return r;}
+int plat_written_pages_harvested(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {AcquireSRWLockExclusive(&track_srw);int r=plat_written_pages_harvested_u(addr,size,pages,max,page);ReleaseSRWLockExclusive(&track_srw);return r;}
+void nvn_heap_mirror_interest(uint64_t addr,uint64_t size) {AcquireSRWLockExclusive(&track_srw);nvn_heap_mirror_interest_u(addr,size);ReleaseSRWLockExclusive(&track_srw);}
+int nvn_heap_mirror_dirty(uint64_t limit,uint64_t *pages,int max) {AcquireSRWLockExclusive(&track_srw);int r=nvn_heap_mirror_dirty_u(limit,pages,max);ReleaseSRWLockExclusive(&track_srw);return r;}
+void nvn_heap_mirror_mark_all(uint64_t limit) {AcquireSRWLockExclusive(&track_srw);nvn_heap_mirror_mark_all_u(limit);ReleaseSRWLockExclusive(&track_srw);}
+void nvn_heap_mirror_clean(uint64_t addr,uint64_t size) {AcquireSRWLockExclusive(&track_srw);nvn_heap_mirror_clean_u(addr,size);ReleaseSRWLockExclusive(&track_srw);}
 /* Readable committed guest heap memory, without a system call: the heap is
  * committed up to heap_size, and the only no-access pages inside it are the
  * runtime's own stack-map and transfer-memory sources (unless the heap is
