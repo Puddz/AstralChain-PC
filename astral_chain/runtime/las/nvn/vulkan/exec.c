@@ -424,7 +424,10 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
         cbs[n++] = (VkCommandBufferSubmitInfo){.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = s->upload};
     }
     vk_cmd();  // (an empty main buffer still carries the semaphores)
+    // (profiled frame: the last draw's row ended at the next submission's start, GPU idle and all)
+    gp_mark(s->main, "(write-backs to guest memory)");
     gmem_wb_record(s->main, submit_seq + 1);
+    gp_mark(s->main, "(submission end; until the next submission starts)");
     if (s->ts) vkCmdWriteTimestamp2(s->main, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, prof_qp, (uint32_t)cur_sub * 2 + 1);
     VK_CHECK(vkEndCommandBuffer(s->main));
     cbs[n++] = (VkCommandBufferSubmitInfo){.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = s->main};
@@ -3898,6 +3901,11 @@ static void draw_(CmdRec *r, bool indexed) {
         static int each = -1;
         if (each < 0) each = getenv("LARECOMP_DEBUG_EACH") != NULL;
         if (g_debug_frame && each && in_pass) { LOG("[draw]   (state before this draw: pass image %d)\n", debug_pass_no); vk_end_pass(); }
+        // LARECOMP_GPUPROF_DRAWS=1 (profiled frame): the same, so a draw's timestamps bracket its own work (inside one
+        // pass the GPU overlaps draws, and all of a pass's time landed on its last draw)
+        static int per_draw = -1;
+        if (per_draw < 0) per_draw = getenv("LARECOMP_GPUPROF_DRAWS") != NULL;
+        if (g_gpuprof_frame && per_draw && in_pass) vk_end_pass();
     }
     begin_pass();
     VkCommandBuffer cb = vk_cmd();
