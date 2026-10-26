@@ -732,6 +732,14 @@ void backend_present(NvnTexture *t) {
             if (at == (long)total_frames) { g_gpuprof_frame = true; break; }
             if (*p == ',') p++; else break;
         }
+        // Astral Chain: LARECOMP_GPUPROF_EVERY=<frames> profiles a frame every that many frames (players' reports:
+        // where the GPU time goes in whatever they play; each profiled frame stalls briefly).
+        static long every = -1;
+        if (every < 0) { const char *v = getenv("LARECOMP_GPUPROF_EVERY"); every = v ? atol(v) : 0; if (every < 0) every = 0; }
+        if (every && !was_profiled && !g_gpuprof_frame && total_frames && total_frames % (uint64_t)every == 0) {
+            g_gpuprof_frame = true;
+            LOG("[gpuprof] frame %llu (LARECOMP_GPUPROF_EVERY)\n", (unsigned long long)total_frames);
+        }
         // Astral Chain: LARECOMP_GPUPROF_AUTO=1 profiles the frame after a slow one (> 250 ms present to present), up
         // to 12 per session. Off by default: a profiled frame took ~850 ms, counted as slow and profiled the next one,
         // ~10 s of near-freeze after a single slow frame in play. A profiled frame never triggers another.
