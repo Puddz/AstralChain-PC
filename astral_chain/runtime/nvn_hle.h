@@ -251,8 +251,11 @@ static int track_ready(void) {
  }
  return 1;
 }
+/* (LARECOMP_VK_PROF line: write tracking queries, their time (ns) and pages, by caller) */
+uint64_t prof_ww_calls,prof_ww_qpc,prof_ww_pages,prof_ww_mirror,prof_ww_clean;
 static void track_harvest(uint64_t lo,uint64_t hi) {
  static uint64_t written[65536];
+ LARGE_INTEGER ww0;QueryPerformanceCounter(&ww0);prof_ww_calls++;prof_ww_pages+=(hi-lo)>>12;
  track_ready();uint32_t g=++track_clock;
  for(uint64_t a=lo;a<hi;) {
   uint64_t e=hi-a>(256ull<<20) ? a+(256ull<<20) : hi; /* 65536 pages: the buffer never overflows */
@@ -262,17 +265,36 @@ static void track_harvest(uint64_t lo,uint64_t hi) {
   for(ULONG_PTR i=0;i<n;i++) track_gen[(written[i]-heap_base)>>12]=g;
   a=e;
  }
+ static LARGE_INTEGER wwf;if(!wwf.QuadPart) QueryPerformanceFrequency(&wwf);
+ LARGE_INTEGER ww1;QueryPerformanceCounter(&ww1);prof_ww_qpc+=(uint64_t)(ww1.QuadPart-ww0.QuadPart)*1000000000ull/(uint64_t)wwf.QuadPart;
 }
-int plat_written_pages(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {
+static int written_pages(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page,int harvest) {
  if(max<=0 || addr<heap_base || size>HEAP_LIMIT || addr-heap_base>HEAP_LIMIT-size) return -1;
  uint64_t lo=addr&~4095ull,hi=(addr+size+4095)&~4095ull;
  if(hi-heap_base>HEAP_LIMIT) hi=heap_base+HEAP_LIMIT;
- track_harvest(lo,hi);*page=4096;int n=0;
+ if(harvest) track_harvest(lo,hi);
+ *page=4096;int n=0;
  for(uint64_t a=lo;a<hi;a+=4096) {
   uint64_t i=(a-heap_base)>>12;
   if(track_gen[i]!=track_api_seen[i]) {track_api_seen[i]=track_gen[i];if(n<max) pages[n]=a;n++;}
  }
  return n>max ? max : n; /* n == max: the caller treats the whole range as written */
+}
+int plat_written_pages(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {
+ return written_pages(addr,size,pages,max,page,1);
+}
+/* Batched queries (the backend's texture checks, exec.c ww_span): a query costs ~6 us of fixed cost however small
+ * its range, against ~2.3 ns a page. The caller harvests a wide span once (plat_write_harvest), then asks about the
+ * ranges inside it without a system call each (plat_written_pages_harvested): writes after that harvest are seen
+ * at the next one. */
+int plat_write_harvest(uint64_t addr,uint64_t size) {
+ if(!size || addr<heap_base || size>HEAP_LIMIT || addr-heap_base>HEAP_LIMIT-size) return -1;
+ uint64_t lo=addr&~4095ull,hi=(addr+size+4095)&~4095ull;
+ if(hi-heap_base>HEAP_LIMIT) hi=heap_base+HEAP_LIMIT;
+ track_harvest(lo,hi);return 0;
+}
+int plat_written_pages_harvested(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {
+ return written_pages(addr,size,pages,max,page,0);
 }
 /* GPU heap mirror: only ranges the GPU reads are kept current (bound storage
  * buffers, vertex/index data read in place). Registering a range forces its
@@ -316,14 +338,16 @@ void nvn_heap_mirror_interest(uint64_t addr,uint64_t size) {
 int nvn_heap_mirror_dirty(uint64_t limit,uint64_t *pages,int max) {
  static unsigned range_cursor;static uint64_t page_cursor;
  track_ready();
- /* One GetWriteWatch per span of ranges less than 256 KB apart: a call per range cost ~10% of the main
-  * thread (run 434, thousands of small ranges per submission). Gap pages are harvested too; harmless, every
-  * consumer compares generations. */
+ /* One GetWriteWatch per span of ranges less than 8 MB apart: a call per range cost ~10% of the main
+  * thread (run 434, thousands of small ranges per submission). A call costs ~6 us however small its range, a page
+  * ~2.3 ns, so scanning a gap of up to 2048 pages is cheaper than a call (256 KB gaps still left ~180 calls a frame
+  * in the street after the opening helicopter). Gap pages are harvested too; harmless, every consumer compares
+  * generations. */
  if(!range_cursor && !page_cursor)
   for(unsigned r=0;r<track_nranges;) {
    uint64_t lo=track_ranges[r].lo,hi=track_ranges[r].hi;r++;
-   while(r<track_nranges && track_ranges[r].lo-hi<=64) {hi=track_ranges[r].hi;r++;}
-   track_harvest(heap_base+(lo<<12),heap_base+(hi<<12));
+   while(r<track_nranges && track_ranges[r].lo-hi<=2048) {hi=track_ranges[r].hi;r++;}
+   track_harvest(heap_base+(lo<<12),heap_base+(hi<<12));prof_ww_mirror++;
   }
  int n=0;
  for(unsigned r=range_cursor;r<track_nranges;r++) {
@@ -346,7 +370,7 @@ void nvn_heap_mirror_mark_all(uint64_t limit) {
 /* After the GPU's results were copied into guest memory: the mirror already holds them. */
 void nvn_heap_mirror_clean(uint64_t addr,uint64_t size) {
  uint64_t lo=addr&~4095ull,hi=(addr+size+4095)&~4095ull;
- track_harvest(lo,hi);
+ track_harvest(lo,hi);prof_ww_clean++;
  for(uint64_t a=lo;a<hi;a+=4096) {uint64_t i=(a-heap_base)>>12;track_mirror_seen[i]=track_gen[i];}
 }
 /* Readable committed guest heap memory, without a system call: the heap is
