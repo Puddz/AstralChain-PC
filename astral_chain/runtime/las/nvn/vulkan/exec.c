@@ -944,6 +944,12 @@ const char *renderer_stats(void) {
             snprintf(stats_text + n, sizeof stats_text - n, " | tex unwritten %llu untracked %llu warmed %llu", (unsigned long long)prof_tex_watch_skips,
                      (unsigned long long)prof_tex_unknown, (unsigned long long)prof_tex_warmed);
             prof_tex_watch_skips = prof_tex_unknown = prof_tex_warmed = 0;
+            extern uint64_t prof_ww_calls, prof_ww_qpc, prof_ww_pages, prof_ww_mirror, prof_ww_clean, prof_ww_direct, prof_ww_span;
+            n = strlen(stats_text);
+            snprintf(stats_text + n, sizeof stats_text - n, " | write watch %llu calls %.1f ms %.0f MB (textures %llu + spans %llu, mirror %llu, clean %llu)",
+                     (unsigned long long)prof_ww_calls, prof_ww_qpc / 1e6, prof_ww_pages / 256.0, (unsigned long long)prof_ww_direct,
+                     (unsigned long long)prof_ww_span, (unsigned long long)prof_ww_mirror, (unsigned long long)prof_ww_clean);
+            prof_ww_calls = prof_ww_qpc = prof_ww_pages = prof_ww_mirror = prof_ww_clean = prof_ww_direct = prof_ww_span = 0;
         }
         pthread_mutex_lock(&wait_tab_lock);
         for (int i = 0; i < 12 && wait_tab[i].why; i++) {
@@ -3225,12 +3231,66 @@ static bool pt_init(void) {
 // few frames: they may not have run yet). GPU writes count by the generation they were recorded at: pages a
 // storing shader may write were a permanent "unknown" before, which left textures there on a sampled hash only
 // (stale blocks in large textures - character faces). *now: the generation to pass next time.
+// Batched texture checks. A write tracking query costs ~6 us however small its range (+ ~2.3 ns a page), and a busy
+// frame checks ~800 textures, one query each: ~600 ms in 2 s, a third of the render thread, in the street after the
+// opening helicopter (33-45 fps there, at any resolution). The ranges checked in the last frame are merged into spans
+// (gaps under 8 MB cost less to scan than a query); within one command list (backend_execute) a span is queried once,
+// at the first check inside it, and the later checks inside it read the stamps without a system call. A write made
+// after that query is seen at the next command list, as a write just after a texture's own query was before; on the
+// Switch the game has to finish its writes before it submits. Ranges outside the spans are queried as before.
+// LARECOMP_VK_WW_BATCH=0: one query per check.
+extern int plat_write_harvest(uint64_t addr, uint64_t size);
+extern int plat_written_pages_harvested(uint64_t addr, uint64_t size, uint64_t *pages, int max, uint64_t *page);
+enum { WW_REC = 16384, WW_SPAN = 1024, WW_GAP = 2048 * VC_PAGE };
+typedef struct { uint64_t lo, hi; } WwRange;
+static WwRange ww_rec[WW_REC], ww_span[WW_SPAN];
+static int ww_nrec, ww_nspan, ww_on = -1;
+static uint32_t ww_span_list[WW_SPAN], ww_list;  // (the command list a span was last queried in)
+static bool ww_in_list;
+uint64_t prof_ww_direct, prof_ww_span;
+static uint64_t ww_frame;
+static int ww_cmp(const void *a, const void *b) {
+    uint64_t x = ((const WwRange *)a)->lo, y = ((const WwRange *)b)->lo;
+    return x < y ? -1 : x > y;
+}
+static void ww_new_frame(uint64_t frame) {  // spans from the ranges checked in the frame that ended
+    ww_frame = frame;
+    qsort(ww_rec, (size_t)ww_nrec, sizeof ww_rec[0], ww_cmp);
+    ww_nspan = 0;
+    for (int i = 0; i < ww_nrec && ww_nspan < WW_SPAN; i++) {
+        if (ww_nspan && ww_rec[i].lo <= ww_span[ww_nspan - 1].hi + WW_GAP) {
+            if (ww_rec[i].hi > ww_span[ww_nspan - 1].hi) ww_span[ww_nspan - 1].hi = ww_rec[i].hi;
+        } else ww_span[ww_nspan++] = ww_rec[i];
+    }
+    memset(ww_span_list, 0, sizeof ww_span_list);
+    ww_nrec = 0;
+}
+static int ww_written_pages(uint64_t lo, uint64_t hi, uint64_t *pages, int max, uint64_t *pg) {  // (heap offsets)
+    if (ww_on < 0) { const char *e = getenv("LARECOMP_VK_WW_BATCH"); ww_on = !e || atoi(e) != 0; }
+    if (!ww_on || !ww_in_list) { prof_ww_direct++; return plat_written_pages(HEAP_BASE + lo, hi - lo, pages, max, pg); }
+    extern uint64_t vk_frame_counter(void);
+    uint64_t frame = vk_frame_counter();
+    if (frame != ww_frame) ww_new_frame(frame);
+    if (ww_nrec < WW_REC) ww_rec[ww_nrec++] = (WwRange){lo, hi};
+    int a = 0, b = ww_nspan;  // (the last span starting at or before lo)
+    while (a < b) { int m = (a + b) / 2; if (ww_span[m].lo <= lo) a = m + 1; else b = m; }
+    int k = a - 1;
+    if (k < 0 || hi > ww_span[k].hi) { prof_ww_direct++; return plat_written_pages(HEAP_BASE + lo, hi - lo, pages, max, pg); }
+    if (ww_span_list[k] != ww_list) {
+        prof_ww_span++;
+        if (plat_write_harvest(HEAP_BASE + ww_span[k].lo, ww_span[k].hi - ww_span[k].lo) < 0)
+            return plat_written_pages(HEAP_BASE + lo, hi - lo, pages, max, pg);
+        ww_span_list[k] = ww_list;
+    }
+    return plat_written_pages_harvested(HEAP_BASE + lo, hi - lo, pages, max, pg);
+}
+
 int vk_pages_changed(uint64_t addr, uint64_t size, uint32_t since, uint32_t *now) {
     if (!size || addr < HEAP_BASE || addr - HEAP_BASE + size > HEAP_MAX || !pt_init()) return -1;
     uint64_t lo = (addr - HEAP_BASE) & ~(VC_PAGE - 1), hi = (addr - HEAP_BASE + size + VC_PAGE - 1) & ~(VC_PAGE - 1);
     static uint64_t pages[4096];
     uint64_t pg = VC_PAGE;
-    int n = plat_written_pages(HEAP_BASE + lo, hi - lo, pages, 4096, &pg);
+    int n = ww_written_pages(lo, hi, pages, 4096, &pg);
     if (n < 0) return -1;
     uint32_t g = ++vc_gen;
     if (n >= 4096) for (uint64_t p = lo / VC_PAGE; p < hi / VC_PAGE; p++) vc_page_gen[p] = g;
@@ -5044,7 +5104,10 @@ static void exec_list(uint64_t handle, int depth) {
 
 void backend_execute(uint64_t handle) {
     PROF_T0();
+    if (!++ww_list) ww_list = 1;  // (0: never queried)
+    ww_in_list = true;
     exec_list(handle, 0);
+    ww_in_list = false;
     PROF_ADD(prof_exec);
     if (prof) cum_exec += SDL_GetTicksNS() - prof_t0_;
     static int sync_submit = -1;
