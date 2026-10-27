@@ -239,6 +239,8 @@ static void create_device(void) {
     b->depthBiasClamp = h->depthBiasClamp;
     b->depthClamp = h->depthClamp;
     g_vk.depth_clamp = h->depthClamp;
+    b->occlusionQueryPrecise = h->occlusionQueryPrecise;
+    g_vk.occ_precise = h->occlusionQueryPrecise;
     b->largePoints = h->largePoints;
     b->wideLines = h->wideLines;
     b->imageCubeArray = h->imageCubeArray;
