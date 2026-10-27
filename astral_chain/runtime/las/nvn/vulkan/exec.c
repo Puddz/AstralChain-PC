@@ -301,6 +301,9 @@ static void oq_resolve(int i) {  // (cq_lock held) slot i's submission is done
 static void oq_resolve_done(uint64_t done) {  // (cq_lock held)
     for (int i = 0; i < SUBS; i++) if (oq[i].nrep && subs[i].seq <= done) oq_resolve(i);
 }
+// nvnBufferInvalidateMappedRange: the game is about to read memory the GPU writes (its occlusion counts) without
+// waiting on a fence. Counters of the submissions the GPU has finished are written now, not at the next wait.
+void backend_counters_poll(void) { cq_resolve_done(vk_completed_seq()); }
 static void oq_draw(VkCommandBuffer cb, bool end) {  // around a draw while a count is open
     if (occ_sub != cur_sub) return;
     OccQ *q = &oq[cur_sub];
@@ -5136,18 +5139,22 @@ static void exec_list(uint64_t handle, int depth) {
             if (r->x[0] == 1) {  // samples passed: the open count's queries, summed once the submission is done
                 uint64_t *out = (uint64_t *)(uintptr_t)r->x[1];
                 if (!out) break;
-                out[0] = 0;
                 out[1] = ns_to_gpu_ticks(plat_now_ns());
                 OccQ *q = &oq[cur_sub];
+                bool pending = false;
                 if (occ_sub == cur_sub && q->n > occ_first) {
                     NvnTexture *rt = st.rt.depth ? st.rt.depth : st.rt.ncolor ? st.rt.color[0] : NULL;
                     float sx = 1, sy = 1;
                     if (rt) renderer_texture_scale(rt, &sx, &sy);
                     pthread_mutex_lock(&cq_lock);
-                    if (q->nrep < OQ_REPS) q->rep[q->nrep++] = (OccRep){out, occ_first, q->n - occ_first, sx * sy > 0 ? sx * sy : 1};
+                    if (q->nrep < OQ_REPS) { q->rep[q->nrep++] = (OccRep){out, occ_first, q->n - occ_first, sx * sy > 0 ? sx * sy : 1}; pending = true; }
                     pthread_mutex_unlock(&cq_lock);
                     stat_occ++;
                 }
+                // The game reads the count a frame later without waiting for the GPU (the in-game camera's subjects are
+                // "visible" above a few samples). As on the hardware, the memory keeps the last count until the new
+                // one is written: zeroing it here made every subject read as hidden.
+                if (!pending) out[0] = 0;
                 occ_sub = -1;  // (reset, draws, report: later draws aren't counted)
                 break;
             }
