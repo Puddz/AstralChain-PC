@@ -4454,6 +4454,18 @@ static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
     if (small_mem) vmaDestroyImage(g_vk.vma, srcimg, small_mem);
 }
 
+// nvnTextureReadTexels: the CPU reads texels into tightly packed linear memory (the in-game camera reads its photo
+// this way). The texture lives in a Vulkan image, not in its pool, so this is a texture -> buffer copy, waited on.
+void backend_read_texels(NvnTexture *t, const NvnTextureView *view, const int32_t region[6], void *dst) {
+    TexRefRec r = {.tex = (uint64_t)(uintptr_t)t};
+    if (view) { r.has_view = 1; r.view = *view; }
+    if (region) memcpy(r.region, region, sizeof r.region);
+    uint64_t rs = st.copy_row_stride, is = st.copy_image_stride;  // (command buffer copy strides don't apply)
+    st.copy_row_stride = st.copy_image_stride = 0;
+    copy_texture_to_buffer(&r, (uint64_t)(uintptr_t)dst);
+    st.copy_row_stride = rs; st.copy_image_stride = is;
+}
+
 static void copy_texture(const TexRefRec *src, const TexRefRec *dst, uint64_t flags) {
     snap_reason = "tex2tex"; snapshots_invalidate(NULL);
     NvnTexture *st_ = (NvnTexture *)(uintptr_t)src->tex, *dt = (NvnTexture *)(uintptr_t)dst->tex;
