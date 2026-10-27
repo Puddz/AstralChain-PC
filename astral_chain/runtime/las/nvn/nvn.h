@@ -134,4 +134,5 @@ void backend_present_crop(const int crop[4]);     // the window's crop (x, y, wi
 void backend_texture_destroyed(NvnTexture *tex);
 void backend_texture_created(NvnTexture *tex);  // (initialized: may be uploaded before its first use)
 void backend_pool_written(uint64_t addr, uint64_t size);
+void backend_counters_poll(void);  // write the reports (counters) of the submissions the GPU has finished; no wait
 void backend_read_texels(NvnTexture *tex, const NvnTextureView *view, const int32_t region[6], void *dst);

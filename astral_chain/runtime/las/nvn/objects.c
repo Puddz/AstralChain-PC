@@ -358,7 +358,7 @@ NVN(nvnBufferGetMemoryOffset) { RET(G(uint64_t, A(0), 0x10)); }
 NVN(nvnBufferGetSize) { RET(G(uint64_t, A(0), 0x18)); }
 NVN(nvnBufferGetDebugID) { RET(G(uint64_t, A(0), 0x20)); }
 NVN(nvnBufferFlushMappedRange) { backend_pool_written(G(uint64_t, A(0), 0) + A(1), A(2)); }
-NVN(nvnBufferInvalidateMappedRange) { (void)c; }
+NVN(nvnBufferInvalidateMappedRange) { (void)c; backend_counters_poll(); }
 
 // ================================================================== textures
 // TextureBuilder: device@0 flags@8 target@0xC width@0x10 height@0x14 depth@0x18 levels@0x1C
