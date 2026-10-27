@@ -566,7 +566,10 @@ NVN(nvnTextureWriteTexels) {
     }
 }
 NVN(nvnTextureWriteTexelsStrided) { LOG("[nvn] WriteTexelsStrided not implemented\n"); (void)c; }
-NVN(nvnTextureReadTexels) { LOG("[nvn] ReadTexels not implemented\n"); (void)c; }
+NVN(nvnTextureReadTexels) {  // (texture, view, region, data)
+    NvnTexture *t = HOST(NvnTexture, A(0));
+    if (t && A(3)) backend_read_texels(t, A(1) ? AP(1) : NULL, A(2) ? AP(2) : NULL, AP(3));
+}
 NVN(nvnTextureReadTexelsStrided) { (void)c; }
 
 // ================================================================== samplers
