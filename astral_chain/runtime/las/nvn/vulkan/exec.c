@@ -259,10 +259,54 @@ static void cq_resolve(int i) {  // (cq_lock held) submission slot i is done: it
     q->n = 0;
 }
 
+static void oq_resolve_done(uint64_t done);
 static void cq_resolve_done(uint64_t done) {  // every slot whose submission is done
     pthread_mutex_lock(&cq_lock);
     for (int i = 0; i < SUBS; i++) if (cq[i].n && cq[i].seq <= done) cq_resolve(i);
+    oq_resolve_done(done);
     pthread_mutex_unlock(&cq_lock);
+}
+
+// ---- samples-passed counters (nvnCommandBufferResetCounter / ReportCounter type 1): occlusion queries
+// The game tests one object's visibility a frame (reset, one draw, report), and the in-game camera's photo quests test
+// their subject this way. The counter used to read 0 (nothing visible): a photo of the quest's subject never counted.
+// Draws between a reset and its report are each one Vulkan occlusion query; once the submission is done (the game
+// waits on its fence before reading) the report gets their sum, in guest-resolution samples.
+#define OQ_MAX 256
+#define OQ_REPS 64
+typedef struct { uint64_t *out; uint32_t first, count; float area; } OccRep;
+typedef struct { VkQueryPool pool; uint32_t n, nrep; OccRep rep[OQ_REPS]; } OccQ;
+static OccQ oq[SUBS];
+static int occ_sub = -1;  // the slot of the open count (reset seen, not yet reported); -1 none
+static uint32_t occ_first;
+static uint64_t stat_occ;
+static void oq_resolve(int i) {  // (cq_lock held) slot i's submission is done
+    OccQ *q = &oq[i];
+    if (q->nrep && q->n) {
+        static uint64_t res[OQ_MAX];
+        static int log = -1;  // LARECOMP_LOG_OCC=1: each report's samples
+        if (log < 0) log = getenv("LARECOMP_LOG_OCC") != NULL;
+        if (vkGetQueryPoolResults(g_vk.dev, q->pool, 0, q->n, sizeof res, res, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+            for (uint32_t k = 0; k < q->nrep; k++) {
+                OccRep *r = &q->rep[k];
+                uint64_t sum = 0;
+                for (uint32_t j = 0; j < r->count; j++) sum += res[r->first + j];
+                r->out[0] = (uint64_t)((double)sum / r->area + 0.5);
+                if (log) LOG("[occ] report %llx: %u draws, %llu samples (%llu at guest resolution)\n", (unsigned long long)(uintptr_t)r->out,
+                             r->count, (unsigned long long)sum, (unsigned long long)r->out[0]);
+            }
+    }
+    q->n = q->nrep = 0;
+}
+static void oq_resolve_done(uint64_t done) {  // (cq_lock held)
+    for (int i = 0; i < SUBS; i++) if (oq[i].nrep && subs[i].seq <= done) oq_resolve(i);
+}
+static void oq_draw(VkCommandBuffer cb, bool end) {  // around a draw while a count is open
+    if (occ_sub != cur_sub) return;
+    OccQ *q = &oq[cur_sub];
+    if (!q->pool || q->n >= OQ_MAX) return;
+    if (!end) vkCmdBeginQuery(cb, q->pool, q->n, g_vk.occ_precise ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
+    else vkCmdEndQuery(cb, q->pool, q->n++);
 }
 
 static Sub *sub(void) {
@@ -315,6 +359,19 @@ VkCommandBuffer vk_cmd(void) {
             q->seq = s->seq;
             pthread_mutex_unlock(&cq_lock);
             if (q->pool) vkCmdResetQueryPool(s->main, q->pool, 0, CQ_MAX);
+        }
+        {   // this slot's occlusion queries (reset outside any render pass)
+            OccQ *q = &oq[cur_sub];
+            if (!q->pool) {
+                VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_OCCLUSION,
+                                            .queryCount = OQ_MAX};
+                if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &q->pool) != VK_SUCCESS) q->pool = VK_NULL_HANDLE;
+            }
+            pthread_mutex_lock(&cq_lock);
+            q->n = q->nrep = 0;  // (resolved when the slot was freed: sub())
+            pthread_mutex_unlock(&cq_lock);
+            if (occ_sub == cur_sub) occ_sub = -1;  // (a count across submissions: dropped)
+            if (q->pool) vkCmdResetQueryPool(s->main, q->pool, 0, OQ_MAX);
         }
         gp_mark(s->main, "(submission start; includes GPU idle before it)");
         if (prof && prof_qp) {
@@ -4527,6 +4584,7 @@ static void draw_(CmdRec *r, bool indexed) {
             gp_mark(cb, "draw vs %llx fs %llx fs hash %016llx count %u inst %u", (unsigned long long)st.program->stages[0].code_addr,
                     (unsigned long long)st.program->stages[1].code_addr, (unsigned long long)g_cur_fs_hash, use_index ? icount : count, inst);
     }
+    oq_draw(cb, false);
     for (int ri = 0; ri < nruns; ri++) {
         if (nruns > 1 || run_gold[0]) {  // this run's tint: a fragment set of its own
             float rtint[8] = {0};
@@ -4538,6 +4596,7 @@ static void draw_(CmdRec *r, bool indexed) {
         if (!use_index) vkCmdDraw(cb, count, run_n[ri], first, base_inst + run_at[ri]);
         else vkCmdDrawIndexed(cb, icount, run_n[ri], 0, base_vertex, base_inst + run_at[ri]);
     }
+    oq_draw(cb, true);
     stat_draws++; vk_draws_total++;
     cum_draws++;
     if (g_gpuprof_frame && gp_n) {
@@ -5409,7 +5468,32 @@ static void exec_list(uint64_t handle, int depth) {
             if (r->x[1]) nvn_sync_set_seq(r->x[1], renderer_fence_seq());
             break;
         }
+        case CMD_RESET_COUNTER:
+            if (r->x[0] == 1) {  // (type 1: samples passed)
+                vk_cmd();  // (first: may begin the buffer, which resets the slot's queries)
+                occ_sub = cur_sub;
+                occ_first = oq[cur_sub].n;
+            }
+            break;
         case CMD_REPORT_COUNTER: {
+            if (r->x[0] == 1) {  // samples passed: the open count's queries, summed once the submission is done
+                uint64_t *out = (uint64_t *)(uintptr_t)r->x[1];
+                if (!out) break;
+                out[0] = 0;
+                out[1] = ns_to_gpu_ticks(plat_now_ns());
+                OccQ *q = &oq[cur_sub];
+                if (occ_sub == cur_sub && q->n > occ_first) {
+                    NvnTexture *rt = st.rt.depth ? st.rt.depth : st.rt.ncolor ? st.rt.color[0] : NULL;
+                    float sx = 1, sy = 1;
+                    if (rt) renderer_texture_scale(rt, &sx, &sy);
+                    pthread_mutex_lock(&cq_lock);
+                    if (q->nrep < OQ_REPS) q->rep[q->nrep++] = (OccRep){out, occ_first, q->n - occ_first, sx * sy > 0 ? sx * sy : 1};
+                    pthread_mutex_unlock(&cq_lock);
+                    stat_occ++;
+                }
+                occ_sub = -1;  // (reset, draws, report: later draws aren't counted)
+                break;
+            }
             // The game times its GPU work with these (two per frame) and drops to 30 fps when that looks slow: the
             // host clock now, replaced by the GPU's time at this point once the submission is done (cq_resolve).
             uint64_t *out = (uint64_t *)(uintptr_t)r->x[1];

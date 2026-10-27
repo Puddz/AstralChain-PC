@@ -35,6 +35,7 @@ typedef struct {
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
     bool custom_border, divisor, host_import;
+    bool occ_precise;  // occlusionQueryPrecise: samples-passed counters count samples, not just visible / not (exec.c oq_*)
     bool depth_clamp;  // depthClamp feature: game pipelines clamp depth instead of clipping it (exec.c game_depth_clamp)
     bool gpl;  // VK_EXT_graphics_pipeline_library with fast linking (exec.c: shader libraries)
     // window
