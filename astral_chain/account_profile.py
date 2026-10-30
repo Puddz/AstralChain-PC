@@ -58,6 +58,16 @@ def load_profile(path):
                 os.link(temporary, path)
             except FileExistsError:
                 pass  # Another creator published its complete profile first.
+            except OSError:
+                # Filesystems without hard links (exFAT, FAT32, some network drives):
+                # fall back to exclusive creation, which still never overwrites.
+                try:
+                    with open(path, 'xb') as stream:
+                        stream.write(temporary.read_bytes())
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                except FileExistsError:
+                    pass
         finally:
             if temporary is not None:
                 temporary.unlink()
