@@ -3144,6 +3144,10 @@ static VkDescriptorBufferInfo gmem_info(void) {
 // inside them use that copy, and a shader that stores gets the ranges copied back to the heap right after it (the
 // game alternates its buffer sets per frame: the CPU isn't writing them meanwhile). Accesses outside the table use
 // the heap as before. LARECOMP_VK_GMEM_FAST=0: no copy (empty table: everything goes to the heap, the old behaviour).
+// Integrated GPUs (Intel, AMD APUs, the Steam Deck) share system memory, so the heap is no farther than the copy: there
+// the copies are off by default (LARECOMP_VK_GMEM_FAST=1 turns them on). On an Intel Arc B390 (Mesa ANV) recording the
+// two copies cost ~15 ms of CPU each, and the highway chase's effects, six such dispatches a frame, ran at 5-6 fps
+// (46-56 fps without them).
 #define GFAST_SIZE (32ull << 20)
 static VkBuffer gfast_buf;
 static VmaAllocation gfast_mem;
@@ -3164,7 +3168,11 @@ static VkDescriptorBufferInfo gfast_info(void) {
 
 static void gfast_prepare(VkCommandBuffer cb) {
     static int on = -1;
-    if (on < 0) { const char *e = getenv("LARECOMP_VK_GMEM_FAST"); on = !e || atoi(e) != 0; }
+    if (on < 0) {
+        const char *e = getenv("LARECOMP_VK_GMEM_FAST");
+        on = e ? atoi(e) != 0 : g_vk.props.deviceType != VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+        LOG("[vk] compute global memory copies %s\n", on ? "on" : e ? "off (LARECOMP_VK_GMEM_FAST=0)" : "off (integrated GPU: shared memory)");
+    }
     memset(gmap_tab, 0, sizeof gmap_tab);
     gfast_n = 0;
     gmem_info();  // (the heap import, made on first use)
