@@ -383,7 +383,16 @@ static void nvn_heap_mirror_clean_u(uint64_t addr,uint64_t size) {
 int plat_written_pages(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {AcquireSRWLockExclusive(&track_srw);int r=plat_written_pages_u(addr,size,pages,max,page);ReleaseSRWLockExclusive(&track_srw);return r;}
 int plat_write_harvest(uint64_t addr,uint64_t size) {AcquireSRWLockExclusive(&track_srw);int r=plat_write_harvest_u(addr,size);ReleaseSRWLockExclusive(&track_srw);return r;}
 int plat_written_pages_harvested(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page) {AcquireSRWLockExclusive(&track_srw);int r=plat_written_pages_harvested_u(addr,size,pages,max,page);ReleaseSRWLockExclusive(&track_srw);return r;}
-void nvn_heap_mirror_interest(uint64_t addr,uint64_t size) {AcquireSRWLockExclusive(&track_srw);nvn_heap_mirror_interest_u(addr,size);ReleaseSRWLockExclusive(&track_srw);}
+/* A range registered once stays registered (the list only grows): a range this thread registered recently returns
+ * without the lock and the page walk. Every draw registers its vertex, index and storage buffers again, ~16 ms a
+ * second of the render thread in a busy scene (2026-11-02). */
+void nvn_heap_mirror_interest(uint64_t addr,uint64_t size) {
+ static __thread struct {uint64_t addr,size;} seen[1024];
+ uint64_t h=(addr*0x9E3779B97F4A7C15ull)^(size*0xC2B2AE3D27D4EB4Full);unsigned i=(unsigned)(h>>32)&1023;
+ if(seen[i].addr==addr && seen[i].size==size && size) return;
+ AcquireSRWLockExclusive(&track_srw);nvn_heap_mirror_interest_u(addr,size);ReleaseSRWLockExclusive(&track_srw);
+ seen[i].addr=addr;seen[i].size=size;
+}
 int nvn_heap_mirror_dirty(uint64_t limit,uint64_t *pages,int max) {AcquireSRWLockExclusive(&track_srw);int r=nvn_heap_mirror_dirty_u(limit,pages,max);ReleaseSRWLockExclusive(&track_srw);return r;}
 void nvn_heap_mirror_mark_all(uint64_t limit) {AcquireSRWLockExclusive(&track_srw);nvn_heap_mirror_mark_all_u(limit);ReleaseSRWLockExclusive(&track_srw);}
 void nvn_heap_mirror_clean(uint64_t addr,uint64_t size) {AcquireSRWLockExclusive(&track_srw);nvn_heap_mirror_clean_u(addr,size);ReleaseSRWLockExclusive(&track_srw);}
