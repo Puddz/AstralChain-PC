@@ -273,7 +273,12 @@ static void track_harvest(uint64_t lo,uint64_t hi) {
  static LARGE_INTEGER wwf;if(!wwf.QuadPart) QueryPerformanceFrequency(&wwf);
  LARGE_INTEGER ww1;QueryPerformanceCounter(&ww1);prof_ww_qpc+=(uint64_t)(ww1.QuadPart-ww0.QuadPart)*1000000000ull/(uint64_t)wwf.QuadPart;
 }
+/* Not once the heap is imported by the GPU (heap_gpu_pinned, exec.c gmem_import): a query protects the written pages
+ * again, and on Linux each such change of an imported range made the driver pin its pages again (most of the render
+ * thread's time in the kernel). The heap mirror is gone then and the GPU reads guest memory itself: the vertex cache
+ * is off (vertices read in place) and texture checks compare contents. */
 static int written_pages(uint64_t addr,uint64_t size,uint64_t *pages,int max,uint64_t *page,int harvest) {
+ if(heap_gpu_pinned) return -1;
  if(max<=0 || addr<heap_base || size>HEAP_LIMIT || addr-heap_base>HEAP_LIMIT-size) return -1;
  uint64_t lo=addr&~4095ull,hi=(addr+size+4095)&~4095ull;
  if(hi-heap_base>HEAP_LIMIT) hi=heap_base+HEAP_LIMIT;
@@ -293,6 +298,7 @@ static int plat_written_pages_u(uint64_t addr,uint64_t size,uint64_t *pages,int 
  * ranges inside it without a system call each (plat_written_pages_harvested): writes after that harvest are seen
  * at the next one. */
 static int plat_write_harvest_u(uint64_t addr,uint64_t size) {
+ if(heap_gpu_pinned) return -1;
  if(!size || addr<heap_base || size>HEAP_LIMIT || addr-heap_base>HEAP_LIMIT-size) return -1;
  uint64_t lo=addr&~4095ull,hi=(addr+size+4095)&~4095ull;
  if(hi-heap_base>HEAP_LIMIT) hi=heap_base+HEAP_LIMIT;
