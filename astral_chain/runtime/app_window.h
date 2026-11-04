@@ -75,6 +75,7 @@ static DWORD WINAPI app_exit_watchdog(LPVOID unused) {
  /* A save being written is not cut off (a write goes straight into the save file): wait until writes have been quiet
   * for 1 s, at most 5 s more. */
  for(int i=0;i<50 && GetTickCount64()-app_save_write_tick<1000;i++) Sleep(100);
+ rumble_stop();
  fflush(stdout);fflush(stderr);TerminateProcess(GetCurrentProcess(),0);return 0;
 }
 /* Fullscreen: a borderless window covering its monitor (no display mode change; the swapchain follows the window
@@ -167,6 +168,7 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
   return 0;
  }
  if(message==WM_CLOSE) {
+  rumble_stop();
   /* The game gets the exit request; if shutdown stalls (GPU work, waits), the
    * process must not linger invisibly holding the save lock and GPU memory. */
   if(!app_exit_requested) {HANDLE t=CreateThread(NULL,0,app_exit_watchdog,NULL,0,NULL);if(t)CloseHandle(t);}

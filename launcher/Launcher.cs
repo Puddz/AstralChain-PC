@@ -116,6 +116,11 @@ namespace AstralChainLauncher
                 "Switch: the original controller icons (for playing with a controller).",
                 OptKind.Choice, "keyboard", OptTarget.Game, v => v == "switch" ? "AC_PROMPTS=switch" : "");
             prompts.Choices = new[] { "keyboard|Keyboard and mouse (default)", "switch|Switch controller" };
+            var rumble = Add("rumble", "Controller", "Rumble strength (%)",
+                "How strongly the controller rumbles when the game asks for it (Xbox pads, and the controllers that " +
+                "go through SDL3). 100 is the default, 0 turns rumble off, 200 is the strongest.",
+                OptKind.Number, "100", OptTarget.Game, v => v == "100" ? "" : "AC_RUMBLE=" + v);
+            rumble.Min = 0; rumble.Max = 200;
             Add("gpu_warm", "Shaders and performance", "Compile shaders for your GPU before playing",
                 "Takes about 10 s the first time and after driver updates; removes most shader pauses in play.",
                 OptKind.Check, "1", OptTarget.Setup, When("0", "AC_GPU_WARM=0"));
