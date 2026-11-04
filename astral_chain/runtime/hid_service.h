@@ -157,6 +157,134 @@ static void hid_xinput(HidSample *sample) {
   if(m>8000ll*8000 && !*out[k][0] && !*out[k][1]) {*out[k][0]=in[k][0]<-32767?-32767:in[k][0];*out[k][1]=in[k][1]<-32767?-32767:in[k][1];}
  }
 }
+/* Other controllers (Switch Pro, DualSense, DualShock 4, 8BitDo, ...) through SDL3's gamepad API: SDL3.dll from
+ * tools\sdl3 (AC_SDL3, set by run_guarded.ps1), loaded at run time; without it only XInput pads work. Xbox pads are
+ * left to XInput above. SDL runs on its own thread (it opens devices, which can take a while, and wants its updates
+ * on one thread); the game thread reads the latest state. SDL's buttons are positional, so south/east/west/north
+ * map to the Switch's B/A/Y/X as for XInput, whatever the labels on the pad say. */
+typedef struct {uint32_t buttons;int16_t lx,ly,rx,ry,lt,rt;} HidSdlState;
+static HidSdlState sdl_state;
+static volatile LONG sdl_seq,sdl_have;
+static DWORD WINAPI sdl_pad_thread(void *argument) {
+ HMODULE m=(HMODULE)argument;
+ uint8_t (*init)(uint32_t)=(void*)GetProcAddress(m,"SDL_Init");
+ uint8_t (*set_hint)(const char*,const char*)=(void*)GetProcAddress(m,"SDL_SetHint");
+ uint32_t *(*get_pads)(int*)=(void*)GetProcAddress(m,"SDL_GetGamepads");
+ void *(*open_pad)(uint32_t)=(void*)GetProcAddress(m,"SDL_OpenGamepad");
+ void (*close_pad)(void*)=(void*)GetProcAddress(m,"SDL_CloseGamepad");
+ uint8_t (*connected)(void*)=(void*)GetProcAddress(m,"SDL_GamepadConnected");
+ void (*update)(void)=(void*)GetProcAddress(m,"SDL_UpdateGamepads");
+ int (*pad_type)(void*)=(void*)GetProcAddress(m,"SDL_GetGamepadType");
+ const char *(*pad_name)(void*)=(void*)GetProcAddress(m,"SDL_GetGamepadName");
+ uint8_t (*button)(void*,int)=(void*)GetProcAddress(m,"SDL_GetGamepadButton");
+ int16_t (*axis)(void*,int)=(void*)GetProcAddress(m,"SDL_GetGamepadAxis");
+ void (*sdl_free)(void*)=(void*)GetProcAddress(m,"SDL_free");
+ const char *(*error)(void)=(void*)GetProcAddress(m,"SDL_GetError");
+ if(!init || !set_hint || !get_pads || !open_pad || !close_pad || !connected || !update || !pad_type || !pad_name ||
+    !button || !axis || !sdl_free || !error) {printf("[input] SDL3: missing functions, controllers through XInput only\n");return 0;}
+ SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
+ set_hint("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS","1"); /* (no SDL window: the game decides when input counts) */
+ if(!init(0x00002000u)) {printf("[input] SDL3 gamepads unavailable: %s\n",error());return 0;}
+ printf("[input] SDL3 gamepads ready (Xbox pads through XInput)\n");
+ /* Switch bit for SDL buttons 0-14: south east west north back guide start lstick rstick lshoulder rshoulder up down
+  * left right (guide: none). */
+ static const int8_t map[15]={1,0,3,2,11,-1,10,4,5,6,7,13,15,12,14};
+ /* (test) AC_SDL_TEST="t0-t1:b,...": a virtual SDL gamepad holding SDL button b (100 + n: axis n at its minimum,
+  * 110 + n: at its maximum) from t0 to t1 seconds after SDL starts - the path of a real non-Xbox pad, without one. */
+ static char test[512];
+ void *vjoy=NULL;
+ DWORD tn=GetEnvironmentVariableA("AC_SDL_TEST",test,sizeof(test));
+ if(tn && tn<sizeof(test)) {
+  struct {uint32_t version;uint16_t type,padding,vendor,product,naxes,nbuttons,nballs,nhats,ntouchpads,nsensors,padding2[2];
+          uint32_t button_mask,axis_mask;const char *name;void *rest[11];} desc={0};
+  desc.version=sizeof(desc);desc.type=1;desc.naxes=6;desc.nbuttons=15;desc.button_mask=0x7fff;desc.axis_mask=0x3f;desc.name="AC_SDL_TEST virtual gamepad";
+  uint32_t (*attach)(const void*)=(void*)GetProcAddress(m,"SDL_AttachVirtualJoystick");
+  void *(*open_joy)(uint32_t)=(void*)GetProcAddress(m,"SDL_OpenJoystick");
+  uint32_t id=attach ? attach(&desc) : 0;
+  vjoy=id && open_joy ? open_joy(id) : NULL;
+  printf("[input] AC_SDL_TEST: virtual gamepad %s\n",vjoy ? "attached" : error());
+ }
+ uint8_t (*vbutton)(void*,int,uint8_t)=(void*)GetProcAddress(m,"SDL_SetJoystickVirtualButton");
+ uint8_t (*vaxis)(void*,int,int16_t)=(void*)GetProcAddress(m,"SDL_SetJoystickVirtualAxis");
+ uint64_t t0=GetTickCount64();
+ uint32_t skipped[8];unsigned nskipped=0;
+ void *pad=NULL;
+ for(;;) {
+  if(vjoy && vbutton && vaxis) {
+   double t=(GetTickCount64()-t0)/1000.0;
+   uint32_t held=0;int16_t ax[6]={0,0,0,0,-32768,-32768}; /* (a virtual trigger's raw rest is its minimum) */
+   for(const char *q=test;*q;) {
+    double a,b;int c,used=0;
+    if(sscanf(q,"%lf-%lf:%d%n",&a,&b,&c,&used)!=3) break;
+    q+=used;if(*q==',') q++;
+    if(t<a || t>=b) continue;
+    if(c>=0 && c<15) held|=1u<<c;
+    else if(c>=100 && c<106) ax[c-100]=-32768;
+    else if(c>=110 && c<116) ax[c-110]=32767;
+   }
+   for(int b=0;b<15;b++) vbutton(vjoy,b,(held>>b)&1);
+   for(int k=0;k<6;k++) vaxis(vjoy,k,ax[k]);
+  }
+  update();
+  if(pad && !connected(pad)) {
+   printf("[input] controller disconnected\n");close_pad(pad);pad=NULL;InterlockedExchange(&sdl_have,0);
+   SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
+  }
+  if(!pad) {
+   int n=0;uint32_t *ids=get_pads(&n);
+   for(int i=0;ids && i<n && !pad;i++) {
+    unsigned k=0;
+    while(k<nskipped && skipped[k]!=ids[i]) k++;
+    if(k<nskipped) continue;
+    void *p=open_pad(ids[i]);
+    if(!p) continue;
+    int t=pad_type(p);
+    if(t==2 || t==3) {close_pad(p);if(nskipped<8) skipped[nskipped++]=ids[i];continue;} /* Xbox 360 / One: XInput */
+    const char *name=pad_name(p);
+    printf("[input] controller: %s (SDL type %d)\n",name ? name : "?",t);
+    pad=p;
+   }
+   if(ids) sdl_free(ids);
+   /* No controller: look again in half a second, below normal priority. Polling every 4 ms here doubled the game's
+    * pauses over 50 ms on a busy CPU (street route, 2026-11-04). */
+   if(!pad) {Sleep(500);continue;}
+   SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_NORMAL);
+  }
+  if(pad) {
+   HidSdlState s={0};
+   for(int b=0;b<15;b++) if(map[b]>=0 && button(pad,b)) s.buttons|=1u<<map[b];
+   s.lx=axis(pad,0);s.ly=axis(pad,1);s.rx=axis(pad,2);s.ry=axis(pad,3);s.lt=axis(pad,4);s.rt=axis(pad,5);
+   InterlockedIncrement(&sdl_seq);sdl_state=s;InterlockedIncrement(&sdl_seq); /* (odd while writing) */
+   InterlockedExchange(&sdl_have,1);
+  }
+  Sleep(4);
+ }
+ return 0;
+}
+static void hid_sdl_start(void) { /* (once the game uses its controller, focused or not: the pad is ready on focus) */
+ static int loaded;
+ if(loaded) return;
+ loaded=1;
+ wchar_t path[MAX_PATH];DWORD n=GetEnvironmentVariableW(L"AC_SDL3",path,MAX_PATH);
+ HMODULE m=n && n<MAX_PATH ? LoadLibraryExW(path,NULL,LOAD_WITH_ALTERED_SEARCH_PATH) : NULL;
+ if(!m) {if(n) printf("[input] SDL3.dll not loaded (error %lu): controllers through XInput only\n",GetLastError());return;}
+ HANDLE t=CreateThread(NULL,0,sdl_pad_thread,m,0,NULL);if(t) CloseHandle(t);
+}
+static void hid_sdl(HidSample *sample) {
+ if(!sdl_have) return;
+ HidSdlState s;LONG a,b;
+ do {a=sdl_seq;MemoryBarrier();s=sdl_state;MemoryBarrier();b=sdl_seq;} while(a!=b || (a&1));
+ for(unsigned i=0;i<16;i++) if(s.buttons&(1u<<i)) sample->buttons|=1ull<<i;
+ if(s.lt>8000) sample->buttons|=1ull<<8;
+ if(s.rt>8000) sample->buttons|=1ull<<9;
+ /* Sticks: SDL's y axes point down, the Switch's up; same radial dead zone as XInput. */
+ int32_t *out[2][2]={{&sample->lx,&sample->ly},{&sample->rx,&sample->ry}};
+ int in[2][2]={{s.lx,s.ly<-32767 ? 32767 : -s.ly},{s.rx,s.ry<-32767 ? 32767 : -s.ry}};
+ for(unsigned k=0;k<2;k++) {
+  long long m=(long long)in[k][0]*in[k][0]+(long long)in[k][1]*in[k][1];
+  if(m>8000ll*8000 && !*out[k][0] && !*out[k][1]) {*out[k][0]=in[k][0]<-32767?-32767:in[k][0];*out[k][1]=in[k][1];}
+ }
+}
 /* Test automation: AC_INPUT_SCRIPT="t0-t1:mask;..." holds Switch button mask
  * (bit 0 A ... bit 9 ZR, hex) from t0 to t1 seconds after the first sample.
  * Applies regardless of window focus. */
@@ -194,7 +322,10 @@ static void hid_publish(uint64_t now,int focused) {
   boundary("hid-style-event",&state,state.pc);
  HidSample sample={0};sample.sample=++hid_sampling;sample.attributes=connected ? 3 : 0;
  mouse_wheel_step(now);
- if(connected && focused) {
+ if(connected) hid_sdl_start();
+ static int sdl_test=-1; /* (AC_SDL_TEST: the virtual pad counts in unattended runs, whose window has no focus) */
+ if(sdl_test<0) sdl_test=GetEnvironmentVariableA("AC_SDL_TEST",NULL,0)!=0;
+ if(connected && (focused || sdl_test)) {
   hid_keys_load();
   for(unsigned i=0;i<16;i++) if(hid_key(i)) sample.buttons|=1ull<<i;
   sample.lx=(hid_key(18)-hid_key(16))*32767;sample.ly=(hid_key(17)-hid_key(19))*32767;
@@ -202,6 +333,7 @@ static void hid_publish(uint64_t now,int focused) {
   if(sample.lx && sample.ly) {sample.lx=sample.lx>0 ? 23170 : -23170;sample.ly=sample.ly>0 ? 23170 : -23170;}
   if(sample.rx && sample.ry) {sample.rx=sample.rx>0 ? 23170 : -23170;sample.ry=sample.ry>0 ? 23170 : -23170;}
   hid_xinput(&sample);
+  hid_sdl(&sample);
   mouse_look_stick(&sample.rx,&sample.ry,now);
   if(sample.lx<0) sample.buttons|=1ull<<16;
   if(sample.ly>0) sample.buttons|=1ull<<17;
@@ -219,6 +351,15 @@ static void hid_publish(uint64_t now,int focused) {
   if(scripted&(1ull<<18)) sample.lx=32767;
   if(scripted&(1ull<<17)) sample.ly=32767;
   if(scripted&(1ull<<19)) sample.ly=-32767;
+ }
+ {  /* (test) AC_LOG_PAD=1: the controller state the game gets, when it changes */
+  static int log=-1;static uint64_t last_buttons;static int32_t last_axes[4];
+  if(log<0) log=GetEnvironmentVariableA("AC_LOG_PAD",NULL,0)!=0;
+  int32_t axes[4]={sample.lx,sample.ly,sample.rx,sample.ry};
+  if(log && (sample.buttons!=last_buttons || memcmp(axes,last_axes,sizeof(axes)))) {
+   printf("[pad] buttons=0x%llx left %d,%d right %d,%d\n",(unsigned long long)sample.buttons,axes[0],axes[1],axes[2],axes[3]);
+   last_buttons=sample.buttons;memcpy(last_axes,axes,sizeof(axes));
+  }
  }
  hid_ring_write((HidRing*)(npad+0x28),&sample);
  hid_ring_write((HidRing*)(npad+0x1408),&sample);

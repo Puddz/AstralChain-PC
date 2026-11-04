@@ -4,7 +4,7 @@
 
 Stages (each is skipped when its result already exists, so a failed run can be fixed and repeated):
 
-  1. tools    download Zig, glslang and NSTool at pinned versions (SHA-256 checked) into tools/
+  1. tools    download Zig, glslang, NSTool and SDL3 at pinned versions (SHA-256 checked) into tools/
   2. base     extract the base game's Program and Control NCAs (XCI or NSP) with your keys
   3. update   extract the v1.0.1 update's ExeFS, and its RomFS merged over the base
   4. romfs    pack the merged RomFS into game/romfs.bin, then delete the extracted copies
@@ -41,6 +41,9 @@ DOWNLOADS = {
                 '82bf434e69b9bb4829de7e2b4bc2c5e7a7861e53d66cf75e5cc70f5f694a8d9b', ''),
     'nstool': ('https://github.com/jakcron/nstool/releases/download/v1.9.2/nstool-v1.9.2-win_x64.zip',
                '34659dc47249a3c00f7fc88a11f4e5ba14dfbec0a6a96b4f3f71368a7e1c9374', ''),
+    # (the game loads its SDL3.dll for controllers other than Xbox pads: hid_service.h)
+    'sdl3': ('https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18-win32-x64.zip',
+             '75c2c0fc74e7d1206aaedc22893a35887332f4f85f5c8b74fddc10d177985f2c', ''),
 }
 ZIG = TOOLS/'zig'/'zig.exe'
 NSTOOL = TOOLS/'nstool'/'nstool.exe'
