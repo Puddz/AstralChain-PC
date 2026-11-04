@@ -119,16 +119,24 @@ static void hid_ring_write(HidRing *ring,const HidSample *sample) {
  * the Switch layout: Xbox A/B/X/Y (bottom/right/left/top) -> Switch B/A/Y/X. */
 typedef struct {uint16_t buttons;uint8_t lt,rt;int16_t lx,ly,rx,ry;} HidXinputPad;
 typedef struct {uint32_t packet;HidXinputPad pad;} HidXinputState;
-/* Probing absent pads is slow (~100 ms on a second PC): it ran once per second on the game thread under the kernel
- * lock, stopping every guest thread, the sound's too (sound queue dry every ~1.15 s in play). A background thread
- * looks for a pad; the game thread only reads the one found. */
+/* Every connected XInput pad, merged (buttons of any, each stick from the pad that moves it most): a pad that was
+ * connected first need not be the one in use. A Steam Controller's receiver is a pad from the start, even with the
+ * controller off or its input taken by Steam Input, whose virtual pad comes later; a pad plugged in after the start
+ * also comes later. Reading only the first pad found, the game kept reading the receiver until it was restarted.
+ * Probing absent pads is slow (~100 ms on a second PC; it ran once per second on the game thread under the kernel
+ * lock, stopping every guest thread, the sound's too): a background thread looks for pads each second, the game
+ * thread reads the ones found. */
 static DWORD (WINAPI *xinput_get_state)(DWORD,HidXinputState*);
-static volatile LONG xinput_pad=-1;
+static volatile LONG xinput_pads;  /* bit i: pad i answered */
 static DWORD WINAPI xinput_probe(void *argument) {
  (void)argument;
  SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
  for(;;) {
-  if(xinput_pad<0) for(int i=0;i<4;i++) {HidXinputState s;if(!xinput_get_state(i,&s)) {InterlockedExchange(&xinput_pad,i);break;}}
+  for(int i=0;i<4;i++) {
+   if(xinput_pads&(1<<i)) continue;
+   HidXinputState s;
+   if(!xinput_get_state(i,&s)) {InterlockedOr(&xinput_pads,1<<i);printf("HID pad %d connected\n",i);fflush(stdout);}
+  }
   Sleep(1000);
  }
  return 0;
@@ -141,21 +149,29 @@ static void hid_xinput(HidSample *sample) {
   if(xinput_get_state) {HANDLE t=CreateThread(NULL,0,xinput_probe,NULL,0,NULL);if(t) CloseHandle(t);}
  }
  if(!xinput_get_state) return;
- LONG pad=xinput_pad;
- if(pad<0) return;
- HidXinputState s;if(xinput_get_state((DWORD)pad,&s)){InterlockedCompareExchange(&xinput_pad,-1,pad);return;}
  static const struct {uint16_t xinput;unsigned bit;} map[]={
   {0x1000,1},{0x2000,0},{0x4000,3},{0x8000,2},{0x0040,4},{0x0080,5},{0x0100,6},{0x0200,7},
   {0x0010,10},{0x0020,11},{0x0004,12},{0x0001,13},{0x0008,14},{0x0002,15}};
- for(unsigned i=0;i<sizeof(map)/sizeof(map[0]);i++) if(s.pad.buttons&map[i].xinput) sample->buttons|=1ull<<map[i].bit;
- if(s.pad.lt>30) sample->buttons|=1ull<<8;
- if(s.pad.rt>30) sample->buttons|=1ull<<9;
- /* Sticks: radial dead zone of 8000 (XInput guidance), then full scale. */
+ /* Sticks: radial dead zone of 8000 (XInput guidance), then full scale; the keys' direction wins (already set). */
  int32_t *out[2][2]={{&sample->lx,&sample->ly},{&sample->rx,&sample->ry}};
- int in[2][2]={{s.pad.lx,s.pad.ly},{s.pad.rx,s.pad.ry}};
- for(unsigned k=0;k<2;k++) {
-  long long m=(long long)in[k][0]*in[k][0]+(long long)in[k][1]*in[k][1];
-  if(m>8000ll*8000 && !*out[k][0] && !*out[k][1]) {*out[k][0]=in[k][0]<-32767?-32767:in[k][0];*out[k][1]=in[k][1]<-32767?-32767:in[k][1];}
+ int keyed[2]={*out[0][0] || *out[0][1],*out[1][0] || *out[1][1]};
+ long long best[2]={8000ll*8000,8000ll*8000};
+ LONG pads=xinput_pads;
+ for(int pad=0;pad<4;pad++) {
+  if(!(pads&(1<<pad))) continue;
+  HidXinputState s;
+  if(xinput_get_state((DWORD)pad,&s)) {InterlockedAnd(&xinput_pads,~(1<<pad));printf("HID pad %d disconnected\n",pad);fflush(stdout);continue;}
+  for(unsigned i=0;i<sizeof(map)/sizeof(map[0]);i++) if(s.pad.buttons&map[i].xinput) sample->buttons|=1ull<<map[i].bit;
+  if(s.pad.lt>30) sample->buttons|=1ull<<8;
+  if(s.pad.rt>30) sample->buttons|=1ull<<9;
+  int in[2][2]={{s.pad.lx,s.pad.ly},{s.pad.rx,s.pad.ry}};
+  for(unsigned k=0;k<2;k++) {
+   long long m=(long long)in[k][0]*in[k][0]+(long long)in[k][1]*in[k][1];
+   if(m>best[k] && !keyed[k]) {
+    best[k]=m;
+    *out[k][0]=in[k][0]<-32767?-32767:in[k][0];*out[k][1]=in[k][1]<-32767?-32767:in[k][1];
+   }
+  }
  }
 }
 /* Other controllers (Switch Pro, DualSense, DualShock 4, 8BitDo, ...) through SDL3's gamepad API: SDL3.dll from
