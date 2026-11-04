@@ -23,12 +23,14 @@ shaders, keys or firmware, and never will. Everything the setup produces comes f
 
 | | |
 | --- | --- |
-| Tested | Title, menus, opening cutscene, character creation, the highway chase and File 01 up to its boss fight (played by the owner) |
+| Tested | From the title screen through File 01 (its boss fight included) and File 02, into File 03, with the in-game camera taking photos (played by the owner) |
 | Frame rate | 60 fps target, cutscenes included (Dynamic-FPS patch, game speed correct at any frame rate). RTX 4090 / Ryzen 7 7800X3D: 57-60 fps. `AC_CUTSCENE_FPS=30` plays cutscenes exactly as the original does |
 | Stability | Driver watchdog plus a GPU hang stop. No driver resets since 2026-10-19 across dozens of test runs |
 | Saving | Works (tested in File 01) |
 | Shader pauses | Shaders are compiled for your GPU before the game starts. Simulated first play of an area never recorded: 7 pauses over 50 ms, 0.49 s in total (26 and 8.0 s before 2026-10-21) |
-| Not yet tested | The File 01 boss fight with the fix of its crash, and everything after it |
+| Controllers | Keyboard and mouse, and Xbox-style pads through XInput (every connected pad is read). Other pads (Switch Pro Controller, DualSense, DualShock 4, 8BitDo) go through SDL3: tested with a virtual SDL pad only, not yet with a real one |
+| Integrated GPUs | A memory copy meant for dedicated graphics cards is off on integrated GPUs: highway chase effects at 46-56 fps instead of 5-6 on an Intel Arc laptop (Linux). Not yet tested on a Windows integrated GPU |
+| Not yet tested | The rest of File 03 and everything after it |
 
 Known issues are listed under [Known issues](#known-issues).
 
