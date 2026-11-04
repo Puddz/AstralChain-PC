@@ -81,6 +81,8 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_SDL3=<path>` | (`run_guarded.ps1`: `tools\sdl3\SDL3.dll`) SDL3, loaded at run time for controllers other than Xbox pads (`hid_service.h` `sdl_pad_thread`: its own thread, the first non-Xbox gamepad, positional mapping). Empty: XInput only |
 | `AC_SDL_TEST=t0-t1:b,...` | (test) A virtual SDL gamepad holding SDL button `b` (0-14: south east west north back guide start lstick rstick lshoulder rshoulder up down left right; 100+n / 110+n: axis n at its minimum / maximum) from `t0` to `t1` s after SDL starts; counts without window focus |
 | `AC_LOG_PAD=1` | (test) Log the controller state the game gets (`[pad] buttons=... left x,y right x,y`) whenever it changes |
+| `AC_TEST_HOST_RESERVE=<addr>:<size>` | (test, hex) Reserve host memory inside the guest's address space at startup, as a thread stack Windows placed there; the game must map around it (`host_runtime.c.in` `host_clip`) |
+| `AC_HOST_CLIP=0` | (test) Guest memory queries ignore host allocations again (with `AC_TEST_HOST_RESERVE` over the stack region: the game stops at `host-shared-placeholder-reserve`) |
 | `LARECOMP_ASTC_VERIFY=<n>` | Read back the first n texture levels the GPU decodes and compare them with the CPU decoder (`ASTC verify` lines; slow) |
 | `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
 | `LARECOMP_GPL=0` | No shader libraries (`VK_EXT_graphics_pipeline_library`): pipelines are compiled whole at their first draw |

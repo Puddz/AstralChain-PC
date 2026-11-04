@@ -146,7 +146,7 @@ static void hid_xinput(HidSample *sample) {
  if(!loaded) {
   loaded=1;HMODULE x=LoadLibraryExW(L"xinput1_4.dll",NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);
   if(x) xinput_get_state=(DWORD (WINAPI*)(DWORD,HidXinputState*))GetProcAddress(x,"XInputGetState");
-  if(xinput_get_state) {HANDLE t=CreateThread(NULL,0,xinput_probe,NULL,0,NULL);if(t) CloseHandle(t);}
+  if(xinput_get_state) {HANDLE t=CreateThread(NULL,1<<20,xinput_probe,NULL,STACK_SIZE_PARAM_IS_A_RESERVATION,NULL);if(t) CloseHandle(t);}
  }
  if(!xinput_get_state) return;
  static const struct {uint16_t xinput;unsigned bit;} map[]={
@@ -285,7 +285,7 @@ static void hid_sdl_start(void) { /* (once the game uses its controller, focused
  wchar_t path[MAX_PATH];DWORD n=GetEnvironmentVariableW(L"AC_SDL3",path,MAX_PATH);
  HMODULE m=n && n<MAX_PATH ? LoadLibraryExW(path,NULL,LOAD_WITH_ALTERED_SEARCH_PATH) : NULL;
  if(!m) {if(n) printf("[input] SDL3.dll not loaded (error %lu): controllers through XInput only\n",GetLastError());return;}
- HANDLE t=CreateThread(NULL,0,sdl_pad_thread,m,0,NULL);if(t) CloseHandle(t);
+ HANDLE t=CreateThread(NULL,1<<20,sdl_pad_thread,m,STACK_SIZE_PARAM_IS_A_RESERVATION,NULL);if(t) CloseHandle(t);
 }
 static void hid_sdl(HidSample *sample) {
  if(!sdl_have) return;

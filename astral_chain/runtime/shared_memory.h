@@ -4,7 +4,7 @@
 static HANDLE shared_handles[64],shared_sources[64];
 static unsigned shared_permissions[64];
 static uint64_t shared_sizes[64];
-static struct { uint64_t base; unsigned occupied; } shared_granules[64];
+/* (shared_granules: host_runtime.c.in, next to shared_views) */
 typedef PVOID (WINAPI *HostAlloc2)(HANDLE,PVOID,SIZE_T,ULONG,ULONG,MEM_EXTENDED_PARAMETER*,ULONG);
 typedef PVOID (WINAPI *HostMap3)(HANDLE,HANDLE,PVOID,ULONG64,SIZE_T,ULONG,ULONG,MEM_EXTENDED_PARAMETER*,ULONG);
 typedef BOOL (WINAPI *HostUnmap2)(HANDLE,PVOID,ULONG);
@@ -45,8 +45,17 @@ static void shared_map(uint64_t handle,uint64_t address,uint64_t size,uint64_t p
  if(granule==64) {
   granule=0;while(granule<64 && shared_granules[granule].base) granule++;
   if(granule==64) boundary("shared-granule-limit",&state,state.pc);
-  if(shared_alloc2(GetCurrentProcess(),(void*)(uintptr_t)base,65536,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0)!=(void*)(uintptr_t)base)
+  if(shared_alloc2(GetCurrentProcess(),(void*)(uintptr_t)base,65536,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0)!=(void*)(uintptr_t)base) {
+   /* (what holds the address: a host allocation that Windows placed inside the guest's address space) */
+   DWORD error=GetLastError();MEMORY_BASIC_INFORMATION info={0};wchar_t module[MAX_PATH]=L"";
+   VirtualQuery((void*)(uintptr_t)base,&info,sizeof(info));
+   if(info.Type==MEM_IMAGE) GetModuleFileNameW((HMODULE)info.AllocationBase,module,MAX_PATH);
+   fprintf(stderr,"HOST shared map at 0x%llx: address taken (error %lu): allocation 0x%llx state 0x%lx type 0x%lx region 0x%llx+0x%llx %ls\n",
+           (unsigned long long)base,(unsigned long)error,(unsigned long long)(uintptr_t)info.AllocationBase,(unsigned long)info.State,
+           (unsigned long)info.Type,(unsigned long long)(uintptr_t)info.BaseAddress,(unsigned long long)info.RegionSize,module);
+   fflush(stderr);
    boundary("host-shared-placeholder-reserve",&state,state.pc);
+  }
   shared_granules[granule].base=base;
   for(unsigned page=0;page<15;page++)
    if(!VirtualFree((void*)(uintptr_t)(base+page*4096),4096,MEM_RELEASE|MEM_PRESERVE_PLACEHOLDER))

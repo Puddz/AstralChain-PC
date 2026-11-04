@@ -222,6 +222,7 @@ static void trace_call(uint64_t from,uint64_t target) {
 }
 /*MEMORY_TABLE*/
 static struct { uint64_t address,size; HANDLE source; unsigned permission; } shared_views[64];
+static struct { uint64_t base; unsigned occupied; } shared_granules[64];  /* (shared_memory.h: placeholder granules) */
 static struct { uint64_t source,destination,size; HANDLE backing; unsigned handle; } stack_maps[64];
 static uint64_t thread_tls[32];
 static struct { uint64_t address,size; void *data; unsigned refs,handle_open; } transfer_memory[32];
@@ -256,6 +257,39 @@ static void snapshot(void) {
   if(!output || fwrite((void*)(uintptr_t)STACK_BASE,1,STACK_SIZE,output)!=STACK_SIZE) ExitProcess(33);
   fclose(output);
  }
+}
+/* Addresses free in the guest's bookkeeping can still hold a host allocation: Windows places new allocations anywhere
+ * (bottom-up randomization), inside the guest's address space too - a thread's stack (64 MB each: the exe's stack
+ * reserve), a driver's buffer. When the game later mapped shared memory there, the map failed and the game stopped
+ * ("host-shared-placeholder-reserve": a 64 MB thread stack at 0x711a080000, one boot in 20 with SDL3's threads,
+ * 2026-11-04). Free regions are clipped at host allocations, and an address inside one is reported inaccessible, so
+ * the game picks other addresses. The runtime's own reservations that the bookkeeping counts as free (the heap
+ * reservation, shared-map placeholder granules) stay free as before. The walk is bounded: past 64 host regions the
+ * free region starts at the queried page. */
+static int host_reservation_own(uint64_t address) {
+ if(heap_reserved && address>=heap_base && address-heap_base<HEAP_LIMIT) return 1;
+ for(unsigned i=0;i<64;i++) if(shared_granules[i].base && shared_granules[i].base==(address&~65535ull)) return 1;
+ return 0;
+}
+static Region host_clip(Region r,uint64_t address) {
+ static int on=-1; /* (test) AC_HOST_CLIP=0: off */
+ if(on<0) {char e[8];DWORD n=GetEnvironmentVariableA("AC_HOST_CLIP",e,sizeof(e));on=!(n && n<sizeof(e) && e[0]=='0');}
+ if(!on) return r;
+ uint64_t low=r.base,high=r.base+r.size,page=address&~4095ull,p=low;
+ for(unsigned hops=0;p<high;hops++) {
+  if(hops==64 && p<page) {low=page;p=page;}
+  MEMORY_BASIC_INFORMATION info;
+  if(!VirtualQuery((void*)(uintptr_t)p,&info,sizeof(info))) break;
+  uint64_t rb=(uint64_t)(uintptr_t)info.BaseAddress,re=rb+info.RegionSize;
+  if(rb<p) rb=p;
+  if(re>high || re<=rb) re=high;
+  if(info.State!=MEM_FREE && !host_reservation_own(rb)) {
+   if(address>=rb && address<re) return (Region){rb,re-rb,16,0};
+   if(re<=address) low=re; else {high=rb;break;}
+  }
+  p=re;
+ }
+ return (Region){low,high-low,0,0};
 }
 static Region query(uint64_t address) {
  uint64_t low=0,high=1ull<<39;
@@ -294,7 +328,7 @@ static Region query(uint64_t address) {
   if(address<r.base && r.base<high) high=r.base;
   if(address>=r.base+r.size && r.base+r.size>low) low=r.base+r.size;
  }
- return (Region){low,high-low,0,0};
+ return host_clip((Region){low,high-low,0,0},address);
 }
 static void stop_dump(Cpu *c) {
  /* Diagnostic: AC_STOP_DUMP=x<reg>+<offset>:<bytes> dumps readable guest memory. */
@@ -341,6 +375,13 @@ static void guest_io_prepare(uint64_t addr,uint64_t size) {if(nvn_lazy_flush_hoo
 #include "exclusive_pair.h"
 static int reserve_heap_range(void) {
  if(heap_reserved) return 1;
+ { /* (test) AC_TEST_HOST_RESERVE=<address>:<size> (hex): a host reservation inside the guest's address space, as a
+    * thread stack Windows placed there (host_clip) */
+  char e[64];unsigned long long at,size;DWORD n=GetEnvironmentVariableA("AC_TEST_HOST_RESERVE",e,sizeof(e));
+  if(n && n<sizeof(e) && sscanf(e,"%llx:%llx",&at,&size)==2)
+   fprintf(stderr,"HOST test reservation at 0x%llx+0x%llx: %s\n",at,size,
+           VirtualAlloc((void*)(uintptr_t)at,(SIZE_T)size,MEM_RESERVE,PAGE_NOACCESS)==(void*)(uintptr_t)at ? "made" : "failed");
+ }
  /* Choose the range before guest execution/GetInfo. Windows ASLR can occupy
   * the preferred virtual range; only probe otherwise unused host addresses. */
  for(uint64_t candidate=heap_base;candidate+HEAP_LIMIT<=(1ull<<39);candidate+=HEAP_LIMIT) {
