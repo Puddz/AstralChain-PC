@@ -36,6 +36,42 @@ Known issues are listed under [Known issues](#known-issues).
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-04**
+
+- **Controllers other than Xbox pads** (issue #10): Switch Pro Controller, DualSense, DualShock 4, 8BitDo and most
+  pads SDL knows now work, through SDL3 (setup downloads it). Buttons follow their position, as on the Switch. See
+  *Controllers* under [Playing](#playing). Switch 2 controllers are not supported yet. *Not yet confirmed with a real
+  non-Xbox controller* (tested with a virtual SDL pad: every button, trigger and stick direction arrived).
+- **Every connected Xbox-style pad is read** (PR #13, by lcd1232), not only the first one found: Steam Input's
+  virtual pad, or a pad plugged in after the start, used to be ignored until a restart.
+- **Integrated GPUs** (PR #13, by lcd1232): on Intel and AMD integrated graphics, a memory copy meant for graphics
+  cards with their own memory is now off; on an Intel Arc laptop (Linux) the highway chase's effects went from 5-6
+  fps to 46-56. `LARECOMP_VK_GMEM_FAST=1` turns it back on. *Not yet tested on a Windows integrated GPU.* Discrete
+  GPUs are unchanged.
+- **Occasional stop at startup** (`host-shared-placeholder-reserve`), seen about once in 20 starts after the
+  controller change: Windows had placed one of the program's own thread stacks where the game then put one of its
+  thread stacks. The game now places its memory around such allocations. Forced in a test (a large block reserved
+  there on purpose): the game stopped without the fix and played with it.
+
+**2026-10-27**
+
+- **In-game camera**: the camera never locked on to anyone, so no name label appeared and photo quests (such as
+  Lappy's) never completed. The game measures how much of a subject is visible with the GPU, and reads that count
+  a frame later without waiting; the count always read 0. Photos are also read back from the GPU now. Confirmed in
+  play (the owner found the last part of this fix).
+
+**2026-10-26**
+
+- **Street after the opening helicopter scene**: it was held at 33-53 fps on a fast PC (RTX 4090 / Ryzen 7 7800X3D,
+  CPU-bound) by thousands of small memory-tracking queries a second. They are now grouped: average 55.6 → 58.7 fps
+  there at 2560x1440. *Not yet confirmed in play.*
+- **Settings > Prepare graphics on a separate thread (experimental)**, off by default: the game's render thread no
+  longer translates and submits each frame itself. On the same street: average 59.9 fps, the slowest 2 s about 57.
+  *Not yet confirmed in play*; sound may run slightly later relative to the picture with it on.
+- **Brightness pumping in a dialogue after the opening street fight**: the picture brightened over a few frames
+  and snapped back. A compute shader that averages the scene's brightness read stale data (threads of a group passed
+  a barrier early); the measured average is now steady in every frame. *Not yet confirmed in play.*
+
 **2026-10-25**
 
 - **Mouse support.** Click in the game window to give it the mouse: it turns the camera, left click attacks (ZR),
