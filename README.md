@@ -118,7 +118,7 @@ the main version plus the options under [Experimental options](#experimental-opt
 - Windows 10 or 11, 64-bit.
 - A GPU with Vulkan 1.3. Developed on an NVIDIA RTX 4090; other GPUs are untested.
 - About **35 GB** free during setup. About 11 GB stays afterwards.
-- An internet connection for the one-time setup. It downloads Python, Zig, glslang and NSTool at pinned
+- An internet connection for the one-time setup. It downloads Python, Zig, glslang, NSTool and SDL3 at pinned
   versions, checked by SHA-256. No Python install is needed.
 - Your own dump:
   - the **base game** (title ID `01007300020FA000`), as an XCI or an NSP;
@@ -218,9 +218,15 @@ average on the GPU, 51 dB prepared at setup; the GPU's worst texture was 27 dB, 
 Switching to *prepared at setup* says when the preparation will run; switching away offers to delete the 16 GB.
 With less than 20 GB free, setup skips the preparation and the game converts on the GPU instead.
 
-XInput controllers (Xbox pads and compatibles) work too. The game pauses while its window is minimized, as on
-the Switch's home menu (Settings: *Keep running while the game window is minimized*). In another window, the game
-keeps running but takes no keyboard input.
+**Controllers.** Xbox pads and compatibles work through XInput. Other controllers work through SDL3: Switch Pro
+Controller, DualSense, DualShock 4, 8BitDo and most USB or Bluetooth pads SDL knows. The buttons follow their
+*position*, as on the Switch: the right face button is A and the bottom one B, whatever their labels. The first
+controller found is used; plug it in before or while the game runs. Not supported yet: the Switch 2 Pro Controller
+and Switch 2 Joy-Cons (SDL's Windows build has no driver for them). With Steam, adding the game as a non-Steam game
+with Steam Input on may work for those; that is untested. *Not yet confirmed with a real non-Xbox controller.*
+
+The game pauses while its window is minimized, as on the Switch's home menu (Settings: *Keep running while the game
+window is minimized*). In another window, the game keeps running but takes no keyboard input.
 
 - **Saves** are in `userdata\saves\` (the launcher's *Saves folder* link). Each save is also copied next to it
   (the newest 30 are kept); still, back that folder up from time to time.
@@ -270,7 +276,7 @@ happens, then attach the zip that **Create report** makes. Otherwise include `bu
 | `astral_chain/patches/` | Code patches of this project (pchtxt) |
 | `third_party/` | Vendored sources: LASRecomp, Vulkan-Headers, VulkanMemoryAllocator, Dynamic-FPS patch |
 | `docs/` | How it works, troubleshooting, development notes |
-| `tools/` | *(created by setup)* Python, Zig, glslang, NSTool |
+| `tools/` | *(created by setup)* Python, Zig, glslang, NSTool, SDL3 |
 | `game/` | *(created by setup)* your extracted update code, metadata and `romfs.bin` |
 | `build/` | *(created by setup)* the compiled game and its shader cache |
 | `userdata/` | *(created by setup)* saves, account profile, setup choices, launcher settings (`launcher.ini`) |
@@ -310,6 +316,7 @@ their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - theboy181's "21:9" mod ([switch-ptchtxt-mods](https://github.com/theboy181/switch-ptchtxt-mods)), commissioned by
   Kilgharrah: the camera aspect site used for the ultrawide sizes. The patch itself is this project's own.
 - [NSTool](https://github.com/jakcron/nstool), [Zig](https://ziglang.org/),
-  [glslang](https://github.com/KhronosGroup/glslang), [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers),
+  [glslang](https://github.com/KhronosGroup/glslang), [SDL](https://www.libsdl.org/) (zlib; its `SDL3.dll` is
+  downloaded by setup, for controllers), [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers),
   [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator),
   [Capstone](https://www.capstone-engine.org/), [lz4](https://github.com/python-lz4/python-lz4).

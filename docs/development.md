@@ -78,6 +78,9 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_BC7_CACHE=0` | Ignore the precomputed BC7 textures (GPU conversion only) |
 | `LARECOMP_BC7_LOG=1` | One `[bc7key]` line per ASTC texture upload: hash, layout, precomputed hit or miss |
 | `AC_KEYS=A:74,B:75,...` | (launcher **Controls**) Keyboard keys as Windows virtual-key codes: `A B X Y LSTICK RSTICK L R ZL ZR PLUS MINUS DLEFT DUP DRIGHT DDOWN LLEFT LUP LRIGHT LDOWN RLEFT RUP RRIGHT RDOWN` (`hid_service.h`); unlisted ones keep their default, 0 for none |
+| `AC_SDL3=<path>` | (`run_guarded.ps1`: `tools\sdl3\SDL3.dll`) SDL3, loaded at run time for controllers other than Xbox pads (`hid_service.h` `sdl_pad_thread`: its own thread, the first non-Xbox gamepad, positional mapping). Empty: XInput only |
+| `AC_SDL_TEST=t0-t1:b,...` | (test) A virtual SDL gamepad holding SDL button `b` (0-14: south east west north back guide start lstick rstick lshoulder rshoulder up down left right; 100+n / 110+n: axis n at its minimum / maximum) from `t0` to `t1` s after SDL starts; counts without window focus |
+| `AC_LOG_PAD=1` | (test) Log the controller state the game gets (`[pad] buttons=... left x,y right x,y`) whenever it changes |
 | `LARECOMP_ASTC_VERIFY=<n>` | Read back the first n texture levels the GPU decodes and compare them with the CPU decoder (`ASTC verify` lines; slow) |
 | `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
 | `LARECOMP_GPL=0` | No shader libraries (`VK_EXT_graphics_pipeline_library`): pipelines are compiled whole at their first draw |
