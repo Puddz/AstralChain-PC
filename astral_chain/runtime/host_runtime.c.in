@@ -184,6 +184,7 @@ static void crash_minidump(PEXCEPTION_POINTERS info) {
  CloseHandle(file);
  fprintf(stderr,"CRASH_DUMP %s\n",ok ? "crash.dmp" : "failed");
 }
+static void rumble_stop(void);  /* (hid_service.h: a stop or a crash leaves no pad buzzing) */
 static LONG CALLBACK fatal_fault_handler(PEXCEPTION_POINTERS info) {
  fflush(stdout);
  nvn_dump_recent();
@@ -197,10 +198,12 @@ static LONG CALLBACK fatal_fault_handler(PEXCEPTION_POINTERS info) {
  strrchr(name,'\\') ? strrchr(name,'\\')+1 : name,(unsigned long long)(at-(uintptr_t)module),GetCurrentThreadId());
  fflush(stderr);
  crash_minidump(info);
+ rumble_stop();
  fflush(stderr); ExitProcess(32);
 }
 __attribute__((noreturn)) static void boundary(const char *kind, Cpu *c, uint64_t pc) {
  snapshot();
+ rumble_stop();
  if(application_terminate_result_set) printf("APPLICATION_TERMINATE_RESULT 0x%x\n",application_terminate_result);
  printf("COUNTERS calls=%u syscalls=%u\n",calls,syscalls);
  unsigned count=calls<64 ? calls : 64;
@@ -1047,13 +1050,14 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    uint32_t handle=ipc_u32(request.arguments);unsigned index=hid_vibration_index(handle);
    uint64_t *registered=request.domain ? sessions[session].object_vibration[request.object_id-1] : sessions[session].vibration;
    registered[index/64]|=1ull<<(index%64);
-   printf("HID vibration registered handle=0x%x (no host actuator)\n",handle);
+   printf("HID vibration registered handle=0x%x\n",handle);
    reply_result(buffer,&request,0);c->x[0]=0;return;
   }
   if(kind==SESSION_HID && request.command==200 && request.argument_size>=4) {
-   hid_vibration_index(ipc_u32(request.arguments));
-   /* Keyboard devices have no actuator: Unknown type, None position. */
-   reply_wide_value(buffer,&request,0);c->x[0]=0;return;
+   uint32_t handle=ipc_u32(request.arguments);hid_vibration_index(handle);
+   /* As a Pro Controller: a linear resonant actuator (1), on the left (1) for device 0 and on the right (2) for
+    * device 1. The pads' motors follow (hid_service.h, rumble). */
+   reply_wide_value(buffer,&request,1ull|(((handle>>16)&1) ? 2ull : 1ull)<<32);c->x[0]=0;return;
   }
   if(kind==SESSION_HID && request.command==201) {
    hid_accept_vibration(&request);reply_result(buffer,&request,0);c->x[0]=0;return;

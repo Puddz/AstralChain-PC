@@ -57,6 +57,65 @@ static unsigned hid_vibration_index(uint32_t handle) {
  return ((style-3)*9+slot)*2+device;
 }
 typedef struct { uint64_t sample,buttons; int32_t lx,ly,rx,ry; uint32_t attributes,reserved; } HidSample;
+/* Rumble. The game sends, per device of the controller (0: left, 1: right), a low-band and a high-band amplitude
+ * (with their frequencies, unused here). The larger low-band amplitude of the two devices drives the pads'
+ * low-frequency (heavy) motor, the larger high-band one the high-frequency motor: XInput pads through XInputSetState
+ * (rumble_thread), SDL pads through SDL_RumbleGamepad (sdl_pad_thread). Nothing rumbles while the window has no
+ * input focus, and the motors are stopped when the game closes. AC_RUMBLE=<percent> (launcher: Rumble strength;
+ * 0 off, default 100, at most 200). AC_LOG_RUMBLE=1 logs the motor values when they change. */
+static volatile LONG rumble_amp[2][2];  /* [device][band], 0..65535 */
+static volatile LONG rumble_out;        /* the motors now: low | high<<16 */
+static int rumble_focus;
+static HANDLE rumble_event;
+static DWORD (WINAPI *xinput_set_state)(DWORD,void*);
+static volatile LONG xinput_pads;       /* bit i: XInput pad i answered (hid_xinput) */
+static int rumble_percent(void) {
+ static int percent=-1;
+ if(percent<0) {
+  char v[16];DWORD n=GetEnvironmentVariableA("AC_RUMBLE",v,sizeof(v));
+  percent=n && n<sizeof(v) ? atoi(v) : 100;
+  if(percent<0) percent=0;
+  if(percent>200) percent=200;
+ }
+ return percent;
+}
+static void rumble_update(int focused) {
+ rumble_focus=focused;
+ unsigned motor[2];
+ for(unsigned band=0;band<2;band++) {
+  unsigned a=(unsigned)rumble_amp[0][band],b=(unsigned)rumble_amp[1][band],v=a>b ? a : b;
+  v=focused ? v*(unsigned)rumble_percent()/100 : 0;
+  motor[band]=v>65535 ? 65535 : v;
+ }
+ LONG out=(LONG)(motor[0]|motor[1]<<16);
+ if(InterlockedExchange(&rumble_out,out)==out) return;
+ static int log=-1;
+ if(log<0) log=GetEnvironmentVariableA("AC_LOG_RUMBLE",NULL,0)!=0;
+ if(log) printf("[rumble] low %u high %u\n",motor[0],motor[1]);
+ if(rumble_event) SetEvent(rumble_event);
+}
+static void rumble_xinput(unsigned out) {
+ struct {uint16_t low,high;} v={(uint16_t)(out&65535),(uint16_t)(out>>16)};
+ LONG pads=xinput_pads;
+ for(int pad=0;pad<4;pad++) if(pads&(1<<pad)) xinput_set_state((DWORD)pad,&v);
+}
+/* (its own thread: XInputSetState on a wireless pad can take a few ms, and the game's request waits for nothing) */
+static DWORD WINAPI rumble_thread(void *argument) {
+ (void)argument;
+ LONG sent=0,sent_pads=0;
+ for(;;) {
+  WaitForSingleObject(rumble_event,1000);
+  LONG out=rumble_out,pads=xinput_pads;
+  if(out!=sent || (out && pads!=sent_pads)) {rumble_xinput((unsigned)out);sent=out;sent_pads=pads;}  /* (a pad found later joins in) */
+ }
+ return 0;
+}
+static void rumble_stop(void) {  /* (the game closes: nothing keeps buzzing) */
+ InterlockedExchange(&rumble_amp[0][0],0);InterlockedExchange(&rumble_amp[0][1],0);
+ InterlockedExchange(&rumble_amp[1][0],0);InterlockedExchange(&rumble_amp[1][1],0);
+ rumble_update(0);
+ if(xinput_set_state) rumble_xinput(0);
+}
 static void hid_accept_vibration(const IpcRequest *request) {
  if(!request->send_pid || request->argument_size<32 || request->argument_size>40 ||
     request->send_count || request->receive_count || request->copy_count || request->input_object_count)
@@ -65,8 +124,8 @@ static void hid_accept_vibration(const IpcRequest *request) {
  if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",&state,state.pc);
  unsigned handle=ipc_u32(request->arguments);
  float value[4];memcpy(value,request->arguments+4,sizeof(value));
- /* Values are not checked further: there is no actuator to drive, and the console clamps rather than rejects. A
-  * negative or non-finite value used to stop the game here (an explosion in the File 01 boss fight, 2026-10-21). */
+ /* Out-of-range values are clamped (0..1) as the console does, not rejected: a negative or non-finite value used
+  * to stop the game here (an explosion in the File 01 boss fight, 2026-10-21). */
  static unsigned odd_logged;
  for(unsigned i=0;i<4;i++) {
   unsigned bits=ipc_u32(request->arguments+4+4*i);
@@ -75,10 +134,17 @@ static void hid_accept_vibration(const IpcRequest *request) {
    printf("HID vibration handle=0x%x value %u out of range (bits 0x%08x): ignored\n",handle,i,bits);
   }
  }
- /* The current keyboard backend has no physical actuator. Accept the command
-  * for a valid virtual device without fabricating a connection or actual output. */
- HOT_LOG("HID vibration handle=0x%x low=%g/%g high=%g/%g (no host actuator)\n",
-  handle,value[0],value[1],value[2],value[3]);
+ HOT_LOG("HID vibration handle=0x%x low=%g/%g high=%g/%g\n",handle,value[0],value[1],value[2],value[3]);
+ unsigned device=(handle>>16)&1;
+ for(unsigned band=0;band<2;band++) {
+  /* The game asks for at most 0.2, on the low band only (street route): fine for a Switch's actuators, barely
+   * felt on a PC pad's motors. Small amplitudes are raised as yuzu does, (a + a^0.3) / 2: 0.2 -> 0.41. */
+  float a=value[band*2];
+  if(a>1) a=1;
+  LONG v=a>0 ? (LONG)((a+powf(a,0.3f))*0.5f*65535.0f+0.5f) : 0;  /* (NaN and negatives: 0) */
+  InterlockedExchange(&rumble_amp[device][band],v);
+ }
+ rumble_update(rumble_focus);
 }
 typedef struct { uint64_t sequence; HidSample state; } HidSampleSlot;
 typedef struct { uint64_t unused,capacity,tail,count; HidSampleSlot slots[17]; } HidRing;
@@ -126,7 +192,6 @@ typedef struct {uint32_t packet;HidXinputPad pad;} HidXinputState;
  * lock, stopping every guest thread, the sound's too): a background thread looks for pads each second, the game
  * thread reads the ones found. */
 static DWORD (WINAPI *xinput_get_state)(DWORD,HidXinputState*);
-static volatile LONG xinput_pads;  /* bit i: pad i answered */
 static DWORD WINAPI xinput_probe(void *argument) {
  (void)argument;
  SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
@@ -146,6 +211,10 @@ static void hid_xinput(HidSample *sample) {
   loaded=1;HMODULE x=LoadLibraryExW(L"xinput1_4.dll",NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);
   if(x) xinput_get_state=(DWORD (WINAPI*)(DWORD,HidXinputState*))GetProcAddress(x,"XInputGetState");
   if(xinput_get_state) {HANDLE t=CreateThread(NULL,1<<20,xinput_probe,NULL,STACK_SIZE_PARAM_IS_A_RESERVATION,NULL);if(t) CloseHandle(t);}
+  if(x) xinput_set_state=(DWORD (WINAPI*)(DWORD,void*))GetProcAddress(x,"XInputSetState");
+  if(xinput_get_state && xinput_set_state && rumble_percent() && (rumble_event=CreateEventW(NULL,FALSE,FALSE,NULL))) {
+   HANDLE t=CreateThread(NULL,1<<20,rumble_thread,NULL,STACK_SIZE_PARAM_IS_A_RESERVATION,NULL);if(t) CloseHandle(t);
+  }
  }
  if(!xinput_get_state) return;
  static const struct {uint16_t xinput;unsigned bit;} map[]={
@@ -179,6 +248,12 @@ static void hid_xinput(HidSample *sample) {
  * on one thread); the game thread reads the latest state. SDL's buttons are positional, so south/east/west/north
  * map to the Switch's B/A/Y/X as for XInput, whatever the labels on the pad say. */
 typedef struct {uint32_t buttons;int16_t lx,ly,rx,ry,lt,rt;} HidSdlState;
+static uint8_t sdl_virtual_rumble(void *userdata,uint16_t low,uint16_t high) {  /* (AC_SDL_TEST's pad: what it gets) */
+ (void)userdata;
+ static uint32_t last;
+ if((low|(uint32_t)high<<16)!=last) {last=low|(uint32_t)high<<16;printf("[rumble] SDL virtual pad: low %u high %u\n",low,high);}
+ return 1;
+}
 static HidSdlState sdl_state;
 static volatile LONG sdl_seq,sdl_have;
 static DWORD WINAPI sdl_pad_thread(void *argument) {
@@ -196,6 +271,7 @@ static DWORD WINAPI sdl_pad_thread(void *argument) {
  int16_t (*axis)(void*,int)=(void*)GetProcAddress(m,"SDL_GetGamepadAxis");
  void (*sdl_free)(void*)=(void*)GetProcAddress(m,"SDL_free");
  const char *(*error)(void)=(void*)GetProcAddress(m,"SDL_GetError");
+ uint8_t (*rumble)(void*,uint16_t,uint16_t,uint32_t)=(void*)GetProcAddress(m,"SDL_RumbleGamepad");  /* (optional) */
  if(!init || !set_hint || !get_pads || !open_pad || !close_pad || !connected || !update || !pad_type || !pad_name ||
     !button || !axis || !sdl_free || !error) {printf("[input] SDL3: missing functions, controllers through XInput only\n");return 0;}
  SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
@@ -214,6 +290,7 @@ static DWORD WINAPI sdl_pad_thread(void *argument) {
   struct {uint32_t version;uint16_t type,padding,vendor,product,naxes,nbuttons,nballs,nhats,ntouchpads,nsensors,padding2[2];
           uint32_t button_mask,axis_mask;const char *name;void *rest[11];} desc={0};
   desc.version=sizeof(desc);desc.type=1;desc.naxes=6;desc.nbuttons=15;desc.button_mask=0x7fff;desc.axis_mask=0x3f;desc.name="AC_SDL_TEST virtual gamepad";
+  desc.rest[5]=(void*)sdl_virtual_rumble;  /* (Rumble, after touchpads, sensors, userdata, Update, SetPlayerIndex) */
   uint32_t (*attach)(const void*)=(void*)GetProcAddress(m,"SDL_AttachVirtualJoystick");
   void *(*open_joy)(uint32_t)=(void*)GetProcAddress(m,"SDL_OpenJoystick");
   uint32_t id=attach ? attach(&desc) : 0;
@@ -272,6 +349,14 @@ static DWORD WINAPI sdl_pad_thread(void *argument) {
    s.lx=axis(pad,0);s.ly=axis(pad,1);s.rx=axis(pad,2);s.ry=axis(pad,3);s.lt=axis(pad,4);s.rt=axis(pad,5);
    InterlockedIncrement(&sdl_seq);sdl_state=s;InterlockedIncrement(&sdl_seq); /* (odd while writing) */
    InterlockedExchange(&sdl_have,1);
+   /* Rumble: sent when it changes, and again every 250 ms while on. Each lasts 500 ms, so if the game stops
+    * sending (or this thread stops), the pad stops by itself. */
+   static LONG sent;static uint64_t sent_at;static void *sent_pad;
+   LONG out=rumble_out;uint64_t now=GetTickCount64();
+   if(rumble && (out!=sent || pad!=sent_pad || (out && now-sent_at>=250))) {
+    rumble(pad,(uint16_t)(out&65535),(uint16_t)((unsigned)out>>16),out ? 500 : 0);
+    sent=out;sent_at=now;sent_pad=pad;
+   }
   }
   Sleep(4);
  }
@@ -341,6 +426,7 @@ static void hid_publish(uint64_t now,int focused) {
  if(connected) hid_sdl_start();
  static int sdl_test=-1; /* (AC_SDL_TEST: the virtual pad counts in unattended runs, whose window has no focus) */
  if(sdl_test<0) sdl_test=GetEnvironmentVariableA("AC_SDL_TEST",NULL,0)!=0;
+ rumble_update(connected && (focused || sdl_test));
  if(connected && (focused || sdl_test)) {
   hid_keys_load();
   for(unsigned i=0;i<16;i++) if(hid_key(i)) sample.buttons|=1ull<<i;

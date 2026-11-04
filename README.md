@@ -45,6 +45,11 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   non-Xbox controller* (tested with a virtual SDL pad: every button, trigger and stick direction arrived).
 - **Every connected Xbox-style pad is read** (PR #13, by lcd1232), not only the first one found: Steam Input's
   virtual pad, or a pad plugged in after the start, used to be ignored until a restart.
+- **Rumble**: controllers rumble when the game asks for it (it used to be dropped), through XInput for Xbox pads
+  and SDL3 for the others. **Settings > Controller > Rumble strength** (0 turns it off). The game asks for weak
+  rumble (made for the Switch's actuators); weak values are raised for PC pads' motors, as yuzu does. Stops when
+  the window loses focus or the game closes. *Not yet confirmed with a real controller* (on the street route the
+  game's rumble values reached a virtual SDL pad).
 - **Occasional stop at startup** (`host-shared-placeholder-reserve`), seen about once in 20 starts after the
   controller change: Windows had placed one of the program's own thread stacks where the game then put one of its
   thread stacks. The game now places its memory around such allocations. Forced in a test (a large block reserved
@@ -273,7 +278,8 @@ With less than 20 GB free, setup skips the preparation and the game converts on 
 **Controllers.** Xbox pads and compatibles work through XInput. Other controllers work through SDL3: Switch Pro
 Controller, DualSense, DualShock 4, 8BitDo and most USB or Bluetooth pads SDL knows. The buttons follow their
 *position*, as on the Switch: the right face button is A and the bottom one B, whatever their labels. The first
-controller found is used; plug it in before or while the game runs. Not supported yet: the Switch 2 Pro Controller
+controller found is used; plug it in before or while the game runs. Controllers rumble when the game asks for it
+(**Settings > Controller > Rumble strength**, 0 turns it off). Not supported yet: the Switch 2 Pro Controller
 and Switch 2 Joy-Cons (SDL's Windows build has no driver for them). With Steam, adding the game as a non-Steam game
 with Steam Input on may work for those; that is untested. *Not yet confirmed with a real non-Xbox controller.*
 
