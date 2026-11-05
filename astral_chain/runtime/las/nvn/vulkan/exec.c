@@ -3194,6 +3194,7 @@ static int lazy_nfree;
 static struct { uint64_t addr, size; } lazy_hot[LAZY_HOT_MAX];  // ranges the CPU reads: eager write-back
 static int lazy_nhot;
 static pthread_mutex_t lazy_lock = PTHREAD_MUTEX_INITIALIZER;  // (declared with the write-back staging above)
+static __thread int lazy_held;  // this thread holds lazy_lock (a fault while it copies is resolved in place)
 extern int nvn_page_protect(uint64_t addr, uint64_t size, int noaccess);
 extern void (*nvn_lazy_flush_hook)(uint64_t addr, uint64_t size);
 extern int (*nvn_lazy_fault_hook)(uint64_t addr);
@@ -3263,6 +3264,16 @@ static void lazy_supersede(uint64_t na, uint64_t nb, bool keep) {
 }
 static int lazy_fault(uint64_t addr) {
     extern int nvn_page_state(uint64_t addr);
+    // A fault while this thread holds the lock (gmem_writeback_apply or lazy_flush copying into a page another entry
+    // still protects): the lock is not recursive, and waiting for it here hung the thread for good (the game's main
+    // thread, in a GPU fence wait's check, with AC_ASYNC_SUBMIT at 200+ fps, 2026-11-05). Resolve the page in place.
+    if (lazy_held) {
+        uint64_t p = addr & ~4095ull;
+        static int nlog;
+        if (nlog++ < 20) LOG("[vk] lazy write-back: fault inside a write-back at %llx\n", (unsigned long long)p);
+        if (lazy_pending(p)) { lazy_resolve_page(p, false); return 1; }
+        return nvn_page_protect(p, 4096, 0) ? 1 : 0;
+    }
     pthread_mutex_lock(&lazy_lock);
     uint64_t p = addr & ~4095ull;
     int hit = lazy_pending(p);
@@ -3284,9 +3295,11 @@ static int lazy_fault(uint64_t addr) {
 }
 static void lazy_flush(uint64_t addr, uint64_t size) {
     pthread_mutex_lock(&lazy_lock);
+    lazy_held = 1;
     for (uint64_t p = addr & ~4095ull; p < addr + size; p += 4096)
         if (lazy_pending(p)) lazy_resolve_page(p, false);
     lazy_compact();
+    lazy_held = 0;
     pthread_mutex_unlock(&lazy_lock);
 }
 
@@ -3299,6 +3312,7 @@ static void gmem_writeback_apply(uint64_t done) {
         if (lazy_on) { nvn_lazy_fault_hook = lazy_fault; nvn_lazy_flush_hook = lazy_flush; }
     }
     pthread_mutex_lock(&lazy_lock);
+    lazy_held = 1;
     int k = 0;
     for (int i = 0; i < wb_nflight; i++) {
         GmemWb *w = &wb_flight[i];
@@ -3348,6 +3362,7 @@ static void gmem_writeback_apply(uint64_t done) {
     wb_nflight = k;
     for (int i = 0; i < lazy_nfree; i++) wb_release(lazy_free[i].buf, lazy_free[i].mem, lazy_free[i].blk);
     lazy_nfree = 0;
+    lazy_held = 0;
     pthread_mutex_unlock(&lazy_lock);
 }
 

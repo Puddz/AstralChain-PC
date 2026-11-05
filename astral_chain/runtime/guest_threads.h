@@ -254,7 +254,18 @@ static int thread_wake_check(unsigned i,uint64_t now) {
   thread_cpu(i)->x[0]=0xea01;return 0;
  }
  if(status==THREAD_WAIT_GPU) {
-  if(!guest_threads[i].gpu_done(guest_threads[i].gpu_seq)) return 1;
+  /* The done check (renderer_seq_done) also applies finished GPU write-backs under the backend's lazy write-back
+   * lock, and the lazy write-back fault handler takes that lock and then the kernel lock: checked with the kernel lock
+   * held, a thread faulting on such a page and this thread waited for each other for good (hangs with AC_ASYNC_SUBMIT
+   * at 200+ fps, 2026-11-05). A thread checking its own wait releases the kernel lock for the check; nothing else
+   * changes a GPU wait. */
+  int done;
+  if(parallel_mode && i==current_thread) {
+   unsigned held=klock_release_all();
+   done=guest_threads[i].gpu_done(guest_threads[i].gpu_seq);
+   klock_reacquire(held);
+  } else done=guest_threads[i].gpu_done(guest_threads[i].gpu_seq);
+  if(!done) return 1;
   guest_threads[i].status=THREAD_RUNNABLE;return 0;
  }
  if(status==THREAD_WAIT_OBJECTS) {
@@ -319,11 +330,14 @@ static void parallel_block(void) {
 }
 static void parallel_block_wait(void) {
  unsigned self=current_thread;
+ const char *was=rt_where("parallel_block");
  for(;;) {
   unsigned status=guest_threads[self].status;
-  if(status==THREAD_RUNNABLE || status==THREAD_EXITED) return;
+  if(status==THREAD_RUNNABLE || status==THREAD_EXITED) {rt_where(was);return;}
   uint64_t now=rt_ticks();
-  if(!thread_wake_check(self,now) && guest_threads[self].status==THREAD_RUNNABLE) return;
+  rt_where("wake check");
+  if(!thread_wake_check(self,now) && guest_threads[self].status==THREAD_RUNNABLE) {rt_where(was);return;}
+  rt_where("parallel_block");
   status=guest_threads[self].status;
   uint64_t deadline=status==THREAD_WAIT_ADDRESS ? guest_threads[self].address_deadline :
                     status==THREAD_WAIT_CONDITION || status==THREAD_WAIT_MUTEX ? guest_threads[self].condition_deadline :
@@ -331,8 +345,8 @@ static void parallel_block_wait(void) {
   DWORD ms=20;
   if(status==THREAD_WAIT_GPU || status==THREAD_WAIT_OBJECTS) ms=1;
   else if(deadline) {uint64_t left=deadline>now ? (deadline-now)/19200 : 0;ms=left<1 ? 1 : left>20 ? 20 : (DWORD)left;}
-  if(app_window_owner()) {app_checkpoint();if(ms>4) ms=4;}  /* keep the window responsive while blocked */
-  klock_wait(self,ms);
+  if(app_window_owner()) {rt_where("app_checkpoint");app_checkpoint();rt_where("parallel_block");if(ms>4) ms=4;}  /* keep the window responsive while blocked */
+  rt_where("klock_wait sleep");klock_wait(self,ms);rt_where("parallel_block");
  }
 }
 /* Parallel mode: each started guest thread gets a host thread running the dispatcher on its own context. */
@@ -340,7 +354,7 @@ static void (*guest_execute)(Cpu *c);
 static void prof_attach(unsigned thread);
 static DWORD WINAPI parallel_thread_main(LPVOID parameter) {
  unsigned i=(unsigned)(uintptr_t)parameter;
- current_thread=i;state=guest_threads[i].cpu;  /* (initial context from svcCreateThread) */
+ current_thread=i;rt_where_slot=i;state=guest_threads[i].cpu;  /* (initial context from svcCreateThread) */
  klock();live_cpu[i]=&state;kunlock();
  prof_attach(i);
  guest_execute(&state);  /* returns only at the host return sentinel; guest threads end with svcExitThread */

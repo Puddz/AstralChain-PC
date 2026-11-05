@@ -45,6 +45,11 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   non-Xbox controller* (tested with a virtual SDL pad: every button, trigger and stick direction arrived).
 - **Every connected Xbox-style pad is read** (PR #13, by lcd1232), not only the first one found: Steam Input's
   virtual pad, or a pad plugged in after the start, used to be ignored until a restart.
+- **Prepare graphics on a separate thread: hangs, crashes and flicker fixed**, seen at high frame rates (with the
+  uncapped frame rate, the title screens run at 200+ fps): the list of GPU results waiting to be copied back was
+  changed by two threads at once, and a fence wait could end before its work reached the GPU. In tests with both
+  settings on, 25 of 25 runs through the title screens were clean (about a third hung or crashed before). *Not yet
+  confirmed in play.*
 - **Faster atomic memory operations**: each one the game makes checked its memory against every mapping table; the
   last region that passed is now kept until a mapping changes. Street after the opening helicopter scene, uncapped
   (RTX 4090 / Ryzen 7 7800X3D, 3 runs each): 67.0 -> 71.4 fps; at the street's start 55.6 -> 58.5 fps, slowest
@@ -53,8 +58,7 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   longer held to 60 fps; cutscenes stay at 60 (their cuts are timed for it), and it stops at 450 fps, where the 60 fps
   patch's game timing ends. Most places are limited by the CPU: on the street after the opening helicopter scene
   64-66 fps instead of 60 (RTX 4090 / Ryzen 7 7800X3D). The 60 fps patch scales game speed to the measured frame
-  time up to 480 fps; *not yet confirmed in play above 60* (game speed, physics, sound). It has no effect
-  while **Prepare graphics on a separate thread** is on: the two together hung or crashed the game in tests.
+  time up to 480 fps; *not yet confirmed in play above 60* (game speed, physics, sound).
 - **In-game settings menu**: **F1**, or **Minus and Plus** together on a controller, opens it over the game, which
   pauses as under the Switch's HOME menu. Button icons, rumble strength, the mouse settings, fullscreen, upscaling
   and FSR 1 sharpening, 30 fps cutscenes and keeping the game running while minimized change at once; render
