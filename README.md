@@ -45,11 +45,12 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   non-Xbox controller* (tested with a virtual SDL pad: every button, trigger and stick direction arrived).
 - **Every connected Xbox-style pad is read** (PR #13, by lcd1232), not only the first one found: Steam Input's
   virtual pad, or a pad plugged in after the start, used to be ignored until a restart.
-- **Prepare graphics on a separate thread: hangs, crashes and flicker fixed**, seen at high frame rates (with the
+- **Prepare graphics on a separate thread: hangs and crashes fixed**, seen at high frame rates (with the
   uncapped frame rate, the title screens run at 200+ fps): the list of GPU results waiting to be copied back was
   changed by two threads at once, and a fence wait could end before its work reached the GPU. In tests with both
   settings on, 25 of 25 runs through the title screens were clean (about a third hung or crashed before). *Not yet
-  confirmed in play.*
+  confirmed in play.* The title screen still flickers in play: about every 10 s at 60 fps, nearly all the time
+  uncapped (reported 2026-11-05); being looked into.
 - **Faster atomic memory operations**: each one the game makes checked its memory against every mapping table; the
   last region that passed is now kept until a mapping changes. Street after the opening helicopter scene, uncapped
   (RTX 4090 / Ryzen 7 7800X3D, 3 runs each): 67.0 -> 71.4 fps; at the street's start 55.6 -> 58.5 fps, slowest
@@ -58,14 +59,14 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   longer held to 60 fps; cutscenes stay at 60 (their cuts are timed for it), and it stops at 450 fps, where the 60 fps
   patch's game timing ends. Most places are limited by the CPU: on the street after the opening helicopter scene
   64-66 fps instead of 60 (RTX 4090 / Ryzen 7 7800X3D). The 60 fps patch scales game speed to the measured frame
-  time up to 480 fps; *not yet confirmed in play above 60* (game speed, physics, sound).
+  time up to 480 fps. Reported in play: it does not feel right above 60 fps, for about 10 fps more; being looked
+  into.
 - **In-game settings menu**: **F1**, or **Minus and Plus** together on a controller, opens it over the game, which
   pauses as under the Switch's HOME menu. Button icons, rumble strength, the mouse settings, fullscreen, upscaling
   and FSR 1 sharpening, 30 fps cutscenes and keeping the game running while minimized change at once; render
   resolution, handheld mode, presentation mode and the separate graphics thread from the next start. Changes are saved for the launcher too. Navigate with the mouse, the
-  arrow keys or a controller (A selects, B goes back); Esc, F1 or Minus and Plus close it. *Not yet confirmed in
-  play* (tested in scripted runs: opened with a virtual controller and with keys, a setting changed and saved, the
-  game's picture held still while it was open, frame rate unchanged with it closed).
+  arrow keys or a controller (A selects, B goes back); Esc, F1 or Minus and Plus close it. Confirmed in play: F1
+  opens it, the game pauses, navigation works, changes apply and the launcher shows them.
 - **Xbox and PlayStation button icons**, and **automatic icons** (the new default): the game's button prompts
   follow what you last used, keys and mouse buttons for the keyboard, the buttons of an Xbox, PlayStation or Switch
   controller for a controller (by position: the right face button is Xbox B and PlayStation circle). The style can
@@ -73,8 +74,7 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 - **Rumble**: controllers rumble when the game asks for it (it used to be dropped), through XInput for Xbox pads
   and SDL3 for the others. **Settings > Controller > Rumble strength** (0 turns it off). The game asks for weak
   rumble (made for the Switch's actuators); weak values are raised for PC pads' motors, as yuzu does. Stops when
-  the window loses focus or the game closes. *Not yet confirmed with a real controller* (on the street route the
-  game's rumble values reached a virtual SDL pad).
+  the window loses focus or the game closes. Confirmed in play (rumble works; an 8BitDo controller's buttons work).
 - **Occasional stop at startup** (`host-shared-placeholder-reserve`), seen about once in 20 starts after the
   controller change: Windows had placed one of the program's own thread stacks where the game then put one of its
   thread stacks. The game now places its memory around such allocations. Forced in a test (a large block reserved
