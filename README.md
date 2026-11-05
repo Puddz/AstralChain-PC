@@ -46,6 +46,11 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   non-Xbox controller* (tested with a virtual SDL pad: every button, trigger and stick direction arrived).
 - **Every connected Xbox-style pad is read** (PR #13, by lcd1232), not only the first one found: Steam Input's
   virtual pad, or a pad plugged in after the start, used to be ignored until a restart.
+- **Uncapped frame rate (experimental)**: **Settings > Game** in the launcher, or the in-game menu. Gameplay is no
+  longer held to 60 fps; cutscenes stay at 60 (their cuts are timed for it), and it stops at 450 fps, where the 60 fps
+  patch's game timing ends. Most places are limited by the CPU: on the street after the opening helicopter scene
+  64-66 fps instead of 60 (RTX 4090 / Ryzen 7 7800X3D). The 60 fps patch scales game speed to the measured frame
+  time up to 480 fps; *not yet confirmed in play above 60* (game speed, physics, sound).
 - **In-game settings menu**: **F1**, or **Minus and Plus** together on a controller, opens it over the game, which
   pauses as under the Switch's HOME menu. Button icons, rumble strength, the mouse settings, fullscreen, 30 fps
   cutscenes and keeping the game running while minimized change at once; handheld mode, presentation mode and the

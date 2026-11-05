@@ -553,6 +553,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   int cutscene=!(c->x[21]&1);
   if(!cutscene || at30<0) at30=ac_cutscene_30;  /* (a change from the in-game menu: from the next cutscene on) */
   cutscene_mode=cutscene && at30;
+  ac_in_cutscene=cutscene;
   /* Cutscene A/V sync, measured on the cutscene after the highway chase (screenshots and recorded sound against a run
    * without stalls): stalls of 150-400 ms are caught up by the game; one of 600 ms left the picture 0.35-0.6 s behind
    * its sound until the game resynchronized the sound 15-20 s later. Catching up more per frame (repaying the stall's

@@ -127,6 +127,7 @@ void ac_setting_apply(const char *key,const char *value) {
  else if(!strcmp(key,"mouse_invert")) {mouse_config();mouse_invert=on;}
  else if(!strcmp(key,"cutscene_fps_30")) ac_cutscene_30=on;
  else if(!strcmp(key,"ignore_focus")) ac_ignore_focus=on;
+ else if(!strcmp(key,"uncapped")) ac_uncapped=on;
  else if(!strcmp(key,"fullscreen")) {if(app_window) PostMessageW(app_window,WM_AC_FULLSCREEN,on,0);}
  else return;
  printf("[menu] %s=%s\n",key,value ? value : "");fflush(stdout);
