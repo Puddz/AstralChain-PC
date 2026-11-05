@@ -443,7 +443,13 @@ void nvn_present_pace(int interval) {
  /* AC_UNCAPPED=1 (launcher and in-game menu: Uncapped frame rate): gameplay is not held to 60 FPS. Cutscenes stay at
   * 60 (their cuts are timed for it: svc #0xB2), and an interval the game asks for above 1 is kept. */
  if(ac_uncapped<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_UNCAPPED",v,sizeof(v));ac_uncapped=n==1 && v[0]=='1';}
- if(ac_uncapped && override<0 && interval==1 && !ac_in_cutscene) interval=0;
+ /* Not with AC_ASYNC_SUBMIT=1 (Prepare graphics on a separate thread): together they hung or crashed the game at the
+  * title screens, which run at 200+ FPS uncapped (5 of 9 test runs, 2026-11-05: the main thread parked on a GPU fence
+  * with the submission queue empty; a fault in nvnCommandBufferAddCommandMemory). That setting keeps the 60 cap. */
+ static int async=-1;
+ if(async<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_ASYNC_SUBMIT",v,sizeof(v));async=n>0 && n<sizeof(v) && v[0]!='0';
+  if(async && ac_uncapped) printf("[app] uncapped frame rate off: not with AC_ASYNC_SUBMIT\n");}
+ if(ac_uncapped && !async && override<0 && interval==1 && !ac_in_cutscene) interval=0;
  /* AC_CUTSCENE_FPS=30: cutscenes at 30 FPS, as in the unmodified game (svc #0xB1 in host_runtime.c.in). */
  extern int cutscene_mode;
  if(cutscene_mode && interval>0 && interval<2) interval=2;
