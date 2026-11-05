@@ -22,12 +22,14 @@ LAS = Path(__file__).parent/'runtime/las'
 PROJECT = Path(__file__).resolve().parent.parent
 VULKAN_HEADERS = PROJECT/'third_party/Vulkan-Headers/include'
 VMA = PROJECT/'third_party/VulkanMemoryAllocator/include'
+IMGUI = PROJECT/'third_party/imgui'  # Dear ImGui (in-game menu: runtime/las/menu.cpp)
+IMGUI_SOURCES = ('imgui.cpp', 'imgui_draw.cpp', 'imgui_tables.cpp', 'imgui_widgets.cpp', 'backends/imgui_impl_vulkan.cpp')
 GLSLANG = PROJECT/'tools/glslang/bin/glslang.exe'
 VULKAN_DLL = Path('C:/Windows/System32/vulkan-1.dll')
 OBJECT_LAYER = ('nvn/objects.c', 'nvn/cmdbuf.c', 'nvn/formats.c', 'nvn/tegra.c', 'nvn/astc.c')
 VULKAN_LAYER = ('nvn/vulkan/device.c', 'nvn/vulkan/exec.c', 'nvn/vulkan/textures.c', 'nvn/vulkan/shaders.c',
                 'nvn/vulkan/spirv_cache.c', 'nvn/vulkan/astc_gpu.c', 'nvn/vulkan/bc7_gpu.c',
-                'shaderc_glslang.c', 'game_hooks_neutral.c', 'button_prompts.c', 'vma.cpp')
+                'shaderc_glslang.c', 'game_hooks_neutral.c', 'button_prompts.c', 'vma.cpp', 'menu.cpp')
 BACKENDS = {'null': ('null_backend.c',), 'vulkan': VULKAN_LAYER}
 
 
@@ -69,6 +71,7 @@ def build_nvn_objects(compiler, reference, cache, backend='null'):
                 'cpu_h':digest_file(reference/'runtime/cpu.h')}
     if backend=='vulkan':
         provenance['vma_sha256']=digest_file(VMA/'vk_mem_alloc.h')
+        provenance['imgui']={p.relative_to(IMGUI).as_posix():digest_file(p) for p in sorted(IMGUI.rglob('*')) if p.is_file()}
         provenance['vulkan_core_sha256']=digest_file(VULKAN_HEADERS/'vulkan/vulkan_core.h')
         provenance['vulkan_dll_sha256']=digest_file(VULKAN_DLL)
         provenance['translator_sha256']=digest_file(reference/'runtime/nvn/maxwell/translate.c')
@@ -77,8 +80,9 @@ def build_nvn_objects(compiler, reference, cache, backend='null'):
     folder=Path(cache).resolve()/f'nvn-{key}';manifest=folder/'complete.json'
     sources=nvn_sources(backend)
     if backend=='vulkan':
-        sources=sources+[folder/'translator/translate-reviewed.c']
+        sources=sources+[folder/'translator/translate-reviewed.c']+[IMGUI/name for name in IMGUI_SOURCES]
     def object_of(source):
+        if source.is_relative_to(IMGUI): return folder/('imgui_'+source.name+'.obj')
         name=source.name if source.is_relative_to(folder) else source.relative_to(LAS).as_posix().replace('/','_')
         return folder/(name+'.obj')
     objects=[object_of(s) for s in sources]
@@ -94,7 +98,7 @@ def build_nvn_objects(compiler, reference, cache, backend='null'):
     common=['-I',str(LAS),'-I',str(reference/'runtime')]
     if backend=='vulkan':
         prepare_translator(reference,folder/'translator')
-        common+=['-I',str(LAS/'shim'),'-I',str(VULKAN_HEADERS),'-I',str(VMA),
+        common+=['-I',str(LAS/'shim'),'-I',str(VULKAN_HEADERS),'-I',str(VMA),'-I',str(IMGUI),'-I',str(IMGUI/'backends'),
                  '-I',str(reference/'runtime/nvn/maxwell')]
     log=[]
     for source,obj in zip(sources,objects):

@@ -464,6 +464,7 @@ static void close_library_applet(void) {
 #include "shared_memory.h"
 #include "stack_memory.h"
 #include "transfer_memory.h"
+#include "live_settings.h"
 #include "hid_service.h"
 #include "time_service.h"
 #include "app_window.h"
@@ -572,8 +573,9 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   static int at30=-1;
   static float debt;  /* real time the cutscene picture is behind, in 30 FPS frames */
   static int was;
-  if(at30<0) {char v[8];DWORD n=GetEnvironmentVariableA("AC_CUTSCENE_FPS",v,sizeof(v));at30=n && n<sizeof(v) && atoi(v)==30;}
+  if(ac_cutscene_30<0) {char v[8];DWORD n=GetEnvironmentVariableA("AC_CUTSCENE_FPS",v,sizeof(v));ac_cutscene_30=n && n<sizeof(v) && atoi(v)==30;}
   int cutscene=!(c->x[21]&1);
+  if(!cutscene || at30<0) at30=ac_cutscene_30;  /* (a change from the in-game menu: from the next cutscene on) */
   cutscene_mode=cutscene && at30;
   /* Cutscene A/V sync, measured on the cutscene after the highway chase (screenshots and recorded sound against a run
    * without stalls): stalls of 150-400 ms are caught up by the game; one of 600 ms left the picture 0.35-0.6 s behind

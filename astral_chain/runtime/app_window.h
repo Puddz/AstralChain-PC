@@ -98,6 +98,41 @@ static void app_set_fullscreen(HWND window,int on) {
  app_fullscreen=on;
  printf("[app] %s\n",on ? "fullscreen" : "windowed");
 }
+/* In-game menu (live_settings.h, las/menu.cpp) */
+static void menu_set_open(int open) {
+ HWND window=app_window;
+ if((ac_menu_open!=0)==(open!=0)) return;
+ if(open) {  /* (the game lets go of everything: keys, buttons, the mouse) */
+  memset(hid_keys,0,sizeof(hid_keys));memset(keyboard_keys,0,sizeof(keyboard_keys));
+  mouse_clear();mouse_keys_clear();if(window && GetCapture()==window) ReleaseCapture();
+  mouse_set_captured(window,0);mouse_alt_free=0;
+ }
+ InterlockedExchange(&ac_menu_open,open ? 1 : 0);
+ /* The game is told it is out of focus, as under the Switch's HOME menu; its threads are not stopped
+  * (app_checkpoint), so it keeps presenting and the menu keeps drawing. AC_MENU_PAUSE=0: not told. */
+ static int pause=-1;
+ if(pause<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_MENU_PAUSE",v,sizeof(v));pause=!(n>0 && n<sizeof(v) && v[0]=='0');}
+ if(pause && app_window) app_set_focus(open ? 2 : IsIconic(app_window) ? 3 : 1);
+ printf("[menu] %s\n",open ? "open" : "closed");fflush(stdout);
+}
+int ac_fullscreen_state(void) { return app_fullscreen; }
+#define WM_AC_FULLSCREEN (WM_APP+41)
+/* From the menu (render thread). Window changes go to the window thread as a message. */
+void ac_setting_apply(const char *key,const char *value) {
+ int on=value && !strcmp(value,"1");
+ if(!strcmp(key,"prompts")) ac_prompt_style=ac_prompt_parse(value);
+ else if(!strcmp(key,"rumble")) {rumble_set_percent(atoi(value));rumble_update(rumble_focus);}
+ else if(!strcmp(key,"mouse_look")) {mouse_config();mouse_look_on=on;ac_mouse_look=on;}
+ else if(!strcmp(key,"mouse_sens")) {mouse_config();double s=atof(value)/100.0;if(s>=0.05 && s<=20) mouse_sens=s;}
+ else if(!strcmp(key,"mouse_invert")) {mouse_config();mouse_invert=on;}
+ else if(!strcmp(key,"cutscene_fps_30")) ac_cutscene_30=on;
+ else if(!strcmp(key,"ignore_focus")) ac_ignore_focus=on;
+ else if(!strcmp(key,"upscaler")) ac_upscaler=value && !strcmp(value,"fsr1");
+ else if(!strcmp(key,"fsr_sharpness")) {float s=(float)atof(value);if(s>=0 && s<=2) ac_fsr_sharpness=s;}
+ else if(!strcmp(key,"fullscreen")) {if(app_window) PostMessageW(app_window,WM_AC_FULLSCREEN,on,0);}
+ else return;
+ printf("[menu] %s=%s\n",key,value ? value : "");fflush(stdout);
+}
 static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,LPARAM lparam) {
  /* Dragging by the title bar is done here: Windows' own move loop runs inside this call, on the game's main thread
   * and under the kernel lock, and held the whole game (sound included) for as long as the button was down. */
@@ -117,6 +152,20 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
  if(message==WM_PAINT && app_frame_pixels) {
   PAINTSTRUCT paint;HDC dc=BeginPaint(window,&paint);RECT client;GetClientRect(window,&client);
   app_paint_frame(dc,&client);EndPaint(window,&paint);return 0;
+ }
+ if(message==WM_AC_FULLSCREEN) {app_set_fullscreen(window,(int)wparam);return 0;}
+ if(ac_menu_open) {  /* (the menu has the mouse and the keyboard) */
+  if(message==WM_MOUSEMOVE) {menu_push(1,(int16_t)LOWORD(lparam),(int16_t)HIWORD(lparam));return 0;}
+  if(message==WM_LBUTTONDOWN || message==WM_LBUTTONUP || message==WM_RBUTTONDOWN || message==WM_RBUTTONUP ||
+     message==WM_MBUTTONDOWN || message==WM_MBUTTONUP) {
+   int button=message<=WM_LBUTTONUP ? 0 : message<=WM_RBUTTONUP ? 1 : 2;
+   int down=message==WM_LBUTTONDOWN || message==WM_RBUTTONDOWN || message==WM_MBUTTONDOWN;
+   menu_push(1,(int16_t)LOWORD(lparam),(int16_t)HIWORD(lparam));menu_push(2,button,down);return 0;
+  }
+  if(message==WM_MOUSEWHEEL || message==WM_MOUSEHWHEEL) {menu_push(3,(int16_t)HIWORD(wparam),message==WM_MOUSEHWHEEL);return 0;}
+  if(message==WM_XBUTTONDOWN || message==WM_XBUTTONUP) return TRUE;
+  if(message==WM_CHAR) {menu_push(5,(int)wparam,0);return 0;}
+  if(message==WM_SETCURSOR && LOWORD(lparam)==HTCLIENT) {SetCursor(LoadCursorW(NULL,MAKEINTRESOURCEW(32512)));return TRUE;}
  }
  if(message==WM_MOUSEMOVE || message==WM_LBUTTONDOWN || message==WM_LBUTTONUP || message==WM_RBUTTONDOWN || message==WM_RBUTTONUP ||
     message==WM_MBUTTONDOWN || message==WM_MBUTTONUP || message==WM_XBUTTONDOWN || message==WM_XBUTTONUP || message==WM_MOUSEWHEEL || message==WM_MOUSEHWHEEL) {
@@ -139,6 +188,17 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
  }
  if((message==WM_KEYDOWN || message==WM_KEYUP || message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) && wparam<256) {
   hid_keys_load();
+  /* F1 opens and closes the in-game menu (unless F1 is a game key); Esc closes it. While it is open, keys go to it. */
+  int down=message==WM_KEYDOWN || message==WM_SYSKEYDOWN,repeat=(lparam&(1<<30))!=0;
+  if((wparam==VK_F1 && !hid_key_mapped[VK_F1]) || (ac_menu_open && wparam==VK_ESCAPE)) {
+   if(down && !repeat) menu_set_open(wparam==VK_F1 ? !ac_menu_open : 0);
+   return 0;
+  }
+  if(ac_menu_open && wparam!=VK_F11 && !(wparam==VK_RETURN && (lparam&(1<<29)))) {
+   menu_push(4,(int)wparam,down);
+   if(message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) return DefWindowProcW(window,message,wparam,lparam);  /* (Alt+F4) */
+   return 0;
+  }
   int alt_enter=wparam==VK_RETURN && (lparam&(1<<29)) && !hid_key_mapped[VK_MENU];
   if((wparam==VK_F11 && !hid_key_mapped[VK_F11]) || alt_enter) {
    if((message==WM_KEYDOWN || message==WM_SYSKEYDOWN) && !(lparam&(1<<30))) app_set_fullscreen(window,!app_fullscreen);
@@ -163,7 +223,7 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
  }
  if(message==WM_SIZE) {
   mouse_clip();
-  app_set_focus(wparam==SIZE_MINIMIZED ? 3 : 1);
+  app_set_focus(wparam==SIZE_MINIMIZED ? 3 : ac_menu_open ? 2 : 1);
   if(app_focus==3) {memset(hid_keys,0,sizeof(hid_keys));memset(keyboard_keys,0,sizeof(keyboard_keys));hid_publish(rt_ticks(),0);keyboard_publish(rt_ticks(),0);}
   return 0;
  }
@@ -181,6 +241,7 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
 static DWORD app_window_thread;
 static void app_pump(void) {
  if(!app_window || GetCurrentThreadId()!=app_window_thread) return;
+ if(ac_menu_close_request) {InterlockedExchange(&ac_menu_close_request,0);menu_set_open(0);}
  MSG message;
  unsigned count=0;
  /* (stall reports) this runs under the kernel lock: a slow message or input read stops every guest thread. Steps over
@@ -199,7 +260,7 @@ static void app_pump(void) {
   if(ms>30.0) printf("PUMP message 0x%x took %.0f ms\n",message.message,ms);
  }
  QueryPerformanceCounter(&a);
- hid_poll(app_input_focus && app_focus==1 && !app_exit_requested);
+ hid_poll(app_input_focus && (app_focus==1 || ac_menu_open) && !app_exit_requested);
  QueryPerformanceCounter(&b);
  double ms=1000.0*(double)(b.QuadPart-a.QuadPart)/(double)f.QuadPart;
  if(ms>30.0) printf("PUMP input read took %.0f ms\n",ms);
@@ -209,11 +270,10 @@ static void app_checkpoint(void) {
  app_pump();
  if(!app_window || !app_focus_policy || app_exit_requested) return;
  /* AC_IGNORE_FOCUS=1: keep running while the window is unfocused or in the background (unattended runs). */
- static int ignore_focus=-1;
- if(ignore_focus<0) ignore_focus=GetEnvironmentVariableA("AC_IGNORE_FOCUS",NULL,0)!=0;
- if(ignore_focus) return;
+ if(ac_ignore_focus<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_IGNORE_FOCUS",v,sizeof(v));ac_ignore_focus=n>0 && n<sizeof(v) && v[0]!='0';}
+ if(ac_ignore_focus) return;
  uint64_t start=0;
- while((app_focus==3 && app_suspend_background) || (app_focus==2 && app_suspend_out_of_focus)) {
+ while((app_focus==3 && app_suspend_background) || (app_focus==2 && app_suspend_out_of_focus && !ac_menu_open)) {
   if(!start) start=rt_ticks();
   unsigned held=klock_release_all();  /* (parallel mode: other threads' services must not wait on this) */
   DWORD waited=MsgWaitForMultipleObjectsEx(0,NULL,16,QS_ALLINPUT,MWMO_INPUTAVAILABLE);

@@ -45,6 +45,17 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   non-Xbox controller* (tested with a virtual SDL pad: every button, trigger and stick direction arrived).
 - **Every connected Xbox-style pad is read** (PR #13, by lcd1232), not only the first one found: Steam Input's
   virtual pad, or a pad plugged in after the start, used to be ignored until a restart.
+- **In-game settings menu**: **F1**, or **Minus and Plus** together on a controller, opens it over the game, which
+  pauses as under the Switch's HOME menu. Button icons, rumble strength, the mouse settings, fullscreen, upscaling
+  and FSR 1 sharpening, 30 fps cutscenes and keeping the game running while minimized change at once; render
+  resolution, handheld mode, presentation mode and the separate graphics thread from the next start. Changes are saved for the launcher too. Navigate with the mouse, the
+  arrow keys or a controller (A selects, B goes back); Esc, F1 or Minus and Plus close it. *Not yet confirmed in
+  play* (tested in scripted runs: opened with a virtual controller and with keys, a setting changed and saved, the
+  game's picture held still while it was open, frame rate unchanged with it closed).
+- **Xbox and PlayStation button icons**, and **automatic icons** (the new default): the game's button prompts
+  follow what you last used, keys and mouse buttons for the keyboard, the buttons of an Xbox, PlayStation or Switch
+  controller for a controller (by position: the right face button is Xbox B and PlayStation circle). The style can
+  also be fixed in the menu or the launcher. *Not yet confirmed in play.*
 - **Rumble**: controllers rumble when the game asks for it (it used to be dropped), through XInput for Xbox pads
   and SDL3 for the others. **Settings > Controller > Rumble strength** (0 turns it off). The game asks for weak
   rumble (made for the Switch's actuators); weak values are raised for PC pads' motors, as yuzu does. Stops when
@@ -234,9 +245,13 @@ Default keys and mouse buttons (change them with **Controls**; every action has 
 steers your Legion while ZL is held). Hold **Alt**, or switch to another window, to get the cursor back; click again
 to resume. Sensitivity and invert are in **Settings > Mouse and keyboard**.
 
-**Button icons.** The game's button prompts show your keys and mouse buttons instead of the Switch buttons (the main
-binding of each action). **Settings > Mouse and keyboard > Button icons** brings back the Switch icons for playing with
-a controller.
+**Button icons.** By default the game's button prompts follow what you last used: your keys and mouse buttons (the
+main binding of each action) on the keyboard, the buttons of an Xbox, PlayStation or Switch controller on a
+controller. **Button icons** in the in-game menu or the launcher's **Settings > Mouse and keyboard** fixes one style.
+
+**In-game menu.** **F1**, or **Minus and Plus** together on a controller (Back and Start, Share and Options), opens
+the settings menu over the game; the game pauses while it is open. Esc, F1 or Minus and Plus close it. Changes that
+need a restart say so. The menu saves to the same settings file as the launcher.
 
 F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
 

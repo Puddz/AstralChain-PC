@@ -55,7 +55,7 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_GPUPROF_EVERY=<frames>` | Also profile one frame every that many frames (`[gpuprof] frame N` header; each profiled frame stalls briefly): for players' reports |
 | `LARECOMP_GPUPROF_AUTO=1` | Also profile the frame after each frame slower than 250 ms (up to 12; profiling makes a frame slow) |
 | `AC_RESOLUTION=<w>x<h>` | (launcher: *Render resolution*) docked render size, up to 8.6 million pixels (3840x2160), no dynamic resolution; wider than 16:9 (e.g. 2560x1080, 3840x1080) widens the 3D cameras' aspect and the window; the render target pool grows by 160 bytes per extra pixel (`resolution-1.0.1.pchtxt`, svc #0xB3 in host_runtime.c.in) |
-| `AC_UPSCALER=fsr1` | (launcher: *Upscaling*) AMD FSR 1 (EASU upscale, RCAS sharpen; exec.c `post_process`) when the picture is shown larger than it is rendered; `AC_FSR_SHARPNESS=<stops>` (0 strongest - 2, default 0.2) |
+| `AC_UPSCALER=fsr1` | (launcher: *Upscaling*; the in-game menu changes it and `AC_FSR_SHARPNESS` while playing) AMD FSR 1 (EASU upscale, RCAS sharpen; exec.c `post_process`) when the picture is shown larger than it is rendered; `AC_FSR_SHARPNESS=<stops>` (0 strongest - 2, default 0.2) |
 | `AC_FULLSCREEN=1` | (launcher: *Start in fullscreen*) Borderless fullscreen on the window's monitor from the start (`app_window.h` `app_set_fullscreen`, also F11 / Alt+Enter) |
 | `AC_HANDHELD=1` | (launcher: *Handheld mode*) The game is told it runs handheld (operation mode 0, normal performance mode; `app_window.h`): it renders 1280x720 into its 1600x900 window textures and crops to it (`nvnWindowSetCrop`, honoured by the present in `device.c`) |
 | `AC_CUTSCENE_FPS=30` | Cutscenes as in the unmodified game: its fixed-step timer path at 30 FPS (default: 60 FPS, measured step) |
@@ -88,7 +88,11 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_KEYS2=...` | The alternative bindings, same format |
 | `AC_MOUSE_LOOK=0` | (launcher: *Mouse moves the camera* off) The mouse keeps its buttons but does not drive the right stick (`mouse.h`: raw input, speed to stick tilt, 20% minimum against the game's dead zone) |
 | `AC_MOUSE_SENS=<percent>` / `AC_MOUSE_INVERT=1` | Mouse camera sensitivity (100: full tilt at 1500 counts/s) and inverted up/down |
-| `AC_PROMPTS=switch` | (launcher: *Button icons*) Keep the Switch button icons. Otherwise `las/button_prompts.c` redraws the game's button icon atlas (ui_core `core.wtp` texture 0, 256x512 RGBA8, found by its content hash through the `texpatch` hooks of `textures.c`) with the main bindings |
+| `AC_PROMPTS=<style>` | (launcher and in-game menu: *Button icons*) `auto` (default: the device last used, `live_settings.h` `ac_prompt_device`), `keyboard`, `xbox`, `playstation` or `switch` (the original icons). `las/button_prompts.c` redraws the game's button icon atlas (ui_core `core.wtp` texture 0, 256x512 RGBA8, found by its content hash through the `texpatch` hooks of `textures.c`); a style change re-uploads it (`texpatch_generation`) |
+| `AC_PROMPTS_DUMP=<prefix>` | (test) Write the atlas as drawn to `<prefix>-<style>.bmp` (alpha as grey) at each upload |
+| `AC_SETTINGS_FILE=<path>` | (test) The file the in-game menu saves to, instead of `userdata\launcher.ini` |
+| `AC_MENU_AT=<frame>` | (test) Open the in-game menu at that frame (`device.c`); without the pause and input hand-over of F1 / Minus+Plus |
+| `AC_MENU_PAUSE=0` | The in-game menu does not tell the game it is out of focus (by default the game pauses while the menu is open, as under the Switch's HOME menu) |
 | `LARECOMP_ASTC_VERIFY=<n>` | Read back the first n texture levels the GPU decodes and compare them with the CPU decoder (`ASTC verify` lines; slow) |
 | `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
 | `LARECOMP_GPL=0` | No shader libraries (`VK_EXT_graphics_pipeline_library`): pipelines are compiled whole at their first draw |

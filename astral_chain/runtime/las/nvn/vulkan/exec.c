@@ -5061,15 +5061,20 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     if (ow > 16384) ow = 16384;
     if (oh > 16384) oh = 16384;
     // Astral Chain: AC_UPSCALER=fsr1 (launcher: Upscaling) turns FSR 1 on; AC_FSR_SHARPNESS: RCAS strength in stops
-    // (0 sharpest, 2 softest; default 0.2, AMD's)
-    static float sharpness = -1;
-    if (sharpness < 0) {
-        const char *u = getenv("AC_UPSCALER"), *sh = getenv("AC_FSR_SHARPNESS");
-        if (u && !strcmp(u, "fsr1")) g_settings.upscaler = UPSCALE_FSR1;
-        sharpness = sh ? (float)atof(sh) : 0.2f;
-        if (!(sharpness >= 0) || sharpness > 2) sharpness = 0.2f;
+    // (0 sharpest, 2 softest; default 0.2, AMD's). Read every frame: the in-game menu changes them (live_settings.h).
+    extern volatile int ac_upscaler;
+    extern volatile float ac_fsr_sharpness;
+    if (ac_upscaler < 0) { const char *u = getenv("AC_UPSCALER"); ac_upscaler = u && !strcmp(u, "fsr1"); }
+    if (ac_fsr_sharpness < 0) {
+        const char *sh = getenv("AC_FSR_SHARPNESS");
+        float s = sh ? (float)atof(sh) : 0.2f;
+        ac_fsr_sharpness = s >= 0 && s <= 2 ? s : 0.2f;
     }
+    g_settings.upscaler = ac_upscaler ? UPSCALE_FSR1 : UPSCALE_BILINEAR;
+    float sharpness = ac_fsr_sharpness;
     bool fsr = g_settings.upscaler == UPSCALE_FSR1 && (ow > b->width + 1 || oh > b->height + 1);  // (an upscale only)
+    static int fsr_logged = -1;
+    if (fsr != fsr_logged) { fsr_logged = fsr; LOG("[vk] FSR 1 %s (%ux%u to %ux%u)\n", fsr ? "on" : "off", b->width, b->height, ow, oh); }
     if (!smaa && !fsr) return v;
     extern void vk_frame_suspend(void);
     extern void vk_frame_resume(void);
