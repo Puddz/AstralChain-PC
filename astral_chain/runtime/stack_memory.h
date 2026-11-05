@@ -21,7 +21,7 @@ static void stack_map(uint64_t destination,uint64_t source,uint64_t size) {
  /* Pinned for GPU import (nvn_hle.h): CPU protection changes would fault the GPU. */
  if(!heap_gpu_pinned && !VirtualProtect((void*)(uintptr_t)source,(SIZE_T)size,PAGE_NOACCESS,&previous)) boundary("stack-source-protect",&state,state.pc);
  stack_maps[slot].source=source;stack_maps[slot].destination=destination;stack_maps[slot].size=size;
- stack_maps[slot].backing=backing;stack_maps[slot].handle=handle;
+ stack_maps[slot].backing=backing;stack_maps[slot].handle=handle; InterlockedIncrement(&mapping_generation);
  printf("STACK mapped source=0x%llx destination=0x%llx size=0x%llx\n",(unsigned long long)source,(unsigned long long)destination,(unsigned long long)size);
 }
 static void stack_unmap(uint64_t destination,uint64_t source,uint64_t size) {
@@ -34,5 +34,5 @@ static void stack_unmap(uint64_t destination,uint64_t source,uint64_t size) {
  shared_unmap(handle,destination,size);
  if(!CloseHandle(shared_handles[index]) || !CloseHandle(stack_maps[slot].backing)) boundary("stack-backing-close",&state,state.pc);
  shared_handles[index]=NULL;shared_sources[index]=NULL;shared_permissions[index]=0;shared_sizes[index]=0;
- memset(&stack_maps[slot],0,sizeof(stack_maps[slot]));
+ memset(&stack_maps[slot],0,sizeof(stack_maps[slot])); InterlockedIncrement(&mapping_generation);
 }

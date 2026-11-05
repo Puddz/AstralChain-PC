@@ -46,6 +46,10 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   non-Xbox controller* (tested with a virtual SDL pad: every button, trigger and stick direction arrived).
 - **Every connected Xbox-style pad is read** (PR #13, by lcd1232), not only the first one found: Steam Input's
   virtual pad, or a pad plugged in after the start, used to be ignored until a restart.
+- **Faster atomic memory operations**: each one the game makes checked its memory against every mapping table; the
+  last region that passed is now kept until a mapping changes. Street after the opening helicopter scene, uncapped
+  (RTX 4090 / Ryzen 7 7800X3D, 3 runs each): 67.0 -> 71.4 fps; at the street's start 55.6 -> 58.5 fps, slowest
+  2 s 41.8 -> 44.4. *Not yet confirmed in play.*
 - **Uncapped frame rate (experimental)**: **Settings > Game** in the launcher, or the in-game menu. Gameplay is no
   longer held to 60 fps; cutscenes stay at 60 (their cuts are timed for it), and it stops at 450 fps, where the 60 fps
   patch's game timing ends. Most places are limited by the CPU: on the street after the opening helicopter scene

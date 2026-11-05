@@ -22,7 +22,7 @@ static uint32_t transfer_create(uint64_t address,uint64_t size,uint64_t permissi
  if(!(heap_gpu_pinned && address>=heap_base && address-heap_base<HEAP_LIMIT) && !VirtualProtect((void*)(uintptr_t)address,(SIZE_T)size,PAGE_NOACCESS,&previous)) {
   VirtualFree(data,0,MEM_RELEASE);boundary("transfer-memory-protect",&state,state.pc);
  }
- transfer_memory[slot].address=address;transfer_memory[slot].size=size;transfer_memory[slot].data=data;
+ transfer_memory[slot].address=address;transfer_memory[slot].size=size;transfer_memory[slot].data=data; InterlockedIncrement(&mapping_generation);
  transfer_memory[slot].refs=1;transfer_memory[slot].handle_open=1;
  printf("TRANSFER created handle=0x%x address=0x%llx size=0x%llx\n",0x6000+slot,(unsigned long long)address,(unsigned long long)size);
  return 0x6000+slot;
@@ -43,7 +43,7 @@ static void transfer_release(unsigned object) {
   boundary("transfer-memory-restore",&state,state.pc);
  memcpy((void*)(uintptr_t)transfer_memory[i].address,transfer_memory[i].data,(size_t)transfer_memory[i].size);
  if(!VirtualFree(transfer_memory[i].data,0,MEM_RELEASE)) boundary("transfer-memory-release",&state,state.pc);
- memset(&transfer_memory[i],0,sizeof(transfer_memory[i]));
+ memset(&transfer_memory[i],0,sizeof(transfer_memory[i])); InterlockedIncrement(&mapping_generation);
 }
 static void transfer_close(uint32_t handle) {
  unsigned i=transfer_index(handle);transfer_memory[i].handle_open=0;transfer_release(i+1);

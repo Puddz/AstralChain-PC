@@ -92,7 +92,7 @@ static uint32_t thread_create(Cpu *c) {
  for(slot=1;slot<33 && guest_threads[slot].status!=THREAD_UNUSED;slot++);
  if(slot==33) boundary("thread-capacity",c,c->pc);
  uint64_t tls=thread_allocate_tls();if(!tls) return 0xd001;
- thread_tls[slot-1]=tls;
+ thread_tls[slot-1]=tls; InterlockedIncrement(&mapping_generation);
  memset(&guest_threads[slot],0,sizeof(guest_threads[slot]));
  Cpu *child=&guest_threads[slot].cpu;
  child->pc=entry;child->sp=stack;child->x[0]=c->x[2];child->tpidrro=tls;child->excl_addr=~0ull;
@@ -485,7 +485,7 @@ static int thread_svc(Cpu *c,unsigned imm) {
   if(i && (guest_threads[i].status==THREAD_CREATED || guest_threads[i].status==THREAD_EXITED)) {
    if(i==current_thread) boundary("thread-close-current-context",c,c->pc);
    if(!VirtualFree((void*)(uintptr_t)thread_tls[i-1],0,MEM_RELEASE)) boundary("thread-tls-release",c,c->pc);
-   thread_tls[i-1]=0;memset(&guest_threads[i],0,sizeof(guest_threads[i]));
+   thread_tls[i-1]=0;memset(&guest_threads[i],0,sizeof(guest_threads[i])); InterlockedIncrement(&mapping_generation);
   }
   c->x[0]=0;return 1;
  }
