@@ -71,6 +71,10 @@ namespace AstralChainLauncher
 
         static Options()
         {
+            Add("uncapped", "Game", "Uncapped frame rate (experimental)",
+                "Gameplay is not held to 60 fps; cutscenes stay at 60. With Vsync (Presentation mode), the display's " +
+                "refresh rate is the limit. Gains are small where the CPU is the limit. Also in the game's menu (F1).",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_UNCAPPED=1"));
             Add("cutscene_fps_30", "Game", "Cutscenes at 30 fps, as on the Switch",
                 "Off: in-game cutscenes run at 60 fps like the rest of the game.", OptKind.Check, "0",
                 OptTarget.Game, When("1", "AC_CUTSCENE_FPS=30"));

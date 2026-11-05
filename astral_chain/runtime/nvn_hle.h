@@ -428,14 +428,28 @@ void nvn_present_pace(int interval) {
  static int logged_interval=-1;
  if(interval!=logged_interval) {printf("NVN present interval=%d override=%d\n",interval,override);logged_interval=interval;}
  if(override>=0) interval=override;
+ /* AC_UNCAPPED=1 (launcher and in-game menu: Uncapped frame rate): gameplay is not held to 60 FPS. Cutscenes stay at
+  * 60 (their cuts are timed for it: svc #0xB2), and an interval the game asks for above 1 is kept. */
+ if(ac_uncapped<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_UNCAPPED",v,sizeof(v));ac_uncapped=n==1 && v[0]=='1';}
+ if(ac_uncapped && override<0 && interval==1 && !ac_in_cutscene) interval=0;
  /* AC_CUTSCENE_FPS=30: cutscenes at 30 FPS, as in the unmodified game (svc #0xB1 in host_runtime.c.in). */
  extern int cutscene_mode;
  if(cutscene_mode && interval>0 && interval<2) interval=2;
- if(interval<=0) return;
- static uint64_t origin,last_vsync;
+ static uint64_t origin,last_vsync,last_uncapped;
  const uint64_t period=320000; /* 19.2 MHz / 60 Hz */
- uint64_t now=rt_ticks();
+ uint64_t now=rt_ticks(),target;
+ if(interval<=0) {
+  if(override>=0 || !ac_uncapped) return;
+  /* Uncapped is held to 450 FPS: the 60 FPS patch's game step has a floor of 1/16 of a 30 FPS frame (480 FPS); above
+   * it the game would run slow. Title and loading screens reach ~690 FPS uncapped. */
+  target=last_uncapped+19200000/450;
+  if(target<=now) {last_uncapped=now;return;}
+  last_uncapped=target;
+  origin=0;  /* (the 60 Hz grid starts again when the cap returns) */
+  goto wait;
+ }
  if(!origin) {origin=now;last_vsync=0;return;}
+ {
  /* Adaptive: a frame that missed its slot (last + interval) is shown at once
   * rather than held to the next refresh, which would only add idle time. The cadence is kept: the next frame is due
   * an interval after the missed slot, not after the late present (resynchronized only when more than 4 slots
@@ -448,8 +462,10 @@ void nvn_present_pace(int interval) {
  uint64_t vsync=(now-origin+period-1)/period;
  if(vsync<due) vsync=due;
  last_vsync=vsync;
- uint64_t target=origin+vsync*period;
+ target=origin+vsync*period;
  if(target<=now) return;
+ }
+ wait:
  klock();threads_initialize();
  unsigned others=0;
  for(unsigned i=0;i<33;i++) if(i!=current_thread && guest_threads[i].status!=THREAD_UNUSED &&

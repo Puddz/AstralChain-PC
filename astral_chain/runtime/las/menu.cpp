@@ -66,6 +66,9 @@ std::vector<Opt> opts = {
     {"handheld", "Display", "Handheld mode: render at 1280x720", "For GPUs that cannot hold 60 fps.", CHECK, "0", nullptr, 0, 0, false},
     {"present", "Display", "Presentation mode", "Mailbox: no tearing. Vsync: waits for the display. Immediate: tearing, lowest latency.",
      CHOICE, "mailbox", "mailbox|Mailbox (default);fifo|Vsync (FIFO);immediate|Immediate", 0, 0, false},
+    {"uncapped", "Game", "Uncapped frame rate (experimental)",
+     "Gameplay is not held to 60 fps (cutscenes stay at 60). With Vsync, the display's refresh rate is the limit.",
+     CHECK, "0", nullptr, 0, 0, true},
     {"cutscene_fps_30", "Game", "Cutscenes at 30 fps, as on the Switch", "From the next cutscene on.", CHECK, "0", nullptr, 0, 0, true},
     {"ignore_focus", "Game", "Keep running while the game window is minimized", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"async_submit", "Game", "Prepare graphics on a separate thread (experimental)", nullptr, CHECK, "0", nullptr, 0, 0, false},
@@ -92,6 +95,7 @@ void read_session() {
         else if (k == "upscaler") v = env("AC_UPSCALER") == "fsr1" ? "fsr1" : "off";
         else if (k == "fsr_sharpness") { std::string e = env("AC_FSR_SHARPNESS"); if (!e.empty()) v = e; }
         else if (k == "present") { std::string e = env("LARECOMP_VK_PRESENT"); if (!e.empty()) v = e; }
+        else if (k == "uncapped") v = env("AC_UNCAPPED") == "1" ? "1" : "0";
         else if (k == "cutscene_fps_30") v = env("AC_CUTSCENE_FPS") == "30" ? "1" : "0";
         else if (k == "ignore_focus") { std::string e = env("AC_IGNORE_FOCUS"); v = !e.empty() && e != "0" ? "1" : "0"; }
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
