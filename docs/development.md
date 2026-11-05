@@ -88,6 +88,7 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_KEYS2=...` | The alternative bindings, same format |
 | `AC_MOUSE_LOOK=0` | (launcher: *Mouse moves the camera* off) The mouse keeps its buttons but does not drive the right stick (`mouse.h`: raw input, speed to stick tilt, 20% minimum against the game's dead zone) |
 | `AC_MOUSE_SENS=<percent>` / `AC_MOUSE_INVERT=1` | Mouse camera sensitivity (100: full tilt at 1500 counts/s) and inverted up/down |
+| `AC_PAIR_CACHE=0` | (test) Exclusive loads/stores check their memory with `query()` every time, instead of the per-thread cache of the last validated region (`exclusive_pair.h`, cleared by `mapping_generation`) |
 | `AC_UNCAPPED=1` | (launcher and in-game menu: *Uncapped frame rate*) No 60 Hz pacing in gameplay (`nvn_hle.h` `nvn_present_pace`); cutscenes (svc #0xB1) stay at 60; at most 450 FPS (the Dynamic-FPS step floor is 1/16 of a 30 FPS frame). `AC_PRESENT_INTERVAL=0` removes all pacing (tests) |
 | `AC_PROMPTS=<style>` | (launcher and in-game menu: *Button icons*) `auto` (default: the device last used, `live_settings.h` `ac_prompt_device`), `keyboard`, `xbox`, `playstation` or `switch` (the original icons). `las/button_prompts.c` redraws the game's button icon atlas (ui_core `core.wtp` texture 0, 256x512 RGBA8, found by its content hash through the `texpatch` hooks of `textures.c`); a style change re-uploads it (`texpatch_generation`) |
 | `AC_PROMPTS_DUMP=<prefix>` | (test) Write the atlas as drawn to `<prefix>-<style>.bmp` (alpha as grey) at each upload |

@@ -67,6 +67,7 @@ static void shared_map(uint64_t handle,uint64_t address,uint64_t size,uint64_t p
  }
  shared_views[view].address=address;shared_views[view].size=size;shared_views[view].source=shared_sources[slot];
  shared_views[view].permission=(unsigned)permission;
+ InterlockedIncrement(&mapping_generation);
 }
 static void shared_unmap(uint64_t handle,uint64_t address,uint64_t size) {
  if(handle<0x4000 || handle>=0x4040 || !shared_handles[handle-0x4000]) boundary("shared-unmap-handle",&state,state.pc);
@@ -86,4 +87,5 @@ static void shared_unmap(uint64_t handle,uint64_t address,uint64_t size) {
  }
  }
  memset(&shared_views[view],0,sizeof(shared_views[view]));
+ InterlockedIncrement(&mapping_generation);
 }

@@ -12,11 +12,20 @@ static __thread struct { Cpu *owner; uint64_t address,low,high; unsigned width; 
 static void rt_clear_pair_monitor(Cpu *c) {
  if(pair_monitor.owner==c) pair_monitor.valid=0;
 }
+/* Every exclusive load and store checks its memory; query() searches every mapping table (2.6% of the game thread
+ * and 4.0% of the render thread on the street route). The last read-write region that passed is kept per host
+ * thread until a mapping changes (mapping_generation). */
+static __thread uint64_t pair_ok_base,pair_ok_end;static __thread LONG pair_ok_generation=-1;
 static void pair_memory(uint64_t address,unsigned width) {
  unsigned bytes=width/4;
+ if(!(address&(bytes-1)) && address>=pair_ok_base && address+bytes<=pair_ok_end && pair_ok_generation==mapping_generation) return;
+ LONG generation=mapping_generation;
  Region r=query(address);
  if((address&(bytes-1)) || r.permission!=3 || bytes>r.size-(address-r.base))
   boundary("exclusive-pair-memory",&state,state.pc);
+ static int cache=-1;  /* (test) AC_PAIR_CACHE=0: no cache */
+ if(cache<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_PAIR_CACHE",v,sizeof(v));cache=!(n==1 && v[0]=='0');}
+ if(cache) {pair_ok_base=r.base;pair_ok_end=r.base+r.size;pair_ok_generation=generation;}
  if(width==64) {
   static int checked;
   if(!checked) {

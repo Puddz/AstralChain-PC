@@ -22,6 +22,7 @@ static Region attribute_clip(Region region,uint64_t address) {
  region.base=begin;region.size=end-begin;return region;
 }
 static unsigned update_uncached(uint64_t begin,uint64_t end,int enabled) {
+ InterlockedIncrement(&mapping_generation);
  UncachedRange next[514];unsigned count=0;
  for(unsigned i=0;i<uncached_count;i++) {
   UncachedRange r=uncached_ranges[i];

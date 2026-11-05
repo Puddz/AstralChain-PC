@@ -230,6 +230,9 @@ static struct { uint64_t source,destination,size; HANDLE backing; unsigned handl
 static uint64_t thread_tls[32];
 static struct { uint64_t address,size; void *data; unsigned refs,handle_open; } transfer_memory[32];
 #include "nvmap_memory.h"
+/* Bumped whenever query() could answer differently for a mapped address (heap size, stack and transfer mappings,
+ * shared views, TLS slots, memory attributes): exclusive_pair.h caches its last validated region against it. */
+static volatile LONG mapping_generation;
 #include "memory_attributes.h"
 static void snapshot(void) {
  if(!snapshot_path) return;
@@ -417,7 +420,7 @@ static uint32_t resize_heap(uint64_t size) {
  if(size<heap_size && !VirtualFree((void*)(uintptr_t)(HEAP_BASE+size),heap_size-size,MEM_DECOMMIT))
   boundary("host-heap-decommit",&state,state.pc);
  if(size<heap_size && update_uncached(HEAP_BASE+size,HEAP_BASE+heap_size,0)) boundary("heap-attribute-cleanup",&state,state.pc);
- heap_size=size;return 0;
+ heap_size=size; InterlockedIncrement(&mapping_generation);return 0;
 }
 static unsigned session_index(uint32_t handle) {
  if(handle<0x2000 || handle>=0x2040 || !session_handles[handle-0x2000]) boundary("invalid-session-handle",&state,state.pc);
