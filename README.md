@@ -53,7 +53,8 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   longer held to 60 fps; cutscenes stay at 60 (their cuts are timed for it), and it stops at 450 fps, where the 60 fps
   patch's game timing ends. Most places are limited by the CPU: on the street after the opening helicopter scene
   64-66 fps instead of 60 (RTX 4090 / Ryzen 7 7800X3D). The 60 fps patch scales game speed to the measured frame
-  time up to 480 fps; *not yet confirmed in play above 60* (game speed, physics, sound).
+  time up to 480 fps; *not yet confirmed in play above 60* (game speed, physics, sound). It has no effect
+  while **Prepare graphics on a separate thread** is on: the two together hung or crashed the game in tests.
 - **In-game settings menu**: **F1**, or **Minus and Plus** together on a controller, opens it over the game, which
   pauses as under the Switch's HOME menu. Button icons, rumble strength, the mouse settings, fullscreen, upscaling
   and FSR 1 sharpening, 30 fps cutscenes and keeping the game running while minimized change at once; render

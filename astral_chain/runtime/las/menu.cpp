@@ -67,7 +67,8 @@ std::vector<Opt> opts = {
     {"present", "Display", "Presentation mode", "Mailbox: no tearing. Vsync: waits for the display. Immediate: tearing, lowest latency.",
      CHOICE, "mailbox", "mailbox|Mailbox (default);fifo|Vsync (FIFO);immediate|Immediate", 0, 0, false},
     {"uncapped", "Game", "Uncapped frame rate (experimental)",
-     "Gameplay is not held to 60 fps (cutscenes stay at 60). With Vsync, the display's refresh rate is the limit.",
+     "Gameplay is not held to 60 fps (cutscenes stay at 60). With Vsync, the display's refresh rate is the limit. "
+     "No effect with \"Prepare graphics on a separate thread\" on: the two together can hang the game.",
      CHECK, "0", nullptr, 0, 0, true},
     {"cutscene_fps_30", "Game", "Cutscenes at 30 fps, as on the Switch", "From the next cutscene on.", CHECK, "0", nullptr, 0, 0, true},
     {"ignore_focus", "Game", "Keep running while the game window is minimized", nullptr, CHECK, "0", nullptr, 0, 0, true},
