@@ -49,8 +49,13 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   uncapped frame rate, the title screens run at 200+ fps): the list of GPU results waiting to be copied back was
   changed by two threads at once, and a fence wait could end before its work reached the GPU. In tests with both
   settings on, 25 of 25 runs through the title screens were clean (about a third hung or crashed before). *Not yet
-  confirmed in play.* The title screen still flickers in play: about every 10 s at 60 fps, nearly all the time
-  uncapped (reported 2026-11-05); being looked into.
+  confirmed in play.*
+- **Title screen flicker fixed** (reported in play: about every 10 s at 60 fps, nearly all the time uncapped): for
+  a frame the background movie was drawn squashed into a band between black bars. The game had rewritten the
+  vertices of its menu and movie quads by the time the GPU read them; small draws now take a copy of their
+  vertices when the port handles them. Uncapped title screen, 25 s captured per run: 1-12 squashed frames per
+  run before, none in 5 runs after, same frame rate (~186 fps); street walk unchanged (about 70 fps). *Not yet
+  confirmed in play.*
 - **Faster atomic memory operations**: each one the game makes checked its memory against every mapping table; the
   last region that passed is now kept until a mapping changes. Street after the opening helicopter scene, uncapped
   (RTX 4090 / Ryzen 7 7800X3D, 3 runs each): 67.0 -> 71.4 fps; at the street's start 55.6 -> 58.5 fps, slowest
