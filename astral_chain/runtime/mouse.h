@@ -42,6 +42,7 @@ static void mouse_config(void) {
  e=getenv("AC_MOUSE_SENS");
  if(e && *e) {double s=atof(e)/100.0;if(s>=0.05 && s<=20) mouse_sens=s;}
  e=getenv("AC_MOUSE_INVERT");mouse_invert=e && *e=='1';
+ ac_mouse_look=mouse_look_on;  /* (the button prompts follow it; the in-game menu changes all three: live_settings.h) */
 }
 static void mouse_clip(void) {
  if(!mouse_captured || !mouse_window) return;

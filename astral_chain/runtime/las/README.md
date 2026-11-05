@@ -20,7 +20,9 @@ Astral Chain changes to vendored files (keep this list current):
   pacing is off unless `LARECOMP_PACE=1`.
 - `nvn/vulkan/device.c`: Win32 window from the runtime (`nvn_host_window`) instead
   of SDL; letterboxed presentation at render scale 1; uncompressed PNG writer;
-  no UI thread, menu, widescreen or test hooks; screenshots in the run directory.
+  no UI thread, widescreen or test hooks; screenshots in the run directory. The in-game
+  settings menu (`menu.cpp`, Dear ImGui under `third_party/imgui/`) is drawn after the
+  game image.
 
 Vulkan backend support files: `shim/` (SDL timer/CPU count, shaderc API),
 `shaderc_glslang.c` (runs the pinned glslang), `game_hooks_neutral.c` (Link's
@@ -28,5 +30,5 @@ Awakening hooks report inactive), `settings.h`, `texpatch.h`, `las_compat.h`,
 `vma.cpp` (VulkanMemoryAllocator v3.1.0 under `third_party/`). The Maxwell
 translator is the reviewed derivative from `astral_chain/shader_build.py`.
 
-Not vendored: Metal backend, texture patches (`texpatch`), menu/imgui, SMAA and
-other Link's Awakening specific features.
+Not vendored: Metal backend, LASRecomp's texture patches and menu (this project has its
+own `button_prompts.c` and `menu.cpp`), SMAA and other Link's Awakening specific features.

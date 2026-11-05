@@ -83,7 +83,11 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_TEST_HOST_RESERVE=<addr>:<size>` | (test, hex) Reserve host memory inside the guest's address space at startup, as a thread stack Windows placed there; the game must map around it (`host_runtime.c.in` `host_clip`) |
 | `AC_HOST_CLIP=0` | (test) Guest memory queries ignore host allocations again (with `AC_TEST_HOST_RESERVE` over the stack region: the game stops at `host-shared-placeholder-reserve`) |
 | `AC_MOUSE_SENS=<percent>` / `AC_MOUSE_INVERT=1` | Mouse camera sensitivity (100: full tilt at 1500 counts/s) and inverted up/down |
-| `AC_PROMPTS=switch` | (launcher: *Button icons*) Keep the Switch button icons. Otherwise `las/button_prompts.c` redraws the game's button icon atlas (ui_core `core.wtp` texture 0, 256x512 RGBA8, found by its content hash through the `texpatch` hooks of `textures.c`) with the main bindings |
+| `AC_PROMPTS=<style>` | (launcher and in-game menu: *Button icons*) `auto` (default: the device last used, `live_settings.h` `ac_prompt_device`), `keyboard`, `xbox`, `playstation` or `switch` (the original icons). `las/button_prompts.c` redraws the game's button icon atlas (ui_core `core.wtp` texture 0, 256x512 RGBA8, found by its content hash through the `texpatch` hooks of `textures.c`); a style change re-uploads it (`texpatch_generation`) |
+| `AC_PROMPTS_DUMP=<prefix>` | (test) Write the atlas as drawn to `<prefix>-<style>.bmp` (alpha as grey) at each upload |
+| `AC_SETTINGS_FILE=<path>` | (test) The file the in-game menu saves to, instead of `userdata\launcher.ini` |
+| `AC_MENU_AT=<frame>` | (test) Open the in-game menu at that frame (`device.c`); without the pause and input hand-over of F1 / Minus+Plus |
+| `AC_MENU_PAUSE=0` | The in-game menu does not tell the game it is out of focus (by default the game pauses while the menu is open, as under the Switch's HOME menu) |
 | `LARECOMP_ASTC_VERIFY=<n>` | Read back the first n texture levels the GPU decodes and compare them with the CPU decoder (`ASTC verify` lines; slow) |
 | `LARECOMP_NO_PIPE_WARM=1` | No pipeline warm-up (pipelines are built at their first draw only) |
 | `LARECOMP_GPL=0` | No shader libraries (`VK_EXT_graphics_pipeline_library`): pipelines are compiled whole at their first draw |

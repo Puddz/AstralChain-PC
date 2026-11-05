@@ -69,15 +69,14 @@ static int rumble_focus;
 static HANDLE rumble_event;
 static DWORD (WINAPI *xinput_set_state)(DWORD,void*);
 static volatile LONG xinput_pads;       /* bit i: XInput pad i answered (hid_xinput) */
+static int rumble_pct=-1;
+static void rumble_set_percent(int percent) { rumble_pct=percent<0 ? 0 : percent>200 ? 200 : percent; }
 static int rumble_percent(void) {
- static int percent=-1;
- if(percent<0) {
+ if(rumble_pct<0) {
   char v[16];DWORD n=GetEnvironmentVariableA("AC_RUMBLE",v,sizeof(v));
-  percent=n && n<sizeof(v) ? atoi(v) : 100;
-  if(percent<0) percent=0;
-  if(percent>200) percent=200;
+  rumble_set_percent(n && n<sizeof(v) ? atoi(v) : 100);
  }
- return percent;
+ return rumble_pct;
 }
 static void rumble_update(int focused) {
  rumble_focus=focused;
@@ -212,7 +211,7 @@ static void hid_xinput(HidSample *sample) {
   if(x) xinput_get_state=(DWORD (WINAPI*)(DWORD,HidXinputState*))GetProcAddress(x,"XInputGetState");
   if(xinput_get_state) {HANDLE t=CreateThread(NULL,1<<20,xinput_probe,NULL,STACK_SIZE_PARAM_IS_A_RESERVATION,NULL);if(t) CloseHandle(t);}
   if(x) xinput_set_state=(DWORD (WINAPI*)(DWORD,void*))GetProcAddress(x,"XInputSetState");
-  if(xinput_get_state && xinput_set_state && rumble_percent() && (rumble_event=CreateEventW(NULL,FALSE,FALSE,NULL))) {
+  if(xinput_get_state && xinput_set_state && (rumble_event=CreateEventW(NULL,FALSE,FALSE,NULL))) {
    HANDLE t=CreateThread(NULL,1<<20,rumble_thread,NULL,STACK_SIZE_PARAM_IS_A_RESERVATION,NULL);if(t) CloseHandle(t);
   }
  }
@@ -255,6 +254,7 @@ static uint8_t sdl_virtual_rumble(void *userdata,uint16_t low,uint16_t high) {  
  return 1;
 }
 static HidSdlState sdl_state;
+static volatile int sdl_pad_style=1;  /* ac_prompt_device of the SDL pad in use */
 static volatile LONG sdl_seq,sdl_have;
 static DWORD WINAPI sdl_pad_thread(void *argument) {
  HMODULE m=(HMODULE)argument;
@@ -335,6 +335,8 @@ static DWORD WINAPI sdl_pad_thread(void *argument) {
     if(t==2 || t==3) {close_pad(p);if(nskipped<8) skipped[nskipped++]=ids[i];continue;} /* Xbox 360 / One: XInput */
     const char *name=pad_name(p);
     printf("[input] controller: %s (SDL type %d)\n",name ? name : "?",t);
+    /* (automatic button icons: PS3/4/5 PlayStation, Switch Pro and Joy-Cons Switch, the rest Xbox) */
+    sdl_pad_style=t>=4 && t<=6 ? 3 : t>=7 && t<=10 ? 2 : 1;
     pad=p;
    }
    if(ids) sdl_free(ids);
@@ -426,16 +428,52 @@ static void hid_publish(uint64_t now,int focused) {
  if(connected) hid_sdl_start();
  static int sdl_test=-1; /* (AC_SDL_TEST: the virtual pad counts in unattended runs, whose window has no focus) */
  if(sdl_test<0) sdl_test=GetEnvironmentVariableA("AC_SDL_TEST",NULL,0)!=0;
- rumble_update(connected && (focused || sdl_test));
+ rumble_update(connected && (focused || sdl_test) && !ac_menu_open);
  if(connected && (focused || sdl_test)) {
+  /* The controllers alone first (XInput, then SDL for what XInput left): the menu's Minus+Plus and the last device
+   * used come from them. */
+  /* (a controller counts as used on a button or a stick pushed past half: a drifting stick does not take the button
+   *  icons from the keyboard) */
+  #define HID_PAD_USED(p) ((p).buttons || abs((p).lx)>16000 || abs((p).ly)>16000 || abs((p).rx)>16000 || abs((p).ry)>16000)
+  HidSample pad={0};
+  hid_xinput(&pad);
+  int from_xinput=HID_PAD_USED(pad);
+  hid_sdl(&pad);
+  int from_sdl=!from_xinput && HID_PAD_USED(pad);
+  /* Minus+Plus opens or closes the menu. Either one alone reaches the game up to 100 ms late (the other may follow);
+   * a tap shorter than that is still passed on, for 50 ms. */
+  const uint64_t both=3ull<<10;
+  uint64_t pm=pad.buttons&both;
+  static int combo;static uint64_t alone_at,last_pm,pulse_bits,pulse_until;
+  if(pm==both && !combo) {combo=1;alone_at=0;menu_set_open(!ac_menu_open);}
+  if(!pm) {
+   if(last_pm && !combo && alone_at && now-alone_at<1920000) {pulse_bits=last_pm;pulse_until=now+960000;}
+   combo=0;alone_at=0;
+  } else if(pm!=both && !combo && !alone_at) alone_at=now;
+  last_pm=pm;
+  if(combo || (alone_at && now-alone_at<1920000)) pad.buttons&=~both;
+  if(now<pulse_until) pad.buttons|=pulse_bits;
+  if(ac_menu_open) {  /* (the menu has the controllers; the game gets nothing) */
+   InterlockedExchange(&ac_menu_pad_buttons,(LONG)pad.buttons);
+   InterlockedExchange(&ac_menu_pad_lx,pad.lx);InterlockedExchange(&ac_menu_pad_ly,pad.ly);
+   goto publish;
+  }
+  InterlockedExchange(&ac_menu_pad_buttons,0);
   hid_keys_load();
   for(unsigned i=0;i<16;i++) if(hid_key(i)) sample.buttons|=1ull<<i;
   sample.lx=(hid_key(18)-hid_key(16))*32767;sample.ly=(hid_key(17)-hid_key(19))*32767;
   sample.rx=(hid_key(22)-hid_key(20))*32767;sample.ry=(hid_key(21)-hid_key(23))*32767;
+  /* (automatic button icons: the device last used) */
+  if(sample.buttons || sample.lx || sample.ly || sample.rx || sample.ry || mouse_buttons) ac_prompt_device=0;
+  else if(from_xinput) ac_prompt_device=1;
+  else if(from_sdl) ac_prompt_device=sdl_pad_style;
+  {static int logged=-1;if(ac_prompt_device!=logged) {logged=ac_prompt_device;printf("[input] last used: %s\n",
+   (const char*[]){"keyboard and mouse","Xbox controller","Switch controller","PlayStation controller"}[logged&3]);}}
   if(sample.lx && sample.ly) {sample.lx=sample.lx>0 ? 23170 : -23170;sample.ly=sample.ly>0 ? 23170 : -23170;}
   if(sample.rx && sample.ry) {sample.rx=sample.rx>0 ? 23170 : -23170;sample.ry=sample.ry>0 ? 23170 : -23170;}
-  hid_xinput(&sample);
-  hid_sdl(&sample);
+  sample.buttons|=pad.buttons;  /* (each stick from the keys if they move it, else from the controllers) */
+  if(!sample.lx && !sample.ly) {sample.lx=pad.lx;sample.ly=pad.ly;}
+  if(!sample.rx && !sample.ry) {sample.rx=pad.rx;sample.ry=pad.ry;}
   mouse_look_stick(&sample.rx,&sample.ry,now);
   if(sample.lx<0) sample.buttons|=1ull<<16;
   if(sample.ly>0) sample.buttons|=1ull<<17;
@@ -446,6 +484,7 @@ static void hid_publish(uint64_t now,int focused) {
   if(sample.rx>0) sample.buttons|=1ull<<22;
   if(sample.ry<0) sample.buttons|=1ull<<23;
  }
+ publish:
  if(connected) {
   uint64_t scripted=hid_script_buttons(now);sample.buttons|=scripted;
   /* Scripted stick directions (bits 16-23) also drive the analog axes. */

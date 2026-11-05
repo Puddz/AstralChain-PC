@@ -3,8 +3,13 @@
  * the game. When that texture is uploaded, each Switch button icon is replaced by the key or mouse button it is bound
  * to (las/input_bindings.h, the launcher's Controls), drawn in the same style inside the same footprint.
  *
+ * Other styles: Xbox and PlayStation controllers (the face buttons, shoulders, triggers, Plus and Minus redrawn by
+ * position: the Switch's right button A is Xbox B and PlayStation circle; sticks and D-pad keep the original icons),
+ * and the original Switch icons. AC_PROMPTS = auto (default: the device last used, live_settings.h ac_prompt_device),
+ * keyboard, switch, xbox or playstation; the in-game menu changes it while playing.
+ *
  * Hooks of textures.c (texpatch.h): texpatch_identify finds the atlas by its contents, texpatch_apply repaints its
- * level 0 before upload. AC_PROMPTS=switch keeps the original icons. */
+ * level 0 before upload; texpatch_generation changes with the style, and the atlas is uploaded again. */
 #include <windows.h>
 #include <math.h>
 #include <stdbool.h>
@@ -48,16 +53,18 @@ static const Slot slots[] = {
 static uint8_t map[2][IB_ACTIONS];
 static int mouse_look = 1;
 
-static int enabled(void) {
-    static int on = -1;
-    if (on < 0) {
-        const char *e = getenv("AC_PROMPTS");
-        on = !(e && (!strcmp(e, "switch") || !strcmp(e, "0")));
-        ib_load(map);
-        e = getenv("AC_MOUSE_LOOK");
-        mouse_look = !(e && *e == '0');
-    }
-    return on;
+/* The runtime's (live_settings.h): the chosen style, the device last used, mouse camera on. */
+extern volatile int ac_prompt_style, ac_prompt_device, ac_mouse_look;
+extern int ac_prompt_parse(const char *v);
+enum { ST_KEYBOARD = 1, ST_SWITCH = 2, ST_XBOX = 3, ST_PLAYSTATION = 4 };
+static volatile int drawn_style = ST_KEYBOARD, drawn_look = 1;  /* what texpatch_generation last reported */
+
+static int current_style(void) {
+    if (ac_prompt_style < 0) ac_prompt_style = ac_prompt_parse(getenv("AC_PROMPTS"));
+    int st = ac_prompt_style;
+    if (st == 0) { int d = ac_prompt_device; st = d == 1 ? ST_XBOX : d == 2 ? ST_SWITCH : d == 3 ? ST_PLAYSTATION : ST_KEYBOARD; }
+    if (ac_mouse_look < 0) { const char *e = getenv("AC_MOUSE_LOOK"); ac_mouse_look = !(e && *e == '0'); }
+    return st;
 }
 
 /* ---------------------------------------------------------------------------------------------- coverage canvas */
@@ -317,10 +324,96 @@ static void draw_slot(Canvas *cv, const Slot *sl) {
     }
 }
 
+/* ------------------------------------------------------------------------------------------- controller glyphs */
+/* The slots redrawn for a controller: single face buttons, shoulders, triggers, Plus and Minus. The four-circle face
+ * button diagrams (y >= 354) show a position, right for any controller; sticks and D-pad are generic. */
+static bool pad_slot(const Slot *sl) {
+    if (sl->kind != K_KEY || sl->y0 >= 354) return false;
+    int a = sl->arg;
+    return a == IB_A || a == IB_B || a == IB_X || a == IB_Y || a == IB_L || a == IB_R || a == IB_ZL || a == IB_ZR ||
+           a == IB_PLUS || a == IB_MINUS;
+}
+
+/* A bar of half length l and half width t through (cx, cy) at angle ang (radians). */
+static void fill_bar(Canvas *cv, float cx, float cy, float l, float t, float ang, uint8_t v) {
+    float c = cosf(ang), s = sinf(ang), r = l + t;
+    for (int y = (int)(cy - r) - 1; y <= (int)(cy + r) + 1; y++)
+        for (int x = (int)(cx - r) - 1; x <= (int)(cx + r) + 1; x++) {
+            if (x < 0 || y < 0 || x >= cv->w || y >= cv->h) continue;
+            float dx = x + 0.5f - cx, dy = y + 0.5f - cy, u = dx * c + dy * s, w = -dx * s + dy * c;
+            if (fabsf(u) <= l && fabsf(w) <= t) cv->c[y * cv->w + x] = v;
+        }
+}
+
+/* An upward triangle of circumradius r centred at (cx, cy). */
+static void fill_triangle(Canvas *cv, float cx, float cy, float r, uint8_t v) {
+    float top = cy - r, bottom = cy + r * 0.5f, half = r * 0.866f;
+    for (int y = (int)top; y <= (int)bottom + 1; y++)
+        for (int x = (int)(cx - half) - 1; x <= (int)(cx + half) + 1; x++) {
+            if (x < 0 || y < 0 || x >= cv->w || y >= cv->h) continue;
+            float py = y + 0.5f, px = x + 0.5f;
+            if (py < top || py > bottom) continue;
+            float k = (py - top) / (bottom - top) * half;
+            if (fabsf(px - cx) <= k) cv->c[y * cv->w + x] = v;
+        }
+}
+
+static void draw_pad_slot(Canvas *cv, const Slot *sl, int style) {
+    float w = (float)cv->w, h = (float)cv->h, s = fminf(w, h), cx = w / 2, cy = h / 2, r = s * 0.49f;
+    int a = sl->arg;
+    bool ps = style == ST_PLAYSTATION;
+    if (a == IB_A || a == IB_B || a == IB_X || a == IB_Y) {  /* a round button, its symbol cut out */
+        fill_ellipse(cv, cx, cy, r, r, 255);
+        if (!ps) {  /* Xbox, by position: right B, bottom A, top Y, left X */
+            const wchar_t *l = a == IB_A ? L"B" : a == IB_B ? L"A" : a == IB_X ? L"Y" : L"X";
+            cut_text(cv, l, cx - r * 0.62f, cy - r * 0.62f, cx + r * 0.62f, cy + r * 0.62f);
+        } else if (a == IB_A) {  /* circle */
+            fill_ellipse(cv, cx, cy, r * 0.52f, r * 0.52f, 0);
+            fill_ellipse(cv, cx, cy, r * 0.34f, r * 0.34f, 255);
+        } else if (a == IB_B) {  /* cross */
+            fill_bar(cv, cx, cy, r * 0.52f, r * 0.09f, 0.785398f, 0);
+            fill_bar(cv, cx, cy, r * 0.52f, r * 0.09f, -0.785398f, 0);
+        } else if (a == IB_X) {  /* triangle */
+            fill_triangle(cv, cx, cy + r * 0.08f, r * 0.62f, 0);
+            fill_triangle(cv, cx, cy + r * 0.08f, r * 0.34f, 255);
+        } else {  /* square */
+            fill_rrect(cv, cx - r * 0.44f, cy - r * 0.44f, cx + r * 0.44f, cy + r * 0.44f, 0, 0);
+            fill_rrect(cv, cx - r * 0.27f, cy - r * 0.27f, cx + r * 0.27f, cy + r * 0.27f, 0, 255);
+        }
+        return;
+    }
+    if (a == IB_L || a == IB_R || a == IB_ZL || a == IB_ZR) {  /* a rounded block with the name */
+        const wchar_t *l = ps ? (a == IB_L ? L"L1" : a == IB_R ? L"R1" : a == IB_ZL ? L"L2" : L"R2")
+                              : (a == IB_L ? L"LB" : a == IB_R ? L"RB" : a == IB_ZL ? L"LT" : L"RT");
+        float x0 = cx - s * 0.5f, x1 = cx + s * 0.5f, y0 = cy - s * 0.4f, y1 = cy + s * 0.4f;
+        bool trigger = a == IB_ZL || a == IB_ZR;
+        fill_rrect(cv, x0, y0, x1, y1, trigger ? s * 0.3f : s * 0.14f, 255);
+        float pad = s * 0.1f;
+        cut_text(cv, l, x0 + pad, y0 + pad, x1 - pad, y1 - pad);
+        return;
+    }
+    /* Plus: Xbox Menu / PlayStation Options (three lines); Minus: Xbox View (two windows) / PlayStation Create (an
+     * arrow up). Xbox's are round, PlayStation's a small upright pill. */
+    float x0 = ps ? cx - r * 0.62f : cx - r, x1 = ps ? cx + r * 0.62f : cx + r;
+    fill_rrect(cv, x0, cy - r, x1, cy + r, ps ? r * 0.62f : r, 255);
+    if (a == IB_PLUS) {
+        float lw = ps ? r * 0.36f : r * 0.5f, t = r * 0.08f;
+        for (int i = -1; i <= 1; i++) fill_rrect(cv, cx - lw, cy + i * r * 0.3f - t, cx + lw, cy + i * r * 0.3f + t, 0, 0);
+    } else if (!ps) {
+        float q = r * 0.3f, t = r * 0.09f, ox = r * 0.13f;
+        fill_rrect(cv, cx - q + ox, cy - q - ox, cx + q + ox, cy + q - ox, 0, 0);          /* back window, outline */
+        fill_rrect(cv, cx - q + ox + t, cy - q - ox + t, cx + q + ox - t, cy + q - ox - t, 0, 255);
+        fill_rrect(cv, cx - q - ox, cy - q + ox, cx + q - ox, cy + q + ox, 0, 0);          /* front window, filled */
+    } else {
+        fill_arrow(cv, cx, cy - r * 0.18f, r * 0.34f, D_UP, 0);
+        fill_rrect(cv, cx - r * 0.09f, cy - r * 0.1f, cx + r * 0.09f, cy + r * 0.5f, 0, 0);
+    }
+}
+
 /* ---------------------------------------------------------------------------------------------------- the hooks */
 int texpatch_identify(const void *texture) {
     const NvnTexture *t = texture;
-    if (t->format != 0x25 || t->layout.width != ATLAS_W || t->layout.height != ATLAS_H || !t->addr || !enabled()) return -1;
+    if (t->format != 0x25 || t->layout.width != ATLAS_W || t->layout.height != ATLAS_H || !t->addr) return -1;
     uint64_t total = tegra_total_size(&t->layout);
     if (total != (uint64_t)ATLAS_W * ATLAS_H * 4) return -1;
     /* (a texture of the same size that is not the atlas is asked about at every check: hash it again only when a
@@ -332,20 +425,35 @@ int texpatch_identify(const void *texture) {
     unsigned k = (unsigned)(((uintptr_t)t >> 4) % 16);
     if (seen[k].t == t && seen[k].sample == sample) return -1;
     if (bc7_hash_full(mem, total) != ATLAS_HASH) { seen[k].t = t; seen[k].sample = sample; return -1; }
-    printf("[prompts] button icon atlas found: keyboard and mouse prompts\n");
+    printf("[prompts] button icon atlas found\n");
     return 0;
 }
 
-uint32_t texpatch_generation(void) { return 1; }
+uint32_t texpatch_generation(void) {
+    int st = current_style(), look = ac_mouse_look;
+    if (st != drawn_style || look != drawn_look) {
+        drawn_style = st; drawn_look = look;
+        static const char *const names[] = {"", "keyboard and mouse", "Switch", "Xbox", "PlayStation"};
+        printf("[prompts] button icons: %s\n", names[st]);
+    }
+    return 1 + (uint32_t)st * 2 + (look != 0);
+}
 
 void texpatch_apply(int id, uint32_t level, uint8_t *data, uint32_t w, uint32_t h, uint32_t row) {
     if (id != 0 || level != 0 || w != ATLAS_W || h != ATLAS_H) return;
+    static int loaded;
+    if (!loaded) { loaded = 1; ib_load(map); }
+    int style = drawn_style;
+    mouse_look = drawn_look;
+    if (style == ST_SWITCH) return;  /* (the original icons) */
     for (unsigned i = 0; i < sizeof slots / sizeof slots[0]; i++) {
         const Slot *sl = &slots[i];
+        if (style != ST_KEYBOARD && !pad_slot(sl)) continue;  /* (sticks, D-pad, the face button diagrams: as they are) */
         int sw = sl->x1 - sl->x0 + 1, sh = sl->y1 - sl->y0 + 1;
         Canvas cv = {sw * SS, sh * SS, calloc((size_t)sw * sh, SS * SS)};
         if (!cv.c) return;
-        draw_slot(&cv, sl);
+        if (style == ST_KEYBOARD) draw_slot(&cv, sl);
+        else draw_pad_slot(&cv, sl, style);
         for (int y = 0; y < sh; y++)
             for (int x = 0; x < sw; x++) {
                 unsigned sum = 0;
@@ -356,5 +464,25 @@ void texpatch_apply(int id, uint32_t level, uint8_t *data, uint32_t w, uint32_t 
                 p[3] = (uint8_t)(sum / (SS * SS));
             }
         free(cv.c);
+    }
+    /* (test) AC_PROMPTS_DUMP=<prefix>: the atlas as drawn, <prefix>-<style>.bmp, its alpha as grey on black */
+    const char *dump = getenv("AC_PROMPTS_DUMP");
+    char name[512];
+    if (dump && snprintf(name, sizeof name, "%s-%d.bmp", dump, style) < (int)sizeof name) {
+        FILE *f = fopen(name, "wb");
+        if (f) {
+            uint32_t size = 54 + ATLAS_W * ATLAS_H * 4;
+            uint8_t hd[54] = {'B', 'M'};
+            memcpy(hd + 2, &size, 4); hd[10] = 54; hd[14] = 40;
+            int32_t bw = ATLAS_W, bh = -ATLAS_H; memcpy(hd + 18, &bw, 4); memcpy(hd + 22, &bh, 4);
+            hd[26] = 1; hd[28] = 32;
+            fwrite(hd, 1, 54, f);
+            for (uint32_t y = 0; y < ATLAS_H; y++)
+                for (uint32_t x = 0; x < ATLAS_W; x++) {
+                    uint8_t a = data[(size_t)y * row + x * 4 + 3], px[4] = {a, a, a, 255};
+                    fwrite(px, 1, 4, f);
+                }
+            fclose(f);
+        }
     }
 }

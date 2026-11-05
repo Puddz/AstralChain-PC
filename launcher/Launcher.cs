@@ -112,10 +112,12 @@ namespace AstralChainLauncher
             Add("mouse_invert", "Mouse and keyboard", "Invert mouse up and down",
                 "Moving the mouse forward looks down.", OptKind.Check, "0", OptTarget.Game, When("1", "AC_MOUSE_INVERT=1"));
             var prompts = Add("prompts", "Mouse and keyboard", "Button icons in the game",
-                "Keyboard and mouse: the game's button icons show the keys and mouse buttons set in Controls. " +
-                "Switch: the original controller icons (for playing with a controller).",
-                OptKind.Choice, "keyboard", OptTarget.Game, v => v == "switch" ? "AC_PROMPTS=switch" : "");
-            prompts.Choices = new[] { "keyboard|Keyboard and mouse (default)", "switch|Switch controller" };
+                "Automatic: the icons follow what you last used (keyboard and mouse, an Xbox, PlayStation or Switch " +
+                "controller). Keyboard and mouse: the keys and mouse buttons set in Controls. The controller choices " +
+                "show that controller's buttons. Also in the game's menu (F1, or Minus and Plus on a controller).",
+                OptKind.Choice, "auto", OptTarget.Game, v => v == "auto" ? "" : "AC_PROMPTS=" + v);
+            prompts.Choices = new[] { "auto|Automatic (default)", "keyboard|Keyboard and mouse", "xbox|Xbox controller",
+                "playstation|PlayStation controller", "switch|Switch controller" };
             var rumble = Add("rumble", "Controller", "Rumble strength (%)",
                 "How strongly the controller rumbles when the game asks for it (Xbox pads, and the controllers that " +
                 "go through SDL3). 100 is the default, 0 turns rumble off, 200 is the strongest.",
@@ -168,6 +170,13 @@ namespace AstralChainLauncher
         public Settings(string path)
         {
             this.path = path;
+            Reload();
+        }
+
+        // (also after playing: the in-game menu writes this file too)
+        public void Reload()
+        {
+            values.Clear();
             if (!File.Exists(path)) return;
             foreach (var line in File.ReadAllLines(path, Encoding.UTF8))
             {
@@ -522,6 +531,7 @@ namespace AstralChainLauncher
                 Ui(() => WindowState = FormWindowState.Minimized);
                 int code = RunProcess("powershell.exe", args, null, !consoles);
                 gameRunning = false;
+                settings.Reload();  // (changes made in the game's menu)
                 Ui(() => { if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
                     Activate(); });
                 string why = ExitReason(code);

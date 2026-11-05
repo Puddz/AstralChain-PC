@@ -1,0 +1,38 @@
+/* In-game settings menu: the runtime's half. The menu itself (las/menu.cpp, Dear ImGui) runs on the render thread,
+ * drawn over the game picture; F1 or Minus+Plus on a controller opens and closes it (app_window.h, hid_service.h).
+ * While it is open the game gets no input.
+ *
+ * The runtime never calls into the menu (the diagnostic null backend has none): it publishes window input through a
+ * ring and the controller through a few words, and the menu reads them; the menu applies a change through
+ * ac_setting_apply. Settings the runtime reads once at startup are made live here; the others apply at the next start
+ * (the menu says so). */
+volatile LONG ac_menu_open;                    /* 1 while the menu is up */
+volatile LONG ac_menu_close_request;           /* the menu asks to close (its button, B): app_pump closes it */
+typedef struct { int kind,a,b; } AcMenuEvent;  /* kind 1 mouse move (x, y), 2 button (0 left 1 right 2 middle, down),
+                                                * 3 wheel (notches * 120, horizontal), 4 key (virtual key, down),
+                                                * 5 character (UTF-16 unit) */
+AcMenuEvent ac_menu_events[256];
+volatile LONG ac_menu_head,ac_menu_tail;       /* (written by the window thread, read by the render thread) */
+volatile LONG ac_menu_pad_buttons,ac_menu_pad_lx,ac_menu_pad_ly;  /* the controllers while the menu is up */
+volatile int ac_prompt_style=-1;  /* AC_PROMPTS: 0 auto (default), 1 keyboard and mouse, 2 Switch, 3 Xbox, 4 PlayStation */
+volatile int ac_prompt_device;    /* last used (auto icons): 0 keyboard/mouse, 1 Xbox pad, 2 Switch pad, 3 PlayStation pad */
+volatile int ac_mouse_look=-1;    /* AC_MOUSE_LOOK (button prompts show a mouse for the camera) */
+volatile int ac_cutscene_30=-1;   /* AC_CUTSCENE_FPS=30, from the next cutscene on */
+volatile int ac_ignore_focus=-1;  /* AC_IGNORE_FOCUS=1 */
+
+int ac_prompt_parse(const char *v) {
+ if(!v || !*v || !strcmp(v,"auto")) return 0;
+ if(!strcmp(v,"keyboard")) return 1;
+ if(!strcmp(v,"switch") || !strcmp(v,"0")) return 2;
+ if(!strcmp(v,"xbox")) return 3;
+ if(!strcmp(v,"playstation")) return 4;
+ return 0;
+}
+static void menu_set_open(int open);  /* (app_window.h) */
+static void menu_push(int kind,int a,int b) {
+ LONG head=ac_menu_head;
+ if(head-ac_menu_tail>=256) return;  /* (full: the menu is not drawing) */
+ ac_menu_events[head&255]=(AcMenuEvent){kind,a,b};
+ MemoryBarrier();
+ InterlockedExchange(&ac_menu_head,head+1);
+}
