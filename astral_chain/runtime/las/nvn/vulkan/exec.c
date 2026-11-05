@@ -2912,6 +2912,7 @@ static void gmem_sync(void) {
 typedef struct { uint64_t seq, addr, size; VkBuffer buf; VmaAllocation mem; void *ptr; } GmemWb;
 static GmemWb wb_pending[64], wb_flight[256];
 static int wb_npend, wb_nflight;
+static pthread_mutex_t lazy_lock;  // (defined below; guards wb_flight and the lazy write-back tables)
 static void gmem_wb_note(uint64_t addr, uint64_t size) {
     if (!gmem_alloc || !size || addr < HEAP_BASE || addr - HEAP_BASE + size > gmem_size) return;
     for (int i = 0; i < wb_npend; i++)
@@ -2933,8 +2934,13 @@ static void gmem_wb_record(VkCommandBuffer cb, uint64_t seq) {
         w->seq = seq;
         VkBufferCopy cp = {w->addr - HEAP_BASE, 0, w->size};
         vkCmdCopyBuffer(cb, gmem_buf, w->buf, 1, &cp);
+        // (under lazy_lock: with AC_ASYNC_SUBMIT this runs on the submission thread while a guest thread's fence wait
+        // compacts the list in gmem_writeback_apply; unlocked, entries were lost or doubled and a doubled one freed
+        // twice: crashes in VMA and the driver, and hangs, at 200+ fps, 2026-11-05)
+        pthread_mutex_lock(&lazy_lock);
         if (wb_nflight == 256) FATAL("heap mirror: too many GPU write-backs in flight\n");
         wb_flight[wb_nflight++] = *w;
+        pthread_mutex_unlock(&lazy_lock);
     }
     wb_npend = 0;
     VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -2960,6 +2966,7 @@ static int lazy_nfree;
 static struct { uint64_t addr, size; } lazy_hot[LAZY_HOT_MAX];  // ranges the CPU reads: eager write-back
 static int lazy_nhot;
 static pthread_mutex_t lazy_lock = PTHREAD_MUTEX_INITIALIZER;
+static __thread int lazy_held;  // this thread holds lazy_lock (a fault while it copies is resolved in place)
 extern int nvn_page_protect(uint64_t addr, uint64_t size, int noaccess);
 extern void (*nvn_lazy_flush_hook)(uint64_t addr, uint64_t size);
 extern int (*nvn_lazy_fault_hook)(uint64_t addr);
@@ -3029,6 +3036,16 @@ static void lazy_supersede(uint64_t na, uint64_t nb, bool keep) {
 }
 static int lazy_fault(uint64_t addr) {
     extern int nvn_page_state(uint64_t addr);
+    // A fault while this thread holds the lock (gmem_writeback_apply or lazy_flush copying into a page another entry
+    // still protects): the lock is not recursive, and waiting for it here hung the thread for good (the game's main
+    // thread, in a GPU fence wait's check, with AC_ASYNC_SUBMIT at 200+ fps, 2026-11-05). Resolve the page in place.
+    if (lazy_held) {
+        uint64_t p = addr & ~4095ull;
+        static int nlog;
+        if (nlog++ < 20) LOG("[vk] lazy write-back: fault inside a write-back at %llx\n", (unsigned long long)p);
+        if (lazy_pending(p)) { lazy_resolve_page(p, false); return 1; }
+        return nvn_page_protect(p, 4096, 0) ? 1 : 0;
+    }
     pthread_mutex_lock(&lazy_lock);
     uint64_t p = addr & ~4095ull;
     int hit = lazy_pending(p);
@@ -3050,9 +3067,11 @@ static int lazy_fault(uint64_t addr) {
 }
 static void lazy_flush(uint64_t addr, uint64_t size) {
     pthread_mutex_lock(&lazy_lock);
+    lazy_held = 1;
     for (uint64_t p = addr & ~4095ull; p < addr + size; p += 4096)
         if (lazy_pending(p)) lazy_resolve_page(p, false);
     lazy_compact();
+    lazy_held = 0;
     pthread_mutex_unlock(&lazy_lock);
 }
 
@@ -3065,6 +3084,7 @@ static void gmem_writeback_apply(uint64_t done) {
         if (lazy_on) { nvn_lazy_fault_hook = lazy_fault; nvn_lazy_flush_hook = lazy_flush; }
     }
     pthread_mutex_lock(&lazy_lock);
+    lazy_held = 1;
     int k = 0;
     for (int i = 0; i < wb_nflight; i++) {
         GmemWb *w = &wb_flight[i];
@@ -3114,6 +3134,7 @@ static void gmem_writeback_apply(uint64_t done) {
     wb_nflight = k;
     for (int i = 0; i < lazy_nfree; i++) vmaDestroyBuffer(g_vk.vma, lazy_free[i].buf, lazy_free[i].mem);
     lazy_nfree = 0;
+    lazy_held = 0;
     pthread_mutex_unlock(&lazy_lock);
 }
 

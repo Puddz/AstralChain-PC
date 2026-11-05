@@ -134,15 +134,28 @@ static pthread_mutex_t aq_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t aq_more = PTHREAD_COND_INITIALIZER, aq_less = PTHREAD_COND_INITIALIZER;
 uint64_t nvn_async_drains, nvn_async_waits;  // (stats)
 
+extern const char *rt_where(const char *);
+static const char *volatile aq_worker_where = "-";
 static void *aq_worker(void *arg) {
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&aq_lock);
+        aq_worker_where = "idle";
         while (aq_head == aq_tail) pthread_cond_wait(&aq_more, &aq_lock);
         AsyncJob j = aq[aq_head % AQ_SIZE];
         pthread_mutex_unlock(&aq_lock);
+        aq_worker_where = j.kind == AJ_EXEC ? "exec" : j.kind == AJ_FENCE ? "fence" : "present";
         if (j.kind == AJ_EXEC) backend_execute(j.handle);
-        else if (j.kind == AJ_FENCE) j.sync->seq = renderer_fence_seq();
+        else if (j.kind == AJ_FENCE) {
+            // The fence's work is submitted first, so its number names a submission. renderer_fence_seq counts the
+            // open batch as the next submission, and a wait is capped at what has been submitted (renderer_wait_target):
+            // with the batch still open here, the game's SyncWait returned before its work reached the GPU and the
+            // game reused command and data memory the GPU had not read yet (title screen flicker and hangs at
+            // 200+ fps with AC_UNCAPPED, 2026-11-05).
+            extern void renderer_submit(void);
+            renderer_submit();
+            j.sync->seq = renderer_fence_seq();
+        }
         else { backend_present_crop(j.crop); backend_present(j.tex); }
         pthread_mutex_lock(&aq_lock);
         aq_head++;
@@ -166,7 +179,9 @@ static bool aq_enabled(void) {
 }
 static uint64_t aq_push(AsyncJob j) {  // the job's number (done when aq_head reaches it)
     pthread_mutex_lock(&aq_lock);
+    const char *was = rt_where("aq_push");
     while (aq_tail - aq_head == AQ_SIZE || (j.kind == AJ_PRESENT && aq_presents >= 1)) pthread_cond_wait(&aq_less, &aq_lock);
+    rt_where(was);
     aq[aq_tail % AQ_SIZE] = j;
     uint64_t id = ++aq_tail;
     if (j.kind == AJ_PRESENT) aq_presents++;
@@ -177,7 +192,9 @@ static uint64_t aq_push(AsyncJob j) {  // the job's number (done when aq_head re
 static void aq_wait(uint64_t id) {
     pthread_mutex_lock(&aq_lock);
     if (aq_head < id) nvn_async_waits++;
+    const char *was = rt_where("aq_wait");
     while (aq_head < id) pthread_cond_wait(&aq_less, &aq_lock);
+    rt_where(was);
     pthread_mutex_unlock(&aq_lock);
 }
 static bool aq_job_done(uint64_t id) {
@@ -186,12 +203,19 @@ static bool aq_job_done(uint64_t id) {
     pthread_mutex_unlock(&aq_lock);
     return d;
 }
+void nvn_async_state(uint64_t *head, uint64_t *tail, int *presents) {  // (AC_PROFILE dumps: hangs)
+    *head = aq_head; *tail = aq_tail; *presents = aq_presents;
+    extern const char *volatile rt_where_of[34];
+    rt_where_of[33] = aq_worker_where;  // (the worker: slot 33)
+}
 // Runtime (nvn_hle.h): before an NVN call that is not nvn_async_safe.
 void nvn_async_drain(void) {
     if (aq_on <= 0) return;
     pthread_mutex_lock(&aq_lock);
     if (aq_head != aq_tail) nvn_async_drains++;
+    const char *was = rt_where("aq_drain");
     while (aq_head != aq_tail) pthread_cond_wait(&aq_less, &aq_lock);
+    rt_where(was);
     pthread_mutex_unlock(&aq_lock);
 }
 // NVN functions that may run while the worker translates earlier submissions: they only touch guest memory, the

@@ -167,7 +167,7 @@ static void nvn_lock(void) {
  DWORD me=GetCurrentThreadId();
  if(nvn_owner==me) {nvn_depth++;return;}
  if(!TryAcquireSRWLockExclusive(&nvn_srw)) {
-  LARGE_INTEGER a,b;QueryPerformanceCounter(&a);AcquireSRWLockExclusive(&nvn_srw);QueryPerformanceCounter(&b);
+  LARGE_INTEGER a,b;QueryPerformanceCounter(&a);{const char *w=rt_where("nvn_lock wait");AcquireSRWLockExclusive(&nvn_srw);rt_where(w);}QueryPerformanceCounter(&b);
   nvn_contended++;nvn_contended_qpc+=(uint64_t)(b.QuadPart-a.QuadPart);
  }
  nvn_owner=me;nvn_depth=1;
@@ -443,13 +443,7 @@ void nvn_present_pace(int interval) {
  /* AC_UNCAPPED=1 (launcher and in-game menu: Uncapped frame rate): gameplay is not held to 60 FPS. Cutscenes stay at
   * 60 (their cuts are timed for it: svc #0xB2), and an interval the game asks for above 1 is kept. */
  if(ac_uncapped<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_UNCAPPED",v,sizeof(v));ac_uncapped=n==1 && v[0]=='1';}
- /* Not with AC_ASYNC_SUBMIT=1 (Prepare graphics on a separate thread): together they hung or crashed the game at the
-  * title screens, which run at 200+ FPS uncapped (5 of 9 test runs, 2026-11-05: the main thread parked on a GPU fence
-  * with the submission queue empty; a fault in nvnCommandBufferAddCommandMemory). That setting keeps the 60 cap. */
- static int async=-1;
- if(async<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_ASYNC_SUBMIT",v,sizeof(v));async=n>0 && n<sizeof(v) && v[0]!='0';
-  if(async && ac_uncapped) printf("[app] uncapped frame rate off: not with AC_ASYNC_SUBMIT\n");}
- if(ac_uncapped && !async && override<0 && interval==1 && !ac_in_cutscene) interval=0;
+ if(ac_uncapped && override<0 && interval==1 && !ac_in_cutscene) interval=0;
  /* AC_CUTSCENE_FPS=30: cutscenes at 30 FPS, as in the unmodified game (svc #0xB1 in host_runtime.c.in). */
  extern int cutscene_mode;
  if(cutscene_mode && interval>0 && interval<2) interval=2;
@@ -609,6 +603,19 @@ static DWORD WINAPI prof_thread(LPVOID unused) {
      prof_waits[j].thread,prof_waits[j].status,(unsigned long long)prof_waits[j].pc,(unsigned long long)prof_waits[j].lr,
      (unsigned long long)prof_waits[j].key,(unsigned long long)prof_waits[j].count);
     for(unsigned t=0;t<34;t++) if(prof_thread_samples[t]) fprintf(f,"thread %u %llu\n",t,(unsigned long long)prof_thread_samples[t]);
+    /* Every guest thread's state at this moment (hangs): status, guest pc/lr, what it waits on. */
+    for(unsigned t=0;t<33;t++) if(guest_threads[t].status!=THREAD_UNUSED) {
+     const Cpu *g=&guest_threads[t].cpu;
+     fprintf(f,"state thread=%u status=%u pc=0x%llx lr=0x%llx mutex=0x%llx owner=%u cond=0x%llx addr=0x%llx objects=0x%llx gpu=%llu\n",t,
+      guest_threads[t].status,(unsigned long long)g->pc,(unsigned long long)g->x[30],(unsigned long long)guest_threads[t].mutex,
+      guest_threads[t].mutex_owner,(unsigned long long)guest_threads[t].condition_key,(unsigned long long)guest_threads[t].address_key,
+      (unsigned long long)guest_threads[t].wait_handles[0],(unsigned long long)guest_threads[t].gpu_seq);
+     fprintf(f,"where thread=%u %s\n",t,rt_where_of[t] ? rt_where_of[t] : "-");
+    }
+    {extern void nvn_async_state(uint64_t*,uint64_t*,int*);uint64_t h=0,tl=0;int pr=0;nvn_async_state(&h,&tl,&pr);
+     fprintf(f,"async head=%llu tail=%llu presents=%d\n",(unsigned long long)h,(unsigned long long)tl,pr);}
+    {extern uint64_t renderer_wait_target(uint64_t);extern uint64_t vk_completed_seq(void);
+     fprintf(f,"gpu submitted=%llu completed=%llu\n",(unsigned long long)renderer_wait_target(~0ull),(unsigned long long)vk_completed_seq());}
     fclose(f);
    }
    memset(prof_table,0,sizeof(prof_table));memset(prof_calls,0,sizeof(prof_calls));memset(prof_thread_samples,0,sizeof(prof_thread_samples));memset(prof_waits,0,sizeof(prof_waits));

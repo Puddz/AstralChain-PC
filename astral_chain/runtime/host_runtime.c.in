@@ -43,6 +43,10 @@ static Cpu *live_cpu[33];
 static int parallel_mode;
 static SRWLOCK klock_srw=SRWLOCK_INIT;
 static volatile DWORD klock_owner;
+/* (hang diagnosis, AC_PROFILE dumps) where each guest thread blocks now; set around host waits */
+const char *volatile rt_where_of[34];
+static __thread unsigned rt_where_slot;
+const char *rt_where(const char *s) { const char *p=rt_where_of[rt_where_slot]; rt_where_of[rt_where_slot]=s; return p; }
 static unsigned klock_depth;
 static uint64_t klock_contended,klock_contended_qpc;  /* (updated under the lock) */
 static uint64_t nvn_contended,nvn_contended_qpc;  /* (nvn_hle.h nvn_lock; parallel stats) */
@@ -57,7 +61,7 @@ static void klock(void) {
  if(!TryAcquireSRWLockExclusive(&klock_srw)) {  /* contended: count the time (parallel stats) */
   unsigned holder=klock_holder,svc=klock_holder_svc;
   LARGE_INTEGER a,b,f;QueryPerformanceCounter(&a);
-  AcquireSRWLockExclusive(&klock_srw);
+  {const char *w=rt_where("klock wait");AcquireSRWLockExclusive(&klock_srw);rt_where(w);}
   QueryPerformanceCounter(&b);klock_contended_qpc+=(uint64_t)(b.QuadPart-a.QuadPart);klock_contended++;
   QueryPerformanceFrequency(&f);double ms=1000.0*(double)(b.QuadPart-a.QuadPart)/(double)f.QuadPart;
   if(ms>30.0) printf("KLOCK host thread %lu waited %.0f ms for the kernel lock (last held for guest thread %u, svc 0x%x)\n",

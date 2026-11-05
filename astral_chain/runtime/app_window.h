@@ -253,13 +253,13 @@ static void app_pump(void) {
   if(ms>30.0) printf("PUMP PeekMessage took %.0f ms\n",ms);
   if(!got) break;
   if(++count>4096) boundary("host-message-budget",&state,state.pc);
-  TranslateMessage(&message);DispatchMessageW(&message);
+  {const char *w=rt_where("dispatch message");TranslateMessage(&message);DispatchMessageW(&message);rt_where(w);}
   QueryPerformanceCounter(&a);
   ms=1000.0*(double)(a.QuadPart-b.QuadPart)/(double)f.QuadPart;
   if(ms>30.0) printf("PUMP message 0x%x took %.0f ms\n",message.message,ms);
  }
  QueryPerformanceCounter(&a);
- hid_poll(app_input_focus && (app_focus==1 || ac_menu_open) && !app_exit_requested);
+ {const char *w=rt_where("hid_poll");hid_poll(app_input_focus && (app_focus==1 || ac_menu_open) && !app_exit_requested);rt_where(w);}
  QueryPerformanceCounter(&b);
  double ms=1000.0*(double)(b.QuadPart-a.QuadPart)/(double)f.QuadPart;
  if(ms>30.0) printf("PUMP input read took %.0f ms\n",ms);
@@ -274,9 +274,10 @@ static void app_checkpoint(void) {
  uint64_t start=0;
  while((app_focus==3 && app_suspend_background) || (app_focus==2 && app_suspend_out_of_focus && !ac_menu_open)) {
   if(!start) start=rt_ticks();
+  const char *was=rt_where("suspended");
   unsigned held=klock_release_all();  /* (parallel mode: other threads' services must not wait on this) */
   DWORD waited=MsgWaitForMultipleObjectsEx(0,NULL,16,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
-  klock_reacquire(held);
+  klock_reacquire(held);rt_where(was);
   if(waited==WAIT_FAILED)
    boundary("host-suspension-wait",&state,state.pc);
   app_pump();
