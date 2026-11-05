@@ -4267,6 +4267,13 @@ static void draw_(CmdRec *r, bool indexed) {
     VkIndexType itype_vk = VK_INDEX_TYPE_UINT32;
     uint32_t icount = 0;
     bool use_index = indexed || !native;
+    // Small draws (UI quads, text) copy their vertices and indices now instead of the GPU reading the heap later
+    // (in place or through the vertex cache): the game rewrites such data before the GPU got to it. Title screen:
+    // the background movie's quad drawn with the logo movie's vertices for a frame (squashed between black bars),
+    // 1-12 frames in 25 s uncapped; none with copies, at the same frame rate. LARECOMP_VK_COPY_SMALL=<count>: limit.
+    static int64_t small_max = -1;
+    if (small_max < 0) { const char *e = getenv("LARECOMP_VK_COPY_SMALL"); small_max = e ? atoll(e) : 1024; }
+    bool small = r->x[2] <= (uint64_t)small_max && (indexed ? r->x[6] : r->x[4]) <= 4;  // (instanced: their per-instance data too)
     const void *scan_src = NULL;  // deferred index scan (direct index buffer)
     uint32_t scan_isz = 0, scan_restart = 0;
     if (!indexed) {
@@ -4289,7 +4296,7 @@ static void draw_(CmdRec *r, bool indexed) {
             uint32_t isz = itype == 1 ? 2 : 4;
             itype_vk = itype == 1 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
             icount = count;
-            if (iaddr % isz == 0 && guest_direct(iaddr, (uint64_t)count * isz, &ib.buf, &ib.off)) {
+            if (!small && iaddr % isz == 0 && guest_direct(iaddr, (uint64_t)count * isz, &ib.buf, &ib.off)) {
                 scan_src = src; scan_isz = isz; scan_restart = restart;  // max_index only if a stream gets copied
             } else {
                 ib = vk_transient_copy(src, (uint64_t)count * isz + 4, 4);
@@ -4330,7 +4337,12 @@ static void draw_(CmdRec *r, bool indexed) {
             Range v = st.vbuf[s];
             VkBuffer dbuf;
             VkDeviceSize doff;
-            if (v.addr && v.size && guest_direct(v.addr, v.size, &dbuf, &doff)) {
+            uint64_t stride = k.stride[s], need;
+#define STREAM_NEED() (!stride ? 256 : k.divisor[s] ? ((uint64_t)base_inst + inst + k.divisor[s] - 1) / k.divisor[s] * stride + 256 \
+                                     : (uint64_t)max_index * stride + 256)
+            // (a small draw reaching far into a large buffer, e.g. 6 indices into a big model: read in place as before)
+            bool direct = !small || STREAM_NEED() > (32u << 10);
+            if (direct && v.addr && v.size && guest_direct(v.addr, v.size, &dbuf, &doff)) {
                 if (ss_on && (ss.vb_known >> s & 1) && ss.vb[s] == dbuf && ss.vo[s] == doff) continue;
                 ss.vb[s] = dbuf; ss.vo[s] = doff; ss.vb_known |= 1u << s;
                 vkCmdBindVertexBuffers(cb, (uint32_t)s, 1, &dbuf, &doff);
@@ -4343,10 +4355,8 @@ static void draw_(CmdRec *r, bool indexed) {
                 if (base_vertex > 0) max_index += (uint32_t)base_vertex;
                 scan_src = NULL;
             }
-            uint64_t stride = k.stride[s], need;
-            if (!stride) need = 256;
-            else if (k.divisor[s]) need = ((uint64_t)base_inst + inst + k.divisor[s] - 1) / k.divisor[s] * stride + 256;
-            else need = (uint64_t)max_index * stride + 256;
+            need = STREAM_NEED();
+#undef STREAM_NEED
             if (v.size && need > v.size) need = v.size;
             if (!v.addr) { static const uint8_t zero[256]; sp = vk_transient_copy(zero, 256, 16); }
             else sp = guest_copy(v.addr, need ? need : 16);
