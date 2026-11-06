@@ -204,6 +204,12 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 How to dump games and keys from your Switch is not covered here.
 
+**Linux / Steam Deck (Proton):** not supported here, and untested by this project. mohdrahk runs the port on
+Linux through Proton and keeps a community guide with build and update scripts on their fork:
+[mohdrahk/AstralChain-PC, branch `linux`](https://github.com/mohdrahk/AstralChain-PC/tree/linux) (see
+`linux/README.md`; background in [issue #6](https://github.com/Puddz/AstralChain-PC/issues/6)). Problems on Linux
+are best raised there.
+
 ## Setup
 
 1. Download this repository: **Code → Download ZIP**, or `git clone`. Put it in a folder you own, for example
