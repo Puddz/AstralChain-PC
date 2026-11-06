@@ -57,8 +57,8 @@ std::vector<Opt> opts = {
     {"mouse_invert", "Controls", "Invert mouse up and down", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"fullscreen", "Display", "Fullscreen", "Also F11 or Alt+Enter. The game starts the way you leave it.", CHECK, "0", nullptr, 0, 0, true},
     {"resolution", "Display", "Render resolution (experimental)",
-     "1600x900 is the Switch's (with its dynamic resolution). The 21:9 and 32:9 sizes are for ultrawide screens.",
-     CHOICE, "1600x900", "1600x900|1600x900 (default);1920x1080|1920x1080;2560x1440|2560x1440;3840x2160|3840x2160;"
+     "1600x900 is the Switch's (with its dynamic resolution). The smaller sizes are for slow GPUs; 21:9 and 32:9 for ultrawide screens.",
+     CHOICE, "1600x900", "854x480|854x480 (480p);960x540|960x540 (540p);1280x720|1280x720 (720p);1600x900|1600x900 (default);1920x1080|1920x1080;2560x1440|2560x1440;3840x2160|3840x2160;"
      "2560x1080|2560x1080 (21:9);3440x1440|3440x1440 (21:9);3840x1080|3840x1080 (32:9);5120x1440|5120x1440 (32:9)", 0, 0, false},
     {"upscaler", "Display", "Upscaling (experimental)", "Only when the window is larger than the picture.",
      CHOICE, "off", "off|Smooth (default);fsr1|AMD FSR 1", 0, 0, true},

@@ -37,6 +37,15 @@ Known issues are listed under [Known issues](#known-issues).
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-06**
+
+- **Smaller render sizes for slow GPUs** (this branch; issue #4): 1280x720, 960x540 and 854x480 in **Render
+  resolution**. The 3D view is drawn at that size and the game scales it up, as its own dynamic resolution does; the
+  HUD and menus stay sharp. It only lightens the graphics card's work: a slow processor is not helped. Highway save,
+  RTX 4090, GPU time per frame compared with 1600x900: 720p -6%, 540p -20%, 480p -25%; a weaker GPU should gain
+  more, as more of its time goes on pixels. Handheld mode keeps its 1280x720 and ignores the smaller sizes. *Not
+  yet confirmed in play.*
+
 **2026-11-04**
 
 - **Controllers other than Xbox pads** (issue #10): Switch Pro Controller, DualSense, DualShock 4, 8BitDo and most
@@ -287,6 +296,7 @@ All are in **Settings > Display** and off by default; they apply the next time y
 | Setting | What it does |
 | --- | --- |
 | **Render resolution** | The size the game draws at: 1600x900 (default, the Switch's docked size, with the game's own dynamic resolution), 1920x1080, 2560x1440 or 3840x2160, at a fixed size. Larger sizes need a faster GPU and more video memory. Measured on an RTX 4090 in the highway chase: about 60 fps at every size |
+| **Render resolution, small** | 1280x720, 960x540 or 854x480, for GPUs that cannot hold 60 fps at 1600x900. Only the 3D view is drawn at that size and scaled up by the game (softer picture); the HUD and menus stay at 1600x900. Handheld mode ignores them |
 | **Render resolution, ultrawide** | 2560x1080 or 3440x1440 (21:9), 3840x1080 or 5120x1440 (32:9). The 3D view gets wider (nothing is stretched), the HUD keeps its 16:9 layout in the middle, and the window opens at that shape; in fullscreen on an ultrawide screen the picture fills it. Checked in screenshots of the street and the opening cutscene; cutscene movies, menus and real ultrawide monitors are untested |
 | **Upscaling** | *Smooth* (default) scales the picture to a larger window or screen; *AMD FSR 1* uses edge-aware upscaling and sharpening, crisper on 1440p and 4K screens. Works on any GPU |
 

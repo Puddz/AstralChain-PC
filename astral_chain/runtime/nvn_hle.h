@@ -410,7 +410,7 @@ void *nvn_host_window(void) {
  SetWindowTextW(app_window,L"Astral Chain (native)");
  /* 1600x900, or 1600 wide at the render resolution's aspect when that is wider than 16:9 (21:9, 32:9 AC_RESOLUTION) */
  res_config();
- int ch=(int64_t)res_w*9>(int64_t)res_h*16 ? (int)(1600LL*res_h/res_w) : 900;
+ int ch=res_wide(res_w,res_h) ? (int)(1600LL*res_h/res_w) : 900;
  RECT r={0,0,1600,ch};AdjustWindowRect(&r,WS_OVERLAPPEDWINDOW,FALSE);
  SetWindowPos(app_window,NULL,0,0,r.right-r.left,r.bottom-r.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
  {char v[8];DWORD n=GetEnvironmentVariableA("AC_FULLSCREEN",v,sizeof(v));if(n && n<sizeof(v) && atoi(v)) app_set_fullscreen(app_window,1);}

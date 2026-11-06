@@ -102,12 +102,16 @@ namespace AstralChainLauncher
             present.Choices = new[] { "mailbox|Mailbox (default)", "fifo|Vsync (FIFO)", "immediate|Immediate" };
             var resolution = Add("resolution", "Display", "Render resolution (experimental)",
                 "The size the game draws its picture at. 1600x900 is the Switch's docked resolution (default, with " +
-                "the game's own dynamic resolution). Larger sizes are sharper and need a faster GPU; 3840x2160 is " +
+                "the game's own dynamic resolution). Smaller sizes (down to 854x480) are for slow GPUs: the game " +
+                "draws its 3D view at that size and scales it up (a softer picture; the HUD stays sharp), so the " +
+                "graphics card has less to do " +
+                "(a slow processor is not helped). Larger sizes are sharper and need a faster GPU; 3840x2160 is " +
                 "the largest. The 21:9 and 32:9 sizes are for ultrawide screens: the 3D view gets wider and the HUD " +
-                "stays 16:9 in the middle (untested on a real ultrawide monitor). Handheld mode keeps 1280x720. " +
+                "stays 16:9 in the middle (untested on a real ultrawide monitor). Handheld mode keeps 1280x720 and ignores the sizes below it. " +
                 "Applies the next time you press Play.", OptKind.Choice,
                 "1600x900", OptTarget.Game, v => v == "1600x900" ? "" : "AC_RESOLUTION=" + v);
-            resolution.Choices = new[] { "1600x900|1600x900 (default)", "1920x1080|1920x1080", "2560x1440|2560x1440",
+            resolution.Choices = new[] { "854x480|854x480 (480p)", "960x540|960x540 (540p)", "1280x720|1280x720 (720p)",
+                "1600x900|1600x900 (default)", "1920x1080|1920x1080", "2560x1440|2560x1440",
                 "3840x2160|3840x2160", "2560x1080|2560x1080 (21:9)", "3440x1440|3440x1440 (21:9)",
                 "3840x1080|3840x1080 (32:9)", "5120x1440|5120x1440 (32:9)" };
             var upscaler = Add("upscaler", "Display", "Upscaling (experimental)",
