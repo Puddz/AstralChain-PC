@@ -140,7 +140,7 @@ static void write_job(Job *j) {
     FILE *f = fopen(path, "rb");
     if (f) {  // (an earlier run's)
         fclose(f);
-        if (++n_kept % 500 == 0) { printf("[texdump] %llu textures already in %s from earlier runs\n", (unsigned long long)n_kept, dump_dir); fflush(stdout); }
+        if (++n_kept % 500 == 0) { fprintf(stderr, "[texdump] %llu textures already in %s from earlier runs\n", (unsigned long long)n_kept, dump_dir); fflush(stderr); }
         return;
     }
     char tmp[MAX_PATH + 72];
@@ -202,9 +202,9 @@ static void write_job(Job *j) {
         fclose(c);
     }
     if (n_written % 100 == 0) {
-        printf("[texdump] %llu textures written (%.0f MB), %llu kept from earlier runs, to %s\n", (unsigned long long)n_written,
+        fprintf(stderr, "[texdump] %llu textures written (%.0f MB), %llu kept from earlier runs, to %s\n", (unsigned long long)n_written,
                bytes_written / 1048576.0, (unsigned long long)n_kept, dump_dir);
-        fflush(stdout);
+        fflush(stderr);
     }
 }
 
@@ -245,15 +245,15 @@ static bool init(void) {
     mkdirs(dump_dir);
     DWORD a = GetFileAttributesA(dump_dir);
     if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) {
-        printf("[texdump] cannot create %s: texture dumping off\n", dump_dir);
-        fflush(stdout);
+        fprintf(stderr, "[texdump] cannot create %s: texture dumping off\n", dump_dir);
+        fflush(stderr);
         return false;
     }
     pthread_t th;
     if (pthread_create(&th, NULL, worker, NULL)) return false;
     pthread_detach(th);
-    printf("[texdump] dumping textures to %s\n", dump_dir);
-    fflush(stdout);
+    fprintf(stderr, "[texdump] dumping textures to %s\n", dump_dir);
+    fflush(stderr);
     return true;
 }
 

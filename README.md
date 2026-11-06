@@ -10,7 +10,7 @@
 
 > [!NOTE]
 > **This is the `texture-dump` branch** (experimental): the `upscaling` branch plus texture dumping and texture
-> replacement for modders (issue #14). See [Texture mods](#texture-mods-this-branch).
+> replacement for modders (issue #14). See [Texture mods](docs/texture-mods.md).
 
 An unofficial, experimental native Windows port of *Astral Chain* (Nintendo Switch, PlatinumGames, 2019), made by
 **static recompilation**. The game's ARM64 code is translated to C and compiled into an ordinary Windows x64
@@ -45,7 +45,7 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 - **Texture mods** (`texture-dump` branch only; issue #14): **Settings > Mods** can dump every texture the game
   loads as a DDS file named by a hash of its data, and load edited DDS files with those names in place of the
-  game's, at any size (HD textures). See [Texture mods](#texture-mods-this-branch). *Not yet confirmed in play.*
+  game's, at any size (HD textures). See [Texture mods](docs/texture-mods.md). *Not yet confirmed in play.*
 - **Smaller render sizes for slow GPUs** (this branch; issue #4): 1280x720, 960x540 and 854x480 in **Render
   resolution**. The 3D view is drawn at that size and the game scales it up, as its own dynamic resolution does; the
   HUD and menus stay sharp. It only lightens the graphics card's work: a slow processor is not helped. Highway save,
@@ -313,57 +313,10 @@ changed at launch without a rebuild. Without the setting, the game's own values 
 
 ### Texture mods (this branch)
 
-#### Dumping
-
-For making texture mods (issue #14). **Settings > Mods > Dump textures** in the launcher (or `AC_TEXTURE_DUMP=1`)
-writes each texture the game loads, the first time it appears, as a DDS file. **Texture dump folder** picks where
-they go (or `AC_TEXTURE_DUMP_DIR`); empty means `userdata\textures\dump`. Play through the areas whose textures you
-want.
-
-- **Names:** `<hash>_<width>x<height>.dds`. The hash is of the texture's data as the game has it, so the same texture
-  gets the same name in every run (checked: a second run over the same route added no files). A file that is already
-  there is kept, so dumping again only adds new textures.
-- **`textures.csv`** in the same folder lists each file: hash, size, mip levels, layers, type (2d, array, cube),
-  the game's format and the DDS format. The game gives its textures no names, so they cannot be sorted into folders
-  by what they show.
-- **Formats:** most of the game's textures are BC1/BC3 and are written as they are (with all mip levels), as are BC6H,
-  RGBA8 and the other common formats. ASTC textures are decoded to RGBA8. Cube maps and texture arrays are written
-  as DDS cube maps and arrays. The files use the DX10 DDS header (read by texconv, Paint.NET, GIMP and Photoshop's
-  Intel DDS plugin); every file of a test dump was opened and decoded with the Pillow library.
-- **Not dumped:** what the game draws into (render targets, shadow and reflection maps), video frames, textures
-  that change while playing, depth textures, 3D textures, and a few 16-bit formats DDS has no match for.
-- **Size:** the highway save's first two minutes wrote about 2,200 textures (3.8 GB). Writing happens on a
-  background thread: that run averaged 59.5 fps, the same as a second run that had nothing new to write.
-
-#### Replacing
-
-**Settings > Mods > Use replacement textures** (or `AC_TEXTURE_REPLACE=1`) loads your edited textures from
-**Replacement textures folder** (or `AC_TEXTURE_REPLACE_DIR`; empty means `userdata\textures\replace`).
-
-- **Names:** a file is used for the texture whose hash its name starts with: the 16 characters dumping puts first.
-  Anything may follow (`<hash>_2048x2048.dds`, `<hash> jacket.dds`), and files can be in subfolders, so a mod can
-  be organised however its author likes. The folder is read when the game starts.
-- **Size:** any. Larger than the original works (HD textures); keep the same shape (a 512x256 texture as 1024x512).
-  Mip levels: as many as the file has (a full chain is best: textures far away look grainy without one).
-- **Formats:** BC1, BC2, BC3, BC4, BC5, BC6H, BC7, RGBA8 and BGRA8 (also R8, RG8, RGBA16F, RGBA32F), with the DX10
-  DDS header or the older one (DXT1/DXT3/DXT5, ATI1/ATI2). BC7 (or BC1 without transparency) keeps video memory
-  low; RGBA8 takes four times as much. Whether the colours are sRGB follows the game's texture, whatever the file
-  says (editors often get that flag wrong).
-- **Cube maps and texture arrays** need the same number of faces / layers as the game's.
-- A file that cannot be used (unknown format, wrong layer count, cut short) is skipped, with the reason in the
-  game's log; the game's own texture is shown instead.
-
-Tested on the highway save (about 7 minutes from the title screen through the chase), RTX 4090:
-
-| Replacement set (generated test patterns for all 2,165 dumped 2D textures) | Result |
-| --- | --- |
-| RGBA8 checkerboards, same size up to 512 (larger originals smaller) | Every surface and the UI showed them |
-| DXT5 stripes at twice the original size, up to 2048 (older DDS header) | Every surface showed them |
-| RGBA8 stripes at twice the size, up to 1024, full mip chain (each level its own colour) | Shown, mip levels in use |
-
-The runs averaged 59.7-59.9 fps (59.9 without replacements). The worst frame was the same loading spike as without
-(103-112 ms against 109), except one 221 ms frame in the first run. Video memory grew by about 1 GB with the double-size sets. The opening lab scene is a movie, not
-3D, so it has no textures to replace.
+For modders (issue #14): **Settings > Mods** can **dump** every texture the game loads as a DDS file named by a
+hash of its data, and **replace** textures with edited DDS files of the same names, at any size (HD textures),
+without changing the game's files. The guide, with a step-by-step walkthrough, formats and troubleshooting:
+**[Texture mods](docs/texture-mods.md)**. *Not yet confirmed in play.*
 
 ### Texture compression (BC7)
 
@@ -455,6 +408,7 @@ happens, then attach the zip that **Create report** makes. Otherwise include `bu
 
 - [How it works](docs/how-it-works.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Texture mods](docs/texture-mods.md) (this branch)
 - [Development notes](docs/development.md)
 
 ## Legal

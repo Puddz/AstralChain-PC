@@ -90,8 +90,8 @@ static bool init(void) {
     size_t l = strlen(repl_dir);
     while (l > 3 && (repl_dir[l - 1] == '\\' || repl_dir[l - 1] == '/')) repl_dir[--l] = 0;
     scan(repl_dir, 0);
-    printf("[texreplace] %llu replacement textures in %s\n", (unsigned long long)tab_n, repl_dir);
-    fflush(stdout);
+    fprintf(stderr, "[texreplace] %llu replacement textures in %s\n", (unsigned long long)tab_n, repl_dir);
+    fflush(stderr);
     return tab_n > 0;
 }
 
@@ -157,7 +157,7 @@ static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v;
 
 static void bad(const char *path, const char *why) {
     static int n;
-    if (n++ < 50) { printf("[texreplace] %s not used: %s\n", path, why); fflush(stdout); }
+    if (n++ < 50) { fprintf(stderr, "[texreplace] %s not used: %s\n", path, why); fflush(stderr); }
 }
 
 bool texreplace_load(uint64_t hash, bool srgb, uint32_t want_layers, TexReplacement *out) {
