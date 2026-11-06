@@ -710,6 +710,10 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (b->tp > 0) b->tp_gen = texpatch_generation();
     b->data_hash = h;
     b->uploaded = true;
+    if (!b->dynamic) {  // AC_TEXTURE_DUMP=1: the game's textures as DDS files, for modders (texdump.c)
+        extern void texdump_offer(const NvnTexture *t, uint64_t hash, bool gpu_owned);
+        texdump_offer(t, h, b->gpu_owned);
+    }
     if (b->format != mf.vf && !b->astc_bw) return;  // unsupported format: nothing sensible to copy
     uint64_t slow_t0 = SDL_GetTicksNS(), slow_wait = 0;
     VkCommandBuffer cb = vk_upload_cmd();

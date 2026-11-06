@@ -41,7 +41,7 @@ namespace AstralChainLauncher
     }
 
     // ------------------------------------------------------------------------------------------------ settings
-    enum OptKind { Check, Choice, Number, Text }
+    enum OptKind { Check, Choice, Number, Text, Folder }
     enum OptTarget { Game, Setup, Launcher }
 
     class Opt
@@ -187,6 +187,15 @@ namespace AstralChainLauncher
             Add("extra_env", "Troubleshooting", "Extra environment variables",
                 "NAME=value;NAME=value, passed to the game (see docs\\development.md).", OptKind.Text, "",
                 OptTarget.Game, v => v);
+            Add("texture_dump", "Mods", "Dump textures (experimental)",
+                "Writes every texture the game loads as a DDS file, once, named by a hash of its data, with " +
+                "textures.csv listing them, for making texture mods. Play through the areas you want: each new " +
+                "texture is written the first time it appears (several GB for the first chapters). Expect short " +
+                "stutters while it writes. Applies the next time you press Play.", OptKind.Check, "0",
+                OptTarget.Game, v => v == "1" ? "AC_TEXTURE_DUMP=1" : "");
+            Add("texture_dump_dir", "Mods", "Texture dump folder",
+                "Where the dumped textures go. Empty: userdata\\textures\\dump in this folder.", OptKind.Folder, "",
+                OptTarget.Game, v => v == "" ? "" : "AC_TEXTURE_DUMP_DIR=" + v);
         }
     }
 
@@ -1340,6 +1349,22 @@ namespace AstralChainLauncher
                         input = new NumericUpDown { Minimum = o.Min, Maximum = o.Max, Increment = 100,
                             Value = Math.Max(o.Min, Math.Min(o.Max, n)), Location = new Point(250, y),
                             Size = new Size(100, 24), BackColor = Field, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
+                    }
+                    else if (o.Kind == OptKind.Folder)
+                    {
+                        var box = new TextBox { Text = value, Location = new Point(250, y), Size = new Size(190, 24),
+                            BackColor = Field, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
+                        var browse = new NeonButton { Text = "Browse", Location = new Point(446, y - 2), Size = new Size(74, 28) };
+                        browse.Click += (s, e) =>
+                        {
+                            using (var d = new FolderBrowserDialog { Description = o.Label, ShowNewFolderButton = true })
+                            {
+                                if (box.Text.Trim() != "" && Directory.Exists(box.Text.Trim())) d.SelectedPath = box.Text.Trim();
+                                if (d.ShowDialog(this) == DialogResult.OK) box.Text = d.SelectedPath;
+                            }
+                        };
+                        panel.Controls.Add(browse);
+                        input = box;
                     }
                     else
                         input = new TextBox { Text = value, Location = new Point(250, y), Size = new Size(270, 24),
