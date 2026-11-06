@@ -55,8 +55,8 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   a frame the background movie was drawn squashed into a band between black bars. The game had rewritten the
   vertices of its menu and movie quads by the time the GPU read them; small draws now take a copy of their
   vertices when the port handles them. Uncapped title screen, 25 s captured per run: 1-12 squashed frames per
-  run before, none in 5 runs after, same frame rate (~186 fps); street walk unchanged (about 70 fps). *Not yet
-  confirmed in play.*
+  run before, none in 5 runs after, same frame rate (~186 fps); street walk unchanged (about 70 fps). Confirmed
+  in play (2026-11-06).
 - **Faster atomic memory operations**: each one the game makes checked its memory against every mapping table; the
   last region that passed is now kept until a mapping changes. Street after the opening helicopter scene, uncapped
   (RTX 4090 / Ryzen 7 7800X3D, 3 runs each): 67.0 -> 71.4 fps; at the street's start 55.6 -> 58.5 fps, slowest
