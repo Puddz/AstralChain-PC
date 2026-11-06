@@ -196,6 +196,14 @@ namespace AstralChainLauncher
             Add("texture_dump_dir", "Mods", "Texture dump folder",
                 "Where the dumped textures go. Empty: userdata\\textures\\dump in this folder.", OptKind.Folder, "",
                 OptTarget.Game, v => v == "" ? "" : "AC_TEXTURE_DUMP_DIR=" + v);
+            Add("texture_replace", "Mods", "Use replacement textures (experimental)",
+                "Loads your edited textures in place of the game's: DDS files whose names start with the hash of the " +
+                "texture they replace, as dumping names them. They can be larger than the original (HD textures), " +
+                "in BC1-BC7 or RGBA8, and in subfolders. Applies the next time you press Play.", OptKind.Check, "0",
+                OptTarget.Game, v => v == "1" ? "AC_TEXTURE_REPLACE=1" : "");
+            Add("texture_replace_dir", "Mods", "Replacement textures folder",
+                "Where your replacement textures are. Empty: userdata\\textures\\replace in this folder.", OptKind.Folder, "",
+                OptTarget.Game, v => v == "" ? "" : "AC_TEXTURE_REPLACE_DIR=" + v);
         }
     }
 

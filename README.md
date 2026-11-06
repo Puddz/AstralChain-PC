@@ -9,8 +9,8 @@
 > discretion.
 
 > [!NOTE]
-> **This is the `texture-dump` branch** (experimental): the `upscaling` branch plus texture dumping for modders
-> (issue #14). See [Texture dumping](#texture-dumping-this-branch). Texture replacement is not here yet.
+> **This is the `texture-dump` branch** (experimental): the `upscaling` branch plus texture dumping and texture
+> replacement for modders (issue #14). See [Texture mods](#texture-mods-this-branch).
 
 An unofficial, experimental native Windows port of *Astral Chain* (Nintendo Switch, PlatinumGames, 2019), made by
 **static recompilation**. The game's ARM64 code is translated to C and compiled into an ordinary Windows x64
@@ -43,9 +43,9 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-06**
 
-- **Texture dumping** (`texture-dump` branch only; issue #14): **Settings > Mods > Dump textures** writes every
-  texture the game loads as a DDS file, named by a hash of its data. See [Texture dumping](#texture-dumping-this-branch).
-  *Not yet confirmed in play.*
+- **Texture mods** (`texture-dump` branch only; issue #14): **Settings > Mods** can dump every texture the game
+  loads as a DDS file named by a hash of its data, and load edited DDS files with those names in place of the
+  game's, at any size (HD textures). See [Texture mods](#texture-mods-this-branch). *Not yet confirmed in play.*
 - **Smaller render sizes for slow GPUs** (this branch; issue #4): 1280x720, 960x540 and 854x480 in **Render
   resolution**. The 3D view is drawn at that size and the game scales it up, as its own dynamic resolution does; the
   HUD and menus stay sharp. It only lightens the graphics card's work: a slow processor is not helped. Highway save,
@@ -311,7 +311,9 @@ The resolution comes in through a code patch (`astral_chain/patches/resolution-1
 runtime for its render size, dynamic resolution levels, render target memory and camera aspect, so the size can be
 changed at launch without a rebuild. Without the setting, the game's own values are used.
 
-### Texture dumping (this branch)
+### Texture mods (this branch)
+
+#### Dumping
 
 For making texture mods (issue #14). **Settings > Mods > Dump textures** in the launcher (or `AC_TEXTURE_DUMP=1`)
 writes each texture the game loads, the first time it appears, as a DDS file. **Texture dump folder** picks where
@@ -333,7 +335,35 @@ want.
 - **Size:** the highway save's first two minutes wrote about 2,200 textures (3.8 GB). Writing happens on a
   background thread: that run averaged 59.5 fps, the same as a second run that had nothing new to write.
 
-Replacing textures (loading edited ones from a folder) is not part of this yet.
+#### Replacing
+
+**Settings > Mods > Use replacement textures** (or `AC_TEXTURE_REPLACE=1`) loads your edited textures from
+**Replacement textures folder** (or `AC_TEXTURE_REPLACE_DIR`; empty means `userdata\textures\replace`).
+
+- **Names:** a file is used for the texture whose hash its name starts with: the 16 characters dumping puts first.
+  Anything may follow (`<hash>_2048x2048.dds`, `<hash> jacket.dds`), and files can be in subfolders, so a mod can
+  be organised however its author likes. The folder is read when the game starts.
+- **Size:** any. Larger than the original works (HD textures); keep the same shape (a 512x256 texture as 1024x512).
+  Mip levels: as many as the file has (a full chain is best: textures far away look grainy without one).
+- **Formats:** BC1, BC2, BC3, BC4, BC5, BC6H, BC7, RGBA8 and BGRA8 (also R8, RG8, RGBA16F, RGBA32F), with the DX10
+  DDS header or the older one (DXT1/DXT3/DXT5, ATI1/ATI2). BC7 (or BC1 without transparency) keeps video memory
+  low; RGBA8 takes four times as much. Whether the colours are sRGB follows the game's texture, whatever the file
+  says (editors often get that flag wrong).
+- **Cube maps and texture arrays** need the same number of faces / layers as the game's.
+- A file that cannot be used (unknown format, wrong layer count, cut short) is skipped, with the reason in the
+  game's log; the game's own texture is shown instead.
+
+Tested on the highway save (about 7 minutes from the title screen through the chase), RTX 4090:
+
+| Replacement set (generated test patterns for all 2,165 dumped 2D textures) | Result |
+| --- | --- |
+| RGBA8 checkerboards, same size up to 512 (larger originals smaller) | Every surface and the UI showed them |
+| DXT5 stripes at twice the original size, up to 2048 (older DDS header) | Every surface showed them |
+| RGBA8 stripes at twice the size, up to 1024, full mip chain (each level its own colour) | Shown, mip levels in use |
+
+The runs averaged 59.7-59.9 fps (59.9 without replacements). The worst frame was the same loading spike as without
+(103-112 ms against 109), except one 221 ms frame in the first run. Video memory grew by about 1 GB with the double-size sets. The opening lab scene is a movie, not
+3D, so it has no textures to replace.
 
 ### Texture compression (BC7)
 

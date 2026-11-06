@@ -12,6 +12,7 @@
 #include "../astc.h"
 #include "../renderer.h"
 #include "../texpatch.h"
+#include "texreplace.h"
 
 // ================================================================== formats
 typedef struct { VkFormat vf; uint8_t expand_rgb, alpha_one; } VkFmt;
@@ -646,6 +647,68 @@ static void ft_frame(uint64_t frame) {
     ft.frame = frame;
 }
 
+// A modder's replacement for the texture data with hash h (texreplace.c): the image is made again in the
+// replacement's size, format and mip levels (same layers and view type), and filled from the file. false: none usable.
+static bool replace_upload(NvnTexture *t, TexBackend *b, uint64_t h) {
+    TexReplacement r;
+    if (!texreplace_load(h, texreplace_is_srgb(fmt_of(t->format).vf), b->layers, &r)) return false;
+    if (!format_supports(r.format, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT)) {
+        static int n;
+        if (n++ < 20) LOG("[texreplace] %s not used: the GPU cannot sample its format (%d)\n", r.path, r.format);
+        texreplace_free(&r);
+        return false;
+    }
+    if (b->astc_bw && atomic_load(&b->pre_state)) {  // (a background decode of the game's data: not needed)
+        astc_cancel(b);
+        while (atomic_load(&b->pre_state) == 1) SDL_Delay(1);
+        if (atomic_load(&b->pre_state) == 2) { free(b->pre_rgba); b->pre_rgba = NULL; atomic_store(&b->pre_state, 0); }
+    }
+    if (!b->replaced || b->format != r.format || b->width != r.width || b->height != r.height || b->levels != r.levels) {
+        destroy_image(b);
+        bool cube = b->base_type == VK_IMAGE_VIEW_TYPE_CUBE || b->base_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY ||
+                    (b->layers >= 6 && r.width == r.height);
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                                .flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | (cube && r.width == r.height ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0),
+                                .imageType = VK_IMAGE_TYPE_2D, .format = r.format, .extent = {r.width, r.height, 1},
+                                .mipLevels = r.levels, .arrayLayers = b->layers, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL) != VK_SUCCESS) {
+            LOG("[texreplace] %s not used: image creation failed (%ux%u, %u levels)\n", r.path, r.width, r.height, r.levels);
+            b->image = VK_NULL_HANDLE; b->mem = VK_NULL_HANDLE;
+            b->replaced = false;
+            create_image(t, b);
+            texreplace_free(&r);
+            return false;
+        }
+        b->format = r.format; b->width = r.width; b->height = r.height; b->levels = r.levels;
+        b->usage = ci.usage; b->storage = false; b->astc_gpu = false; b->bc7 = false;
+        vk_image_init_layout(vk_upload_cmd(), b->image, b->aspect);
+    }
+    VkCommandBuffer cb = vk_upload_cmd();
+    const uint8_t *p = r.data;
+    for (uint32_t layer = 0; layer < r.layers; layer++)
+        for (uint32_t lv = 0; lv < r.levels; lv++) {
+            uint32_t w = r.width >> lv ? r.width >> lv : 1, hh = r.height >> lv ? r.height >> lv : 1;
+            uint64_t n = (uint64_t)((w + r.block - 1) / r.block) * ((hh + r.block - 1) / r.block) * r.bpb;
+            VkSpan s = vk_transient_copy(p, n, 16);
+            VkBufferImageCopy rg = {.bufferOffset = s.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lv, layer, 1},
+                                    .imageExtent = {w, hh, 1}};
+            vkCmdCopyBufferToImage(cb, s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+            p += n;
+        }
+    static int nlog;
+    if (++nlog % 500 == 0) LOG("[texreplace] %d textures replaced so far\n", nlog);
+    if (nlog <= 100)
+        LOG("[texreplace] %016llx (%ux%u) -> %s (%ux%u, %u levels)\n", (unsigned long long)h, t->layout.width, t->layout.height,
+            r.path, r.width, r.height, r.levels);
+    b->replaced = true;
+    texreplace_free(&r);
+    return true;
+}
+
 static void upload_texture(NvnTexture *t, TexBackend *b) {
     if (!t->addr || t->target == 10) return;
     uint64_t frame = vk_frame_counter();
@@ -714,6 +777,12 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
         extern void texdump_offer(const NvnTexture *t, uint64_t hash, bool gpu_owned);
         texdump_offer(t, h, b->gpu_owned);
     }
+    // AC_TEXTURE_REPLACE=1: a modder's DDS for exactly this data (texreplace.c); when the data no longer has one, the
+    // game's own image comes back
+    if (!b->scalable && !b->gpu_owned && b->samples == 1 && b->depth == 1 && b->aspect == VK_IMAGE_ASPECT_COLOR_BIT &&
+        texreplace_has(h) && replace_upload(t, b, h))
+        return;
+    if (b->replaced) { destroy_image(b); b->replaced = false; create_image(t, b); }
     if (b->format != mf.vf && !b->astc_bw) return;  // unsupported format: nothing sensible to copy
     uint64_t slow_t0 = SDL_GetTicksNS(), slow_wait = 0;
     VkCommandBuffer cb = vk_upload_cmd();
