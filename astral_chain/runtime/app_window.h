@@ -305,6 +305,10 @@ static void app_open(void) {
   app_message_event=CreateEventW(NULL,TRUE,FALSE,NULL);
   if(!app_message_event) boundary("host-applet-event-create",&state,state.pc);
  }
+ /* Without this, Windows scaling above 100% gives the game a smaller screen (1920x1200 at 150%: 1280x800) and stretches
+  * the result. (-4: DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2; looked up, as Windows 10 1703 added it.) */
+ BOOL (WINAPI *set_dpi_awareness)(HANDLE)=(BOOL (WINAPI *)(HANDLE))GetProcAddress(GetModuleHandleW(L"user32.dll"),"SetProcessDpiAwarenessContext");
+ if(set_dpi_awareness) set_dpi_awareness((HANDLE)(INT_PTR)-4);
  WNDCLASSW window_class={0};
  window_class.lpfnWndProc=app_window_proc;
  window_class.hInstance=GetModuleHandleW(NULL);
