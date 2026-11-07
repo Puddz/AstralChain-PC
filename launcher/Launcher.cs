@@ -532,7 +532,20 @@ namespace AstralChainLauncher
                     Quote(Path.Combine(project, @"astral_chain\run_guarded.ps1")) + " -Run " + Quote(run) +
                     " -Seconds 604800 -Env " + Quote(env.Replace("\"", "")) + (consoles ? "" : " -NoConsole");
                 gameRunning = true;
-                Ui(() => WindowState = FormWindowState.Minimized);
+                // The game's window takes the foreground (keyboard and controllers) when it opens. Windows lets it
+                // only while the launcher, the window the player clicked, is still in front: the launcher allows it
+                // and minimizes once the game's window is there (or after 2 minutes).
+                Ui(() => AllowSetForegroundWindow(-1));
+                new Thread(() =>
+                {
+                    for (int i = 0; i < 1200 && gameRunning; i++)
+                    {
+                        if (FindWindow("AstralChainNativeStartup", null) != IntPtr.Zero) break;
+                        Thread.Sleep(100);
+                    }
+                    Thread.Sleep(500);
+                    if (gameRunning) Ui(() => WindowState = FormWindowState.Minimized);
+                }) { IsBackground = true }.Start();
                 int code = RunProcess("powershell.exe", args, null, !consoles);
                 gameRunning = false;
                 settings.Reload();  // (changes made in the game's menu)
@@ -835,6 +848,9 @@ namespace AstralChainLauncher
             worker.IsBackground = true;
             worker.Start();
         }
+
+        [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int processId);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string className, string title);
 
         void Ui(Action action)
         {
