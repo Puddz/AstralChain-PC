@@ -261,6 +261,8 @@ static void app_pump(void) {
   if(ms>30.0) printf("PUMP message 0x%x took %.0f ms\n",message.message,ms);
  }
  QueryPerformanceCounter(&a);
+ /* (the active window without WM_ACTIVATEAPP having said so, e.g. activated before it was shown: input counts) */
+ if(!app_input_focus && GetForegroundWindow()==app_window) {app_input_focus=1;printf("[app] input focus (foreground)\n");}
  {const char *w=rt_where("hid_poll");hid_poll(app_input_focus && (app_focus==1 || ac_menu_open) && !app_exit_requested);rt_where(w);}
  QueryPerformanceCounter(&b);
  double ms=1000.0*(double)(b.QuadPart-a.QuadPart)/(double)f.QuadPart;
@@ -308,7 +310,12 @@ static void app_open(void) {
   WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,960,540,NULL,NULL,window_class.hInstance,NULL);
  if(!app_window) boundary("host-window-create",&state,state.pc);
  app_window_thread=GetCurrentThreadId();
- ShowWindow(app_window,SW_SHOWNOACTIVATE);UpdateWindow(app_window);app_pump();
+ /* The window is brought to the front: until it is the active window, the game reads no keys and no controllers
+  * (WM_ACTIVATEAPP). Not with AC_IGNORE_FOCUS=1 (unattended runs, which must not take the desktop's focus). */
+ {char v[4];DWORD n=GetEnvironmentVariableA("AC_IGNORE_FOCUS",v,sizeof(v));int quiet=n>0 && n<sizeof(v) && v[0]!='0';
+  ShowWindow(app_window,quiet ? SW_SHOWNOACTIVATE : SW_SHOW);
+  if(!quiet && !SetForegroundWindow(app_window)) {printf("[app] window not brought to the front\n");fflush(stdout);}}
+ UpdateWindow(app_window);app_pump();
  app_set_focus(IsIconic(app_window) ? 3 : 1);
  /* Publish initial application state even if no size transition occurred. */
  if(!app_message_count) app_enqueue(15);
