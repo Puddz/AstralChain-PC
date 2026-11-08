@@ -2955,7 +2955,7 @@ static void wb_free_old(void) {
 // shadow keeps what was last copied and a persistent host buffer the same bytes; a compute pass compares the range
 // with the shadow page by page and writes only changed pages to both. The host buffer then always holds the GPU's
 // newest bytes of the range, which is what a fence waiter on the Switch's shared memory would read as well.
-typedef struct { uint64_t addr, size, used; VkBuffer shadow; VmaAllocation shadow_mem; WbBlock *host; void *ptr; } WbDiff;
+typedef struct { uint64_t addr, size, used, seq; VkBuffer shadow; VmaAllocation shadow_mem; WbBlock *host; void *ptr; } WbDiff;
 enum { WBD_MAX = 16, WBD_MIN = 256 << 10 };
 static WbDiff wbd[WBD_MAX];
 static uint64_t wbd_clock;
@@ -3017,19 +3017,23 @@ static bool wbd_ready(void) {
     return true;
 }
 // The range's diff record, created (zeroed shadow and host copy) on first use; the least recently used one makes
-// room. Caller holds lazy_lock (the host buffer's references).
-static WbDiff *wbd_get(VkCommandBuffer cb, uint64_t addr, uint64_t size) {
-    WbDiff *d = NULL, *lru = &wbd[0];
+// room. A record already used by this submission (seq) is never the one evicted: its shadow is in this submission's
+// commands. With all of them in use (more than 16 large ranges in one submission), NULL: the range is copied whole.
+// Caller holds lazy_lock (the host buffer's references).
+static WbDiff *wbd_get(VkCommandBuffer cb, uint64_t addr, uint64_t size, uint64_t seq) {
+    WbDiff *d = NULL, *lru = NULL;
     for (int i = 0; i < WBD_MAX; i++) {
         if (wbd[i].host && wbd[i].addr == addr && wbd[i].size == size) { d = &wbd[i]; break; }
-        if (!wbd[i].host) { lru = &wbd[i]; break; }
-        if (wbd[i].used < lru->used) lru = &wbd[i];
+        if (!wbd[i].host) { if (!lru || lru->host) lru = &wbd[i]; continue; }
+        if (wbd[i].seq == seq) continue;
+        if (!lru || (lru->host && wbd[i].used < lru->used)) lru = &wbd[i];
     }
     if (!d) {
+        if (!lru) return NULL;
         d = lru;
-        if (d->host) {  // (earlier submissions may still use the shadow: freed once they are done)
-            if (wb_nold == 8) { pthread_mutex_unlock(&lazy_lock); vk_wait_seq(vk_pending_seq() - 1); pthread_mutex_lock(&lazy_lock); wb_free_old(); }
-            wb_old[wb_nold].buf = d->shadow; wb_old[wb_nold].mem = d->shadow_mem; wb_old[wb_nold++].seq = vk_pending_seq() - 1;
+        if (d->host) {  // (earlier submissions, the last of them d->seq, may still use the shadow: freed once done)
+            if (wb_nold == 8) { pthread_mutex_unlock(&lazy_lock); vk_wait_seq(d->seq); pthread_mutex_lock(&lazy_lock); wb_free_old(); }
+            wb_old[wb_nold].buf = d->shadow; wb_old[wb_nold].mem = d->shadow_mem; wb_old[wb_nold++].seq = d->seq;
             wb_release(VK_NULL_HANDLE, VK_NULL_HANDLE, d->host);
             memset(d, 0, sizeof *d);
         }
@@ -3056,6 +3060,7 @@ static WbDiff *wbd_get(VkCommandBuffer cb, uint64_t addr, uint64_t size) {
         d->host = h; d->ptr = info.pMappedData; d->addr = addr; d->size = size;
     }
     d->used = ++wbd_clock;
+    d->seq = seq;
     return d;
 }
 static void gmem_wb_record(VkCommandBuffer cb, uint64_t seq) {
@@ -3074,7 +3079,7 @@ static void gmem_wb_record(VkCommandBuffer cb, uint64_t seq) {
         pthread_mutex_lock(&lazy_lock);
         for (int i = 0; i < wb_npend; i++) {
             GmemWb *w = &wb_pending[i];
-            WbDiff *d = w->size >= WBD_MIN && !(w->size & 3) && !(w->addr & 3) ? wbd_get(cb, w->addr, w->size) : NULL;
+            WbDiff *d = w->size >= WBD_MIN && !(w->size & 3) && !(w->addr & 3) ? wbd_get(cb, w->addr, w->size, seq) : NULL;
             if (!d) { wb_pending[k++] = *w; continue; }
             uint64_t src = w->addr - HEAP_BASE, bound = src & ~(align - 1);
             VkDescriptorSet ds = vk_alloc_set(wbd_set_layout);
