@@ -70,6 +70,10 @@ static void save_filesystem_dispatch(unsigned session,uint8_t *buffer,const IpcR
 }
 
 static void save_file_release(HANDLE *file) {
+ if(*file) {
+  DWORD error=save_flush_written(*file);  /* (written: made durable before closing, save_fs.h) */
+  if(error) printf("SAVE flush on close win32=%lu\n",error);
+ }
  if(*file && !CloseHandle(*file))boundary("save-file-close",&state,state.pc);
  *file=NULL;
 }
