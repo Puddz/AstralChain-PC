@@ -66,7 +66,7 @@ std::vector<Opt> opts = {
     {"upscaler", "Display", "Upscaling (experimental)", "Only when the window is larger than the picture.",
      CHOICE, "off", "off|Smooth (default);fsr1|AMD FSR 1", 0, 0, true},
     {"fsr_sharpness", "Display", "FSR 1 sharpening", nullptr, CHOICE, "0.2", "0|Strong;0.2|Normal (default);0.5|Light;1|Very light", 0, 0, true},
-    {"title_credit", "Display", "Show \"Port by Puddz\" on the title screen", nullptr, CHECK, "0", nullptr, 0, 0, true},
+    {"port_credit", "Display", "Show \"Port by Puddz\" on the title screen", nullptr, CHECK, "1", nullptr, 0, 0, true},
     {"title_own_twin", "Display", "Title screen shows the twin you play as",
      "The game shows the other twin. From the next time the title screen appears.", CHECK, "0", nullptr, 0, 0, true},
     {"handheld", "Display", "Handheld mode: render at 1280x720", "For GPUs that cannot hold 60 fps.", CHECK, "0", nullptr, 0, 0, false},
@@ -105,7 +105,7 @@ void read_session() {
         else if (k == "cutscene_fps_30") v = env("AC_CUTSCENE_FPS") == "30" ? "1" : "0";
         else if (k == "ignore_focus") { std::string e = env("AC_IGNORE_FOCUS"); v = !e.empty() && e != "0" ? "1" : "0"; }
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
-        else if (k == "title_credit") v = env("AC_TITLE_CREDIT") == "1" ? "1" : "0";
+        else if (k == "port_credit") v = env("AC_TITLE_CREDIT") == "0" ? "0" : "1";
         else if (k == "title_own_twin") v = env("AC_TITLE_OWN_TWIN") == "1" ? "1" : "0";
         o.value = v;
     }
@@ -325,14 +325,14 @@ void draw(float scale) {
     ImGui::End();
 }
 
-// "Port by Puddz" on the title screen (AC_TITLE_CREDIT, or the menu's option): drawn while the game streams one of
+// "Port by Puddz" on the title screen (on by default; AC_TITLE_CREDIT=0 or the menu's option turns it off): drawn while the game streams one of
 // the title-screen videos (romfs_storage.h), above the version number in the bottom right corner of the picture.
 // The picture keeps 16:9 inside the window (device.c), so the place is worked out in that rectangle.
 const char *const credit_text = "Port by Puddz";
 ULONGLONG credit_since;  // when the title was first seen this time (fade-in)
 
 bool credit_due(ULONGLONG now) {
-    if (ac_title_credit < 0) ac_title_credit = env("AC_TITLE_CREDIT") == "1";
+    if (ac_title_credit < 0) ac_title_credit = env("AC_TITLE_CREDIT") != "0";
     unsigned long long seen = ac_title_video_tick;
     bool due = ac_title_credit && seen && now - seen < 2000;
     if (!due) credit_since = 0;
