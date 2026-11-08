@@ -98,6 +98,10 @@ namespace AstralChainLauncher
             Add("title_credit", "Display", "Show \"Port by Puddz\" on the title screen",
                 "A small credit above the version number while the title screen shows. Also in the in-game menu (F1).",
                 OptKind.Check, "0", OptTarget.Game, When("1", "AC_TITLE_CREDIT=1"));
+            Add("title_own_twin", "Display", "Title screen shows the twin you play as",
+                "The title screen shows a twin standing on a roof. The game picks the twin you did not choose (from " +
+                "your newest save); with this on it shows the one you play as. Also in the in-game menu (F1).",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_TITLE_OWN_TWIN=1"));
             var present = Add("present", "Display", "Presentation mode",
                 "Mailbox: no tearing, the game paces itself (default). Vsync (FIFO): waits for the display, can slow " +
                 "the game when the desktop is busy. Immediate: tearing, lowest latency.", OptKind.Choice, "mailbox",
