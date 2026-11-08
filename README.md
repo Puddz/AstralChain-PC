@@ -37,6 +37,21 @@ Known issues are listed under [Known issues](#known-issues).
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-08**
+
+- **Title screen** (*not yet confirmed in play*): **"Port by Puddz"** above the version number (on by default;
+  **Settings > Display**, or the in-game menu, turns it off), and an option for the twin on the roof: the game shows
+  the twin you did *not* choose; **Settings > Display > Title screen shows the twin you play as** (off by default)
+  shows yours. See *Title screen* under [Playing](#playing).
+- **All the settings explained** in one place: [docs/settings.md](docs/settings.md).
+- **The game window comes to the front when it opens** (issue #15; *not yet confirmed*): the game reads keys and
+  controllers only while its window is the active one, and it used to open without asking to be (a controller doing
+  nothing until a click; in fullscreen, no start prompt).
+- **Installing works when Python cannot check a download's certificate** (issue #16; *not yet confirmed*): setup
+  then downloads its tools with Windows' own downloader (each still checked against its SHA-256).
+- **Saves are flushed to disk** when the game closes a save file and when it commits, and **save backups are kept only
+  when complete** (*not yet confirmed*).
+
 **2026-11-06**
 
 - **Smaller render sizes for slow GPUs** (this branch; issue #4): 1280x720, 960x540 and 854x480 in **Render
@@ -255,7 +270,7 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 | **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
 | **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
 | **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
-| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, presentation mode, handheld mode (1280x720), render resolution and upscaling (see [Experimental options](#experimental-options-this-branch)), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window |
+| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, the title screen options, presentation mode, handheld mode (1280x720), render resolution and upscaling (see [Experimental options](#experimental-options-this-branch)), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window and in [docs/settings.md](docs/settings.md) |
 | **Controls** | The keyboard keys for every button, stick direction and the D-pad. Click a key, then press the new one; a key already in use swaps places |
 | **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
 
@@ -288,6 +303,11 @@ the settings menu over the game; the game pauses while it is open. Esc, F1 or Mi
 need a restart say so. The menu saves to the same settings file as the launcher.
 
 F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
+
+**Title screen.** The scene behind the title is a video of one of the twins on a roof, in the outfit of your newest
+save. The game shows the twin you did **not** choose (your sibling); **Settings > Display > Title screen shows the twin
+you play as** (or the in-game menu) shows yours instead, from the next time the title screen appears. Your save is not
+changed. A small **"Port by Puddz"** shows above the version number; the same Display settings turn it off.
 
 ### Experimental options (this branch)
 
@@ -392,6 +412,7 @@ happens, then attach the zip that **Create report** makes. Otherwise include `bu
 
 ## Documentation
 
+- [Settings](docs/settings.md): what every setting does
 - [How it works](docs/how-it-works.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Development notes](docs/development.md)
