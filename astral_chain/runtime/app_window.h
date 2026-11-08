@@ -130,6 +130,7 @@ void ac_setting_apply(const char *key,const char *value) {
  else if(!strcmp(key,"upscaler")) ac_upscaler=value && !strcmp(value,"fsr1");
  else if(!strcmp(key,"fsr_sharpness")) {float s=(float)atof(value);if(s>=0 && s<=2) ac_fsr_sharpness=s;}
  else if(!strcmp(key,"uncapped")) ac_uncapped=on;
+ else if(!strcmp(key,"title_credit")) ac_title_credit=on;
  else if(!strcmp(key,"fullscreen")) {if(app_window) PostMessageW(app_window,WM_AC_FULLSCREEN,on,0);}
  else return;
  printf("[menu] %s=%s\n",key,value ? value : "");fflush(stdout);
