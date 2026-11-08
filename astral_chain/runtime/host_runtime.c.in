@@ -552,6 +552,18 @@ void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
 int cutscene_mode;  /* (presented at 30 FPS) */
 static unsigned cut_ends;static double cut_carried;  /* (svc #0xB2, reported at a cutscene's end) */
 static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
+ if(imm==0xB4) {
+  /* svc #0xB4 (astral_chain/patches/title-twin-1.0.1.pchtxt): the title video selector loads the player's twin
+   * (0 male, 1 female). The game shows the other twin; AC_TITLE_OWN_TWIN=1 (live: ac_title_own_twin) swaps 0 and 1
+   * here, so the title shows the twin the player plays as. */
+  if(pc-0x7000010000ull!=0x6F62F0) boundary("title-twin-site",&state,pc);
+  uint32_t twin;memcpy(&twin,(void*)(uintptr_t)(c->x[8]+c->x[9]),4);
+  if(ac_title_own_twin<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_TITLE_OWN_TWIN",v,sizeof(v));ac_title_own_twin=n==1 && v[0]=='1';}
+  uint32_t passed=ac_title_own_twin && twin<=1 ? twin^1 : twin;
+  printf("[title] player twin %u, passed to the title video selector: %u\n",twin,passed);fflush(stdout);
+  c->x[21]=passed;
+  return;
+ }
  if(imm==0xB1) {
   static int at30=-1;
   static float debt;  /* real time the cutscene picture is behind, in 30 FPS frames */

@@ -22,6 +22,7 @@ volatile int ac_ignore_focus=-1;  /* AC_IGNORE_FOCUS=1 */
 volatile int ac_uncapped=-1;      /* AC_UNCAPPED=1: no 60 FPS pacing in gameplay (nvn_hle.h nvn_present_pace) */
 volatile int ac_in_cutscene;      /* (svc #0xB1: the game reports its cutscene mode each frame) */
 volatile int ac_title_credit=-1;  /* AC_TITLE_CREDIT=1: "Port by Puddz" on the title screen (las/menu.cpp) */
+volatile int ac_title_own_twin=-1;  /* AC_TITLE_OWN_TWIN=1: the title shows the player's twin (svc #0xB4) */
 
 int ac_prompt_parse(const char *v) {
  if(!v || !*v || !strcmp(v,"auto")) return 0;

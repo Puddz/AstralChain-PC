@@ -60,6 +60,8 @@ std::vector<Opt> opts = {
     {"mouse_invert", "Controls", "Invert mouse up and down", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"fullscreen", "Display", "Fullscreen", "Also F11 or Alt+Enter. The game starts the way you leave it.", CHECK, "0", nullptr, 0, 0, true},
     {"title_credit", "Display", "Show \"Port by Puddz\" on the title screen", nullptr, CHECK, "0", nullptr, 0, 0, true},
+    {"title_own_twin", "Display", "Title screen shows the twin you play as",
+     "The game shows the other twin. From the next time the title screen appears.", CHECK, "0", nullptr, 0, 0, true},
     {"handheld", "Display", "Handheld mode: render at 1280x720", "For GPUs that cannot hold 60 fps.", CHECK, "0", nullptr, 0, 0, false},
     {"present", "Display", "Presentation mode", "Mailbox: no tearing. Vsync: waits for the display. Immediate: tearing, lowest latency.",
      CHOICE, "mailbox", "mailbox|Mailbox (default);fifo|Vsync (FIFO);immediate|Immediate", 0, 0, false},
@@ -94,6 +96,7 @@ void read_session() {
         else if (k == "ignore_focus") { std::string e = env("AC_IGNORE_FOCUS"); v = !e.empty() && e != "0" ? "1" : "0"; }
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
         else if (k == "title_credit") v = env("AC_TITLE_CREDIT") == "1" ? "1" : "0";
+        else if (k == "title_own_twin") v = env("AC_TITLE_OWN_TWIN") == "1" ? "1" : "0";
         o.value = v;
     }
 }

@@ -1,0 +1,15 @@
+@nsobid-4B159F0F7A360669738390EE8657B4F0
+// Astral Chain v1.0.1: which twin stands on the title screen (svc #0xB4, host_runtime.c.in).
+//
+// The title scene is a video (movie/ev%04x.bk2) the game picks from the newest save (main+0x6F6280): one set
+// (ev0xxx) shows the female twin, the other (ev5xxx) the male twin, and the game picks by the save's player twin
+// (0 male, 1 female; at +0x8ED00 of the slot record) so that the twin the player did NOT choose is shown. With
+// AC_TITLE_OWN_TWIN=1 (launcher, in-game menu) the runtime hands the selector the other value, and the title shows the
+// twin the player plays as. Only this load is changed: the save and everything else read the real value.
+
+@flag offset_shift 0x100
+
+@enabled
+// main+0x6F6280: the title event from the newest save
+006F62F0 811600D4 // svc #0xB4: w21 = [x8+x9], the player's twin (was ldr w21,[x8,x9])
+@stop
