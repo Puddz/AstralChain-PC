@@ -166,15 +166,18 @@ static void write_job(Job *j) {
     put32(f, j->dxgi); put32(f, 3);  // TEXTURE2D
     put32(f, j->cube ? 0x4 : 0); put32(f, j->cube ? j->layers / 6 : j->layers); put32(f, 0);
     // data: per layer, per level (as queued); ASTC decoded, RGB8 expanded
+    // (a level that cannot be written, or a failed close, rejects the whole file: a short DDS would be kept forever)
     const uint8_t *p = j->data;
-    for (uint32_t layer = 0; layer < j->layers; layer++)
-        for (uint32_t lv = 0; lv < j->levels; lv++) {
+    bool failed = false;
+    for (uint32_t layer = 0; layer < j->layers && !failed; layer++)
+        for (uint32_t lv = 0; lv < j->levels && !failed; lv++) {
             uint32_t w = j->w >> lv ? j->w >> lv : 1, h = j->h >> lv ? j->h >> lv : 1;
             uint32_t wb = (w + j->bw - 1) / j->bw, hb = (h + j->bh - 1) / j->bh;
             uint64_t n = (uint64_t)wb * hb * j->bpb;
             if (j->astc) {
                 uint8_t *rgba = malloc((uint64_t)w * h * 4);
-                if (rgba) { astc_decode_ldr(p, w, h, j->bw, j->bh, j->nvn_format >= 0x87, rgba); fwrite(rgba, 4, (size_t)w * h, f); free(rgba); }
+                if (!rgba) { failed = true; break; }
+                astc_decode_ldr(p, w, h, j->bw, j->bh, j->nvn_format >= 0x87, rgba); fwrite(rgba, 4, (size_t)w * h, f); free(rgba);
             } else if (j->expand3) {
                 for (uint64_t i = 0; i < (uint64_t)wb * hb; i++) { fwrite(p + i * 3, 1, 3, f); fputc(255, f); }
             } else {
@@ -183,8 +186,8 @@ static void write_job(Job *j) {
             p += n;
         }
     long sz = ftell(f);
-    bool ok = !ferror(f);
-    fclose(f);
+    bool ok = !failed && !ferror(f);
+    if (fclose(f) != 0) ok = false;
     if (!ok || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING)) { DeleteFileA(tmp); return; }
     n_written++; bytes_written += sz > 0 ? (uint64_t)sz : 0;
     char csv[MAX_PATH + 16];
