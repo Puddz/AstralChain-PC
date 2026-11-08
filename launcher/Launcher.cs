@@ -95,9 +95,10 @@ namespace AstralChainLauncher
                 "The game window covers the whole screen, without borders (the display mode is not changed). " +
                 "F11 or Alt+Enter switches between fullscreen and a window at any time.",
                 OptKind.Check, "0", OptTarget.Game, When("1", "AC_FULLSCREEN=1"));
-            Add("title_credit", "Display", "Show \"Port by Puddz\" on the title screen",
-                "A small credit above the version number while the title screen shows. Also in the in-game menu (F1).",
-                OptKind.Check, "0", OptTarget.Game, When("1", "AC_TITLE_CREDIT=1"));
+            Add("port_credit", "Display", "Show \"Port by Puddz\" on the title screen",
+                "A small credit above the version number while the title screen shows (on by default). Also in the " +
+                "in-game menu (F1).",
+                OptKind.Check, "1", OptTarget.Game, When("0", "AC_TITLE_CREDIT=0"));
             Add("title_own_twin", "Display", "Title screen shows the twin you play as",
                 "The title screen shows a twin standing on a roof. The game picks the twin you did not choose (from " +
                 "your newest save); with this on it shows the one you play as. Also in the in-game menu (F1).",

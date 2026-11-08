@@ -18,7 +18,7 @@ static void romfs_open(void) {
  boundary("missing-romfs-image",&state,state.pc);
 #endif
 }
-/* The title screen (the "Port by" credit, AC_TITLE_CREDIT; title-screen branch): its scene, the twin of the newest save standing on a
+/* The title screen (the "Port by Puddz" credit, las/menu.cpp): its scene, the twin of the newest save standing on a
  * roof, is a Bink video the game streams from the RomFS while it shows (movie/ev%04x.bk2; the game picks the event
  * from the newest save: main+0x6F6280; ev0000, a turning cube, when there is no save). A read inside one of those files marks the title as showing (las/menu.cpp
  * draws the credit while the last one is under 2 s old). The file table is read once to find their extents. */
