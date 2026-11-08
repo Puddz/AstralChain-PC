@@ -21,6 +21,7 @@ volatile int ac_cutscene_30=-1;   /* AC_CUTSCENE_FPS=30, from the next cutscene 
 volatile int ac_ignore_focus=-1;  /* AC_IGNORE_FOCUS=1 */
 volatile int ac_uncapped=-1;      /* AC_UNCAPPED=1: no 60 FPS pacing in gameplay (nvn_hle.h nvn_present_pace) */
 volatile int ac_in_cutscene;      /* (svc #0xB1: the game reports its cutscene mode each frame) */
+volatile int ac_title_credit=-1;  /* AC_TITLE_CREDIT=1: "Port by Puddz" on the title screen (las/menu.cpp) */
 
 int ac_prompt_parse(const char *v) {
  if(!v || !*v || !strcmp(v,"auto")) return 0;

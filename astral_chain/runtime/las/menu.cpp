@@ -10,6 +10,7 @@
 // once where the runtime can (ac_setting_apply), else at the next start, and saved to userdata\launcher.ini, the
 // launcher's own file (AC_SETTINGS_FILE overrides the path; tests use it).
 #include <windows.h>
+#include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,8 @@ struct AcMenuEvent { int kind, a, b; };
 extern AcMenuEvent ac_menu_events[256];
 extern volatile long ac_menu_head, ac_menu_tail;
 extern volatile long ac_menu_pad_buttons, ac_menu_pad_lx, ac_menu_pad_ly;
+extern volatile int ac_title_credit;                     // (live_settings.h)
+extern volatile unsigned long long ac_title_video_tick;  // (romfs_storage.h: last read of a title-screen video)
 void ac_setting_apply(const char *key, const char *value);
 int ac_fullscreen_state(void);
 }
@@ -56,6 +59,7 @@ std::vector<Opt> opts = {
     {"mouse_sens", "Controls", "Mouse camera sensitivity (%)", nullptr, NUMBER, "100", nullptr, 10, 500, true},
     {"mouse_invert", "Controls", "Invert mouse up and down", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"fullscreen", "Display", "Fullscreen", "Also F11 or Alt+Enter. The game starts the way you leave it.", CHECK, "0", nullptr, 0, 0, true},
+    {"title_credit", "Display", "Show \"Port by Puddz\" on the title screen", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"handheld", "Display", "Handheld mode: render at 1280x720", "For GPUs that cannot hold 60 fps.", CHECK, "0", nullptr, 0, 0, false},
     {"present", "Display", "Presentation mode", "Mailbox: no tearing. Vsync: waits for the display. Immediate: tearing, lowest latency.",
      CHOICE, "mailbox", "mailbox|Mailbox (default);fifo|Vsync (FIFO);immediate|Immediate", 0, 0, false},
@@ -89,6 +93,7 @@ void read_session() {
         else if (k == "cutscene_fps_30") v = env("AC_CUTSCENE_FPS") == "30" ? "1" : "0";
         else if (k == "ignore_focus") { std::string e = env("AC_IGNORE_FOCUS"); v = !e.empty() && e != "0" ? "1" : "0"; }
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
+        else if (k == "title_credit") v = env("AC_TITLE_CREDIT") == "1" ? "1" : "0";
         o.value = v;
     }
 }
@@ -307,16 +312,63 @@ void draw(float scale) {
     ImGui::End();
 }
 
+// "Port by Puddz" on the title screen (AC_TITLE_CREDIT, or the menu's option): drawn while the game streams one of
+// the title-screen videos (romfs_storage.h), above the version number in the bottom right corner of the picture.
+// The picture keeps 16:9 inside the window (device.c), so the place is worked out in that rectangle.
+const char *const credit_text = "Port by Puddz";
+ULONGLONG credit_since;  // when the title was first seen this time (fade-in)
+
+bool credit_due(ULONGLONG now) {
+    if (ac_title_credit < 0) ac_title_credit = env("AC_TITLE_CREDIT") == "1";
+    unsigned long long seen = ac_title_video_tick;
+    bool due = ac_title_credit && seen && now - seen < 2000;
+    if (!due) credit_since = 0;
+    else if (!credit_since) credit_since = now;
+    return due;
+}
+
+void draw_credit(float w, float h, ULONGLONG now) {
+    float gw = w, gh = w * 9 / 16;
+    if (gh > h) { gh = h; gw = h * 16 / 9; }
+    float x0 = (w - gw) / 2, y0 = (h - gh) / 2;
+    float size = gh * 0.03f;
+    ImFont *f = font ? font : ImGui::GetFont();
+    ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0, credit_text);
+    ImVec2 pos(x0 + gw * 0.966f - ts.x, y0 + gh * 0.91f - ts.y);
+    float a = (float)(now - credit_since) / 600.0f;
+    if (a > 1) a = 1;
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    float off = size * 0.06f > 1 ? size * 0.06f : 1;
+    dl->AddText(f, size, ImVec2(pos.x + off, pos.y + off), ImGui::GetColorU32(ImVec4(0, 0, 0, 0.55f * a)), credit_text);
+    dl->AddText(f, size, pos, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.9f * a)), credit_text);
+}
+
 }  // namespace
 
 extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     bool open = ac_menu_open != 0;
+    ULONGLONG tick = GetTickCount64();
+    bool credit = credit_due(tick);
     if (!open) {
         if (was_open || ac_menu_head != ac_menu_tail) {  // (closed: drop what came in, let go of keys)
             InterlockedExchange(&ac_menu_tail, ac_menu_head);
             if (inited) { ImGui::SetCurrentContext(ctx); ImGui::GetIO().ClearInputKeys(); pad_last = 0; }
             was_open = false;
         }
+        if (!credit || failed) return;
+        if (!inited) {
+            if (!init()) { failed = true; return; }
+            inited = true;
+        }
+        ImGui::SetCurrentContext(ctx);
+        ImGuiIO &io = ImGui::GetIO();
+        io.DisplaySize = ImVec2((float)w, (float)h);
+        io.DeltaTime = 1.0f / 60;
+        ImGui_ImplVulkan_NewFrame();
+        ImGui::NewFrame();
+        draw_credit((float)w, (float)h, tick);
+        ImGui::Render();
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);
         return;
     }
     if (failed) return;
