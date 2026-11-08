@@ -21,8 +21,10 @@ import hashlib
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -82,6 +84,28 @@ def sha256(path):
 
 
 # ---------------------------------------------------------------------------------------------------- 1. tools
+def download(url, archive):
+    """Downloads url to archive. If Python cannot check the server's certificate (issue #16: "unable to get local
+    issuer certificate", e.g. a root certificate Windows has not fetched yet, or antivirus HTTPS scanning), the file
+    is fetched with Windows' own downloader instead (PowerShell, as get_python.ps1 fetched Python). Either way the
+    caller checks the file against its pinned SHA-256."""
+    try:
+        with urllib.request.urlopen(url, timeout=120) as response, open(archive, 'wb') as out:
+            shutil.copyfileobj(response, out)
+        return
+    except urllib.error.URLError as error:
+        if not isinstance(error.reason, ssl.SSLCertVerificationError):
+            raise
+        print(f'  Python could not check the download\'s certificate ({error.reason.verify_message}); '
+              'downloading with Windows instead', flush=True)
+    Path(archive).unlink(missing_ok=True)
+    script = ("$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; "
+              "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+              "Invoke-WebRequest $env:AC_DOWNLOAD_URL -OutFile $env:AC_DOWNLOAD_FILE -UseBasicParsing")
+    run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        env={**os.environ, 'AC_DOWNLOAD_URL': url, 'AC_DOWNLOAD_FILE': str(archive)})
+
+
 def fetch_tools():
     for name, (url, digest, prefix) in DOWNLOADS.items():
         target = TOOLS/name
@@ -90,8 +114,7 @@ def fetch_tools():
         step(f'Downloading {name}')
         TOOLS.mkdir(exist_ok=True)
         archive = TOOLS/f'{name}.zip'
-        with urllib.request.urlopen(url, timeout=120) as response, open(archive, 'wb') as out:
-            shutil.copyfileobj(response, out)
+        download(url, archive)
         if sha256(archive) != digest:
             archive.unlink()
             raise SetupError(f'{name}: the download does not match its pinned SHA-256 ({url})')
