@@ -553,16 +553,20 @@ void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
    uint64_t until=rt_ticks()+(uint64_t)(((__uint128_t)(uint64_t)ns*19200000+999999999)/1000000000);
    /* Short sleeps: the game's worker threads (guest threads 1, 2 and 18) sleep 1 ms about 1000 times a second each.
     * Sleep(1) can take up to 2 ms, so these used to be spun out with SwitchToThread: three cores always busy (issue
-    * #17: a laptop's processor at 30 W). A high-resolution waitable timer (Windows 10 1803+) sleeps until 0.25 ms
-    * before the end, the rest is yielded as before. AC_SLEEP_SPIN=1: the old spinning; no such timer: the same. */
-   static __thread HANDLE timer; static __thread int timer_tried; static int spin=-1;
-   if(spin<0) {const char*e=getenv("AC_SLEEP_SPIN");spin=e&&atoi(e)!=0;}
+    * #17: a laptop's processor at 30 W). A high-resolution waitable timer (Windows 10 1803+) sleeps until the end
+    * (it never fires early; it can end some 0.1 ms late, which these polling loops do not mind). AC_SLEEP_GUARD_US=n:
+    * wake n us before the end and yield the rest (it was 250); AC_SLEEP_SPIN=1: the old spinning; no such timer: the
+    * same. */
+   static __thread HANDLE timer; static __thread int timer_tried; static int spin=-1; static uint64_t guard;
+   if(spin<0) {const char*e=getenv("AC_SLEEP_SPIN");spin=e&&atoi(e)!=0;
+    e=getenv("AC_SLEEP_GUARD_US");guard=e&&atoi(e)>0?(uint64_t)atoi(e)*192/10:0;}
    if(!spin && !timer_tried) {timer_tried=1;timer=CreateWaitableTimerExW(NULL,NULL,0x2/*CREATE_WAITABLE_TIMER_HIGH_RESOLUTION*/,TIMER_ALL_ACCESS);}
    for(uint64_t now=rt_ticks();now<until;now=rt_ticks()) {
     uint64_t left=until-now,left_ms=left/19200;
     if(left_ms>=2) Sleep((DWORD)(left_ms-1));
-    else if(timer && left>4800) {
-     LARGE_INTEGER due;due.QuadPart=-(LONGLONG)((left-4800)*10000000/19200000);  /* (100 ns units, relative) */
+    else if(timer && left>guard) {
+     /* (100 ns units, relative; rounded up so it is never 0) */
+     LARGE_INTEGER due;due.QuadPart=-(LONGLONG)(((left-guard)*10000000+19199999)/19200000);
      if(due.QuadPart<0 && SetWaitableTimer(timer,&due,0,NULL,NULL,FALSE)) WaitForSingleObject(timer,INFINITE);
      else SwitchToThread();
     }
