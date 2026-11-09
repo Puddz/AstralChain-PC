@@ -8,6 +8,8 @@
  * (the menu says so). */
 volatile LONG ac_menu_open;                    /* 1 while the menu is up */
 volatile LONG ac_menu_close_request;           /* the menu asks to close (its button, B): app_pump closes it */
+volatile LONG ac_menu_quit_request;            /* Quit game, confirmed: app_pump closes the window, as Alt+F4 does */
+volatile LONG ac_menu_modal;                   /* 1 while the menu asks whether to quit: Esc answers it, not the menu */
 typedef struct { int kind,a,b; } AcMenuEvent;  /* kind 1 mouse move (x, y), 2 button (0 left 1 right 2 middle, down),
                                                 * 3 wheel (notches * 120, horizontal), 4 key (virtual key, down),
                                                 * 5 character (UTF-16 unit) */

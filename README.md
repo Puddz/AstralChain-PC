@@ -309,7 +309,8 @@ controller. **Button icons** in the in-game menu or the launcher's **Settings > 
 
 **In-game menu.** **F1**, or **Minus and Plus** together on a controller (Back and Start, Share and Options), opens
 the settings menu over the game; the game pauses while it is open. Esc, F1 or Minus and Plus close it. Changes that
-need a restart say so. The menu saves to the same settings file as the launcher.
+need a restart say so. The menu saves to the same settings file as the launcher. **Quit game** at the bottom of the
+menu closes the game, after asking first, so a controller alone is enough.
 
 F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
 
