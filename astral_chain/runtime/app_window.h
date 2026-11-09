@@ -192,7 +192,7 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
   hid_keys_load();
   /* F1 opens and closes the in-game menu (unless F1 is a game key); Esc closes it. While it is open, keys go to it. */
   int down=message==WM_KEYDOWN || message==WM_SYSKEYDOWN,repeat=(lparam&(1<<30))!=0;
-  if((wparam==VK_F1 && !hid_key_mapped[VK_F1]) || (ac_menu_open && wparam==VK_ESCAPE)) {
+  if((wparam==VK_F1 && !hid_key_mapped[VK_F1]) || (ac_menu_open && !ac_menu_modal && wparam==VK_ESCAPE)) {
    if(down && !repeat) menu_set_open(wparam==VK_F1 ? !ac_menu_open : 0);
    return 0;
   }
@@ -244,6 +244,7 @@ static DWORD app_window_thread;
 static void app_pump(void) {
  if(!app_window || GetCurrentThreadId()!=app_window_thread) return;
  if(ac_menu_close_request) {InterlockedExchange(&ac_menu_close_request,0);menu_set_open(0);}
+ if(ac_menu_quit_request) {InterlockedExchange(&ac_menu_quit_request,0);PostMessageW(app_window,WM_CLOSE,0,0);}
  MSG message;
  unsigned count=0;
  /* (stall reports) this runs under the kernel lock: a slow message or input read stops every guest thread. Steps over
