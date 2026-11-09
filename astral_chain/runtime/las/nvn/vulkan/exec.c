@@ -32,6 +32,16 @@ static uint32_t prof_end_line[4096];  // passes ended, by the exec.c line that e
 uint64_t prof_views_created;  // textures.c vk_image_view cache misses
 uint64_t vk_draws_total;  // (textures.c warm-up: draws per frame)
 uint64_t cum_up_ns, cum_built_ns;  // (profiling) texture upload checks, waits for pipelines: hitch log
+// A program / pipeline's build state (0 building, 1 built, 2 failed) is set here so that draws waiting in
+// wait_built wake as soon as it changes.
+static pthread_mutex_t built_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t built_cond = PTHREAD_COND_INITIALIZER;
+static void built_set(_Atomic int *state, int v) {
+    atomic_store(state, v);
+    pthread_mutex_lock(&built_lock);
+    pthread_cond_broadcast(&built_cond);
+    pthread_mutex_unlock(&built_lock);
+}
 uint64_t prof_up_ns = ~0ull;  // textures.c upload checks (~0: profiling off)
 #define PROF_T0() uint64_t prof_t0_ = prof ? SDL_GetTicksNS() : 0
 #define PROF_ADD(v) do { if (prof) v += SDL_GetTicksNS() - prof_t0_; } while (0)
@@ -1535,7 +1545,7 @@ static StageLib *gpl_stage(int stage, const uint32_t *spv, size_t n) {
     if (!sl) return NULL;
     if (build) {
         sl->lib = gpl_build_stage(stage, spv, n);
-        atomic_store(&sl->state, sl->lib ? 1 : 2);
+        built_set(&sl->state, sl->lib ? 1 : 2);
     } else {
         atomic_fetch_add(&gpl_stage_hits, 1);
         for (uint64_t t0 = SDL_GetTicksNS(); atomic_load(&sl->state) == 0 && SDL_GetTicksNS() - t0 < 3000000000ull;) SDL_Delay(1);
@@ -1621,7 +1631,7 @@ static void compile_program(void *arg) {
     uint32_t *sv = vk_glsl_to_spirv(p->vi->msl, STAGE_VERTEX, "vs", &nv);
     uint32_t *sf = sv ? vk_glsl_to_spirv(p->fi->msl, STAGE_FRAGMENT, "fs", &nf) : NULL;
     atomic_fetch_add(&build_ns_spirv, SDL_GetTicksNS() - bt0);
-    if (!sv || !sf) { free(sv); free(sf); atomic_store(&p->state, 2); return; }
+    if (!sv || !sf) { free(sv); free(sf); built_set(&p->state, 2); return; }
     p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
     p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
     p->vs = vk_module(sv, nv);
@@ -1632,7 +1642,7 @@ static void compile_program(void *arg) {
     free(sf);
     p->layout = make_layout(p, 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
     atomic_fetch_add(&stat_compiles, 1); atomic_fetch_add(&vk_pipelines_built, 1);
-    atomic_store(&p->state, p->vs && p->fs ? 1 : 2);
+    built_set(&p->state, p->vs && p->fs ? 1 : 2);
 }
 
 static void translate_program(void *arg) {
@@ -1658,12 +1668,12 @@ static void translate_program(void *arg) {
     atomic_fetch_add(&build_ns_translate, SDL_GetTicksNS() - bt0);
     if (!p->vi->msl) {
         LOG("[shader] VS translate failed: %s (code %llx)\n", p->vi->error, (unsigned long long)p->code[0]);
-        atomic_store(&p->state, 2);
+        built_set(&p->state, 2);
         return;
     }
     if (!p->fi->msl) {
         LOG("[shader] FS translate failed: %s\n", p->fi->error);
-        atomic_store(&p->state, 2);
+        built_set(&p->state, 2);
         return;
     }
     p->vs_uses_vid = strstr(p->vi->msl, "gl_VertexIndex") != NULL;
@@ -2127,7 +2137,7 @@ static VkResult create_pipeline(const PipeKey *k, VkPipeline *out) {
 static void build_pipeline(void *arg) {
     Pipe *pp = arg;
     VkResult r = create_pipeline(&pp->k, &pp->pipe);
-    atomic_store(&pp->state, r == VK_SUCCESS ? 1 : 2);
+    built_set(&pp->state, r == VK_SUCCESS ? 1 : 2);
 }
 
 // (low priority) the optimized pipeline for one that was linked from libraries
@@ -2239,7 +2249,7 @@ static bool gpl_link(Pipe *pp) {
         return false;
     }
     atomic_fetch_add(&gpl_linked, 1);
-    atomic_store(&pp->state, 1);
+    built_set(&pp->state, 1);
     run_job_low(build_pipeline_opt, pp);
     return true;
 }
@@ -3966,7 +3976,7 @@ static void build_compute(void *arg) {
     CsProg *cp = arg;
     size_t n = 0;
     uint32_t *spv = vk_glsl_to_spirv(cp->si->msl, STAGE_COMPUTE, "cs", &n);
-    if (!spv) { atomic_store(&cp->p.state, 2); return; }
+    if (!spv) { built_set(&cp->p.state, 2); return; }
     cp->p.nbinds = vk_reflect(spv, n, cp->p.binds, MAX_BIND);
     VkShaderModule m = vk_module(spv, n);
     free(spv);
@@ -3980,7 +3990,7 @@ static void build_compute(void *arg) {
                                       .layout = cp->p.layout};
     VkResult r = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &cp->pipe);
     atomic_fetch_add(&stat_compiles, 1); atomic_fetch_add(&vk_pipelines_built, 1);
-    atomic_store(&cp->p.state, r == VK_SUCCESS ? 1 : 2);
+    built_set(&cp->p.state, r == VK_SUCCESS ? 1 : 2);
     if (r != VK_SUCCESS) LOG("[compute] pipeline failed: %d\n", r);
 }
 
@@ -4005,7 +4015,7 @@ static CsProg *compute_program(NvnProgram *np) {
     cp->p.vi = cp->si;
     if (!cp->si->msl) {
         LOG("[compute] translate failed: %s (code %llx)\n", cp->si->error, (unsigned long long)ss->code_addr);
-        atomic_store(&cp->p.state, 2);
+        built_set(&cp->p.state, 2);
         return cp;
     }
     for (int i = 0; i < 3; i++) {
@@ -4028,14 +4038,31 @@ static bool skip_unbuilt(void) {
     if (skip < 0) skip = getenv("LARECOMP_SKIP_UNBUILT") != NULL;
     return skip;
 }
-// Waits poll without sleeping for the first 20 ms: a build takes ~0.1-2 ms, and Sleep(1) (1-2 ms each) made the
-// 78 new pipelines of a cutscene's first frame cost 148 ms of waiting for ~20 ms of building.
+// A build takes ~0.1-2 ms, and Sleep(1) (1-2 ms each) made the 78 new pipelines of a cutscene's first frame cost
+// 148 ms of waiting for ~20 ms of building, so the wait must end the moment the build does. It used to spin with
+// sched_yield for the first 20 ms (a core taken from the build workers it waits for); it now sleeps until built_set
+// wakes it. LARECOMP_BUILT_SPIN=1: the old spinning.
 static void wait_built(_Atomic int *state) {
     if (skip_unbuilt() || atomic_load(state) != 0) return;
+    static int spin = -1;
+    if (spin < 0) { const char *e = getenv("LARECOMP_BUILT_SPIN"); spin = e && atoi(e) != 0; }
     uint64_t t0 = SDL_GetTicksNS(), now = t0;
-    while (atomic_load(state) == 0 && now - t0 < 3000000000ull) {
-        if (now - t0 < 20000000ull) sched_yield(); else SDL_Delay(1);
-        now = SDL_GetTicksNS();
+    if (spin) {
+        while (atomic_load(state) == 0 && now - t0 < 3000000000ull) {
+            if (now - t0 < 20000000ull) sched_yield(); else SDL_Delay(1);
+            now = SDL_GetTicksNS();
+        }
+    } else {
+        pthread_mutex_lock(&built_lock);
+        while (atomic_load(state) == 0 && now - t0 < 3000000000ull) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_nsec += 50000000;  // (re-checks at least every 50 ms; built_set wakes it sooner)
+            if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+            pthread_cond_timedwait(&built_cond, &built_lock, &ts);
+            now = SDL_GetTicksNS();
+        }
+        pthread_mutex_unlock(&built_lock);
     }
     cum_built_ns += SDL_GetTicksNS() - t0;
 }
