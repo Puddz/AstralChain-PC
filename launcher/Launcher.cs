@@ -176,6 +176,11 @@ namespace AstralChainLauncher
                 "(at the next Play) and 16 GB of disk space.",
                 OptKind.Choice, "off", OptTarget.Game, v => v == "gpu" || v == "setup" ? "LARECOMP_BC7=1" : "");
             bc7.Choices = new[] { "off|Off (default)", "gpu|On: converted on the GPU", "setup|On: prepared at setup (best)" };
+            Add("heap_in_ram", "Shaders and performance", "Keep the game's memory copy in system RAM (4 GB GPUs, experimental)",
+                "For GPUs with 4 GB of video memory. The game keeps a 2.8 GB copy of the Switch's memory on the GPU; " +
+                "this keeps it in system RAM instead, leaving the video memory to textures. Some GPU work gets slower " +
+                "(it reads across PCIe), and it needs about 3 GB of free RAM. Not tested on a 4 GB GPU yet.",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_HEAP_IN_RAM=1"));
             Add("gpu_astc", "Troubleshooting", "Decode ASTC textures on the GPU",
                 "Off: textures are decoded on the CPU (slower loading). Try it if textures look wrong.",
                 OptKind.Check, "1", OptTarget.Game, When("0", "LARECOMP_GPU_ASTC=0"));
