@@ -219,6 +219,8 @@ the main version plus the options under [Experimental options](#experimental-opt
 
 - Windows 10 or 11, 64-bit.
 - A GPU with Vulkan 1.3. Developed on an NVIDIA RTX 4090; other GPUs are untested.
+  With 4 GB of video memory, turn on **Texture compression** and *Keep the game's memory copy in system RAM*
+  (Settings; experimental, see [settings](docs/settings.md#shaders-and-performance)).
 - About **35 GB** free during setup. About 11 GB stays afterwards.
 - An internet connection for the one-time setup. It downloads Python, Zig, glslang, NSTool and SDL3 at pinned
   versions, checked by SHA-256. No Python install is needed.
