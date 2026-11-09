@@ -47,7 +47,9 @@ while(-not $game.HasExited){
   if($events.Count){
     Stop-Process -Id $game.Id -Force -ErrorAction SilentlyContinue
     $e=$events[-1]
-    $reason="WATCHDOG $(Get-Date -Format s): $($events.Count) driver event(s); first: $($e.ProviderName) id $($e.Id) $($e.Message)"
+    # (nvlddmkm events have no message text; their fields say what happened, e.g. "Error occurred on GPUID: 100")
+    $text=if($e.Message){$e.Message}else{(@($e.Properties | Where-Object {$_.Value -is [string]} | ForEach-Object {$_.Value}) -join '; ')}
+    $reason="WATCHDOG $(Get-Date -Format s): $($events.Count) driver event(s); first: $($e.ProviderName) id $($e.Id) at $($e.TimeCreated.ToString('s')) $text"
     break
   }
   if(((Get-Date)-$start).TotalSeconds -ge $Seconds){
