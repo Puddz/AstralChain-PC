@@ -634,27 +634,6 @@ static int new_chunk(uint64_t size) {
 
 static void ring_retire(void) {}  // chunks are recycled lazily in vk_transient
 
-// The ring grows when one submission stages a lot (an area load, a re-created heap mirror: hundreds of MB at once)
-// and used to keep every chunk for good, in video memory on GPUs with resizable BAR. Chunks beyond RING_KEEP that no
-// submission has used for RING_IDLE submissions (several seconds) are freed when the ring moves to another chunk.
-// LARECOMP_VK_RING_KEEP_ALL=1: keep them as before; LARECOMP_VK_RING_KEEP=<n> (test): keep n instead of 4.
-#define RING_IDLE 2000
-static void ring_trim(uint64_t done, uint64_t pending) {
-    static int keep_all = -1;
-    if (keep_all < 0) { const char *e = getenv("LARECOMP_VK_RING_KEEP_ALL"); keep_all = e && atoi(e) != 0; }
-    if (keep_all) return;
-    static int keep = -1;
-    if (keep < 0) { const char *e = getenv("LARECOMP_VK_RING_KEEP"); keep = e && atoi(e) > 0 ? atoi(e) : 4; }
-    for (int i = nchunks - 1; i >= 0 && nchunks > keep; i--) {
-        Chunk *c = &chunks[i];
-        if (i == active || c->seq > done || c->seq + RING_IDLE > pending) continue;
-        ring_bytes -= c->size;
-        vmaDestroyBuffer(g_vk.vma, c->buf, c->mem);
-        chunks[i] = chunks[nchunks - 1];  // (the last one was already looked at)
-        if (active == nchunks - 1) active = i;
-        nchunks--;
-    }
-}
 
 VkSpan vk_transient(uint64_t size, uint64_t align) {
     if (align < 16) align = 16;
@@ -670,7 +649,6 @@ VkSpan vk_transient(uint64_t size, uint64_t align) {
         }
     }
     uint64_t done = vk_completed_seq();
-    ring_trim(done, pending);
     int pick = -1;
     for (int i = 0; i < nchunks; i++)
         if (i != active && chunks[i].seq <= done && chunks[i].size >= size) { pick = i; break; }
