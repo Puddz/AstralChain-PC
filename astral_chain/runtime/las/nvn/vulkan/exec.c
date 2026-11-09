@@ -605,6 +605,7 @@ VkDescriptorSet vk_alloc_set(VkDescriptorSetLayout layout) {
 typedef struct { VkBuffer buf; VmaAllocation mem; uint8_t *ptr; uint64_t size, used, seq; } Chunk;
 static Chunk *chunks;
 static int nchunks, active = -1;
+static _Atomic uint64_t ring_bytes;  // (stats line)
 
 static int new_chunk(uint64_t size) {
     chunks = realloc(chunks, (nchunks + 1) * sizeof *chunks);
@@ -621,6 +622,7 @@ static int new_chunk(uint64_t size) {
     VK_CHECK(vmaCreateBuffer(g_vk.vma, &bi, &ai, &c->buf, &c->mem, &info));
     c->ptr = info.pMappedData;
     c->size = size;
+    ring_bytes += size;
     if (!nchunks) {  // where the ring lives: device-local (resizable BAR) or system memory read across PCIe
         VkMemoryPropertyFlags f;
         vmaGetMemoryTypeProperties(g_vk.vma, info.memoryType, &f);
@@ -631,6 +633,28 @@ static int new_chunk(uint64_t size) {
 }
 
 static void ring_retire(void) {}  // chunks are recycled lazily in vk_transient
+
+// The ring grows when one submission stages a lot (an area load, a re-created heap mirror: hundreds of MB at once)
+// and used to keep every chunk for good, in video memory on GPUs with resizable BAR. Chunks beyond RING_KEEP that no
+// submission has used for RING_IDLE submissions (several seconds) are freed when the ring moves to another chunk.
+// LARECOMP_VK_RING_KEEP_ALL=1: keep them as before; LARECOMP_VK_RING_KEEP=<n> (test): keep n instead of 4.
+#define RING_IDLE 2000
+static void ring_trim(uint64_t done, uint64_t pending) {
+    static int keep_all = -1;
+    if (keep_all < 0) { const char *e = getenv("LARECOMP_VK_RING_KEEP_ALL"); keep_all = e && atoi(e) != 0; }
+    if (keep_all) return;
+    static int keep = -1;
+    if (keep < 0) { const char *e = getenv("LARECOMP_VK_RING_KEEP"); keep = e && atoi(e) > 0 ? atoi(e) : 4; }
+    for (int i = nchunks - 1; i >= 0 && nchunks > keep; i--) {
+        Chunk *c = &chunks[i];
+        if (i == active || c->seq > done || c->seq + RING_IDLE > pending) continue;
+        ring_bytes -= c->size;
+        vmaDestroyBuffer(g_vk.vma, c->buf, c->mem);
+        chunks[i] = chunks[nchunks - 1];  // (the last one was already looked at)
+        if (active == nchunks - 1) active = i;
+        nchunks--;
+    }
+}
 
 VkSpan vk_transient(uint64_t size, uint64_t align) {
     if (align < 16) align = 16;
@@ -646,6 +670,7 @@ VkSpan vk_transient(uint64_t size, uint64_t align) {
         }
     }
     uint64_t done = vk_completed_seq();
+    ring_trim(done, pending);
     int pick = -1;
     for (int i = 0; i < nchunks; i++)
         if (i != active && chunks[i].seq <= done && chunks[i].size >= size) { pick = i; break; }
@@ -956,7 +981,11 @@ const char *renderer_stats(void) {
         for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
             if (mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) used += budgets[i].statistics.allocationBytes;
         size_t n = strlen(stats_text);
-        snprintf(stats_text + n, sizeof stats_text - n, ", video memory %.0fMB", used / 1048576.0);
+        uint64_t usage = 0, budget = 0;  // (the driver's figures for the whole process, with VK_EXT_memory_budget)
+        for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
+            if (mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) { usage += budgets[i].usage; budget += budgets[i].budget; }
+        snprintf(stats_text + n, sizeof stats_text - n, ", video memory %.0fMB (driver: %.0f of %.0fMB), ring %.0fMB", used / 1048576.0,
+                 usage / 1048576.0, budget / 1048576.0, ring_bytes / 1048576.0);
         extern void vk_bc7_cache_stats(uint64_t *hits, uint64_t *misses);
         uint64_t bh, bm;
         vk_bc7_cache_stats(&bh, &bm);
