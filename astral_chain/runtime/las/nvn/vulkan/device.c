@@ -169,6 +169,9 @@ static void create_device(void) {
     bool fault = has_ext(ep, ne, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);  // device-lost diagnostics (vk_device_fault_report)
     if (fault) ext[n_ext++] = VK_EXT_DEVICE_FAULT_EXTENSION_NAME;
     g_fault_ext = fault;
+    // the driver's own video memory figures (VMA's budget, the stats line): without it VMA only estimates them
+    bool budget = has_ext(ep, ne, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    if (budget) ext[n_ext++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
     // Astral Chain: GPU faults from translated shaders took the NVIDIA driver down (bugcheck 0x119, 2026-10-19).
     // robustness2 bounds-checks buffer and image accesses (out of range reads give zero, writes are dropped) and
     // allows null descriptors, so a stray access is contained instead of faulting.
@@ -260,8 +263,10 @@ static void create_device(void) {
     vkGetDeviceQueue(g_vk.dev, g_vk.qfam, 0, &g_vk.queue);
 
     VmaAllocatorCreateInfo ai = {.physicalDevice = g_vk.phys, .device = g_vk.dev, .instance = g_vk.inst,
-                                 .vulkanApiVersion = VK_API_VERSION_1_3};
+                                 .vulkanApiVersion = VK_API_VERSION_1_3,
+                                 .flags = budget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT : 0};
     VK_CHECK(vmaCreateAllocator(&ai, &g_vk.vma));
+    LOG("[vk] memory budget extension: %s\n", budget ? "on" : "off");
 
     VkSemaphoreTypeCreateInfo st = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
                                     .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE, .initialValue = 0};
