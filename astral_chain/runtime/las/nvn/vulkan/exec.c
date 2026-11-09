@@ -2866,10 +2866,24 @@ static bool gmem_mirror(uint64_t size) {
                              .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                       VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
     VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    // ---- AC_HEAP_IN_RAM (experimental, issue #17; remove this block to undo): the mirror (2.8 GB) in system memory
+    // instead of video memory, for 4 GB GPUs, where it left too little room (an RTX 3050 Ti Laptop faulted with 3.7 GB
+    // in use). Draws and dispatches reading it in place then go across PCIe; compute copies (gfast) and the vertex cache
+    // still copy what they use into video memory.
+    static int in_ram = -1;
+    if (in_ram < 0) { const char *e = getenv("AC_HEAP_IN_RAM"); in_ram = e && atoi(e) != 0; }
+    if (in_ram) ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    // ---- (end AC_HEAP_IN_RAM)
     VkBuffer buf;
     VmaAllocation mem;
-    VkResult r = vmaCreateBuffer(g_vk.vma, &bi, &ai, &buf, &mem, NULL);
+    VmaAllocationInfo info;
+    VkResult r = vmaCreateBuffer(g_vk.vma, &bi, &ai, &buf, &mem, &info);
     if (r != VK_SUCCESS) { LOG("[vk] heap mirror: %llu MB buffer failed (%d)\n", (unsigned long long)(size >> 20), r); return false; }
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
+    LOG("[vk] heap mirror in %s (memory type %u)%s\n",
+        mp.memoryTypes[info.memoryType].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ? "video memory" : "system memory",
+        info.memoryType, in_ram ? " (AC_HEAP_IN_RAM=1)" : "");
     if (gmem_buf) {  // the heap grew: the old mirror may still be in use by submitted work
         vk_wait_seq(submit_seq);
         if (gmem_alloc) vmaDestroyBuffer(g_vk.vma, gmem_buf, gmem_alloc);
