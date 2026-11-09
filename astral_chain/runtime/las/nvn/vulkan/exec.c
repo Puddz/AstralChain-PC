@@ -2911,7 +2911,9 @@ static bool gmem_mirror(uint64_t size) {
     // still copy what they use into video memory.
     static int in_ram = -1;
     if (in_ram < 0) { const char *e = getenv("AC_HEAP_IN_RAM"); in_ram = e && atoi(e) != 0; }
-    if (in_ram) ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    // (a host-visible type: one without any property flags was still counted as video memory by the NVIDIA
+    // driver, VK_EXT_memory_budget: the driver can place such memory in either)
+    if (in_ram) { ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST; ai.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT; }
     // ---- (end AC_HEAP_IN_RAM)
     VkBuffer buf;
     VmaAllocation mem;
