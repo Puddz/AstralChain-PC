@@ -411,6 +411,8 @@ static uint64_t hid_script_buttons(uint64_t now) {
  if(mask!=last) {printf("HID script t=%.2f buttons=0x%llx\n",t,(unsigned long long)mask);last=mask;}
  return mask;
 }
+static int input_replay_sample(uint64_t now,HidSample *s);         /* (input_record.h) */
+static void input_record_sample(uint64_t now,const HidSample *s);
 static void hid_publish(uint64_t now,int focused) {
  if(!hid_page || !hid_active) return;
  unsigned connected=(hid_styles&1) && (hid_ids&1);
@@ -492,6 +494,8 @@ static void hid_publish(uint64_t now,int focused) {
   if(scripted&(1ull<<18)) sample.lx=32767;
   if(scripted&(1ull<<17)) sample.ly=32767;
   if(scripted&(1ull<<19)) sample.ly=-32767;
+  input_replay_sample(now,&sample);  /* (AC_INPUT_REPLAY, AC_INPUT_RECORD) */
+  input_record_sample(now,&sample);
  }
  {  /* (test) AC_LOG_PAD=1: the controller state the game gets, when it changes */
   static int log=-1;static uint64_t last_buttons;static int32_t last_axes[4];

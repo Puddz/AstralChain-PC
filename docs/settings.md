@@ -79,6 +79,7 @@ The keyboard keys are in the launcher's **Controls** window, not here.
 | **Shader libraries (fast pipeline linking)** | On | Off: each pipeline is compiled whole when first drawn (longer pauses). Try it if graphics break | `LARECOMP_GPL=0` turns it off |
 | **Build recorded pipelines ahead of their first draw** | On | Off: pipelines are only built when first drawn | `LARECOMP_NO_PIPE_WARM=1` turns it off |
 | **GPU hang stop (milliseconds)** | 1200 | The game stops itself if the GPU stays busy this long, before Windows would reset the driver (1000-1800) | `AC_GPU_HANG_MS=<n>` |
+| **Record controller input** | Off | Records your buttons and sticks from launch, with a copy of your save as it was at launch, so a problem you meet can be played again on another PC. Each session goes to a new folder in `userdata\saves\01007300020fa000\<user>-recordings`; zip the folder to send it. Replay: [development notes](development.md) | `AC_INPUT_RECORD=1` |
 | **Show console windows** | Off | Shows the game's console and the watchdog's window | (launcher only) |
 | **Extra environment variables** | Empty | `NAME=value;NAME=value`, passed to the game; see [development notes](development.md) | (these are the variables) |
 
