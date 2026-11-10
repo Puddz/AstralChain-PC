@@ -199,6 +199,11 @@ namespace AstralChainLauncher
                 "The game stops itself if the GPU stays busy this long, before Windows would reset the driver.",
                 OptKind.Number, "1200", OptTarget.Game, v => v == "1200" ? "" : "AC_GPU_HANG_MS=" + v);
             hang.Min = 1000; hang.Max = 1800;
+            Add("record_input", "Troubleshooting", "Record controller input",
+                "Records your buttons and sticks from launch, with a copy of your save as it was, so a problem can be " +
+                "played again on another PC. Each session goes to a new folder next to your save in userdata\\saves " +
+                "(the one ending in -recordings); zip that session's folder to send it.", OptKind.Check, "0",
+                OptTarget.Game, When("1", "AC_INPUT_RECORD=1"));
             Add("show_consoles", "Troubleshooting", "Show console windows",
                 "Shows the game's console and the watchdog's window, as the .cmd launchers do.", OptKind.Check, "0",
                 OptTarget.Launcher, null);
