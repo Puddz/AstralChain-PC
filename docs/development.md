@@ -29,6 +29,17 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
   sample. `python -m astral_chain.input_scripts highway|explore <s>|wander <s>` prints ready-made scripts.
   - Mask bits: A `0x1`, B `0x2`, ZL `0x100`, ZR `0x200`, + `0x400`, D-pad left/up/right/down `0x1000-0x8000`.
   - Left stick bits: left/up/right/down `0x10000-0x80000`. The right stick uses `<<4` of those.
+- **Recorded input** (`runtime/input_record.h`). `AC_INPUT_RECORD=1` (launcher: *Record controller input*) records
+  what the game receives from the controller (buttons and both sticks, after keyboard, mouse and pads are combined)
+  from launch. Each session gets a folder `<save folder>-recordings\<date>_<time>` with `input.txt` and `save\data`, the
+  save as it was at launch. `AC_INPUT_RECORD=<folder>` records there instead.
+  - `AC_INPUT_REPLAY=<recording folder or input.txt>` plays it back in place of all input, then input is live again.
+    A folder with `save\data` replays from that save: it is copied to `<folder>\replay-save` on every replay (the
+    recording's copy is never written).
+  - Each change is applied at the game frame it was recorded at (`svc #0xB1` calls since the first input sample), so
+    loading times matter less. `AC_INPUT_REPLAY_CLOCK=seconds` uses the seconds instead.
+  - The game is not deterministic: a replay drifts more the longer it runs. Short recordings from a save near the
+    problem replay best.
 - **Separate data.** `AC_DATA_DIR=<folder>` replaces the build's code images (`images\`), `romfs.bin` and save
   root (`save\`). Use it to test without touching your saves. Give the real path: the save store rejects paths
   through junctions or `subst` drives.

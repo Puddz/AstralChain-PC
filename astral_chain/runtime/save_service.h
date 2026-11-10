@@ -8,7 +8,10 @@ static SaveStore application_save;
 static const wchar_t application_save_root[]=SAVE_ROOT_UNITS;
 static const uint8_t application_save_identity[64]=SAVE_IDENTITY_BYTES;
 /* AC_DATA_DIR\save replaces the build's save root (portable test bundles). */
+static const wchar_t *input_replay_save_root(void);  /* (input_record.h: AC_INPUT_REPLAY of a recording with a save) */
 static const wchar_t *application_save_path(void) {
+ const wchar_t *replay=input_replay_save_root();
+ if(replay) return replay;
  static wchar_t moved[221];DWORD n=GetEnvironmentVariableW(L"AC_DATA_DIR",moved,215);
  return n && n<215 ? wcscat(moved,L"\\save") : application_save_root;
 }

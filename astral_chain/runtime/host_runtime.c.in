@@ -537,6 +537,7 @@ static void reply_wide_value(uint8_t *buffer,const IpcRequest *request,uint64_t 
 #include "time_zone_service.h"
 #include "account_service.h"
 #include "save_service.h"
+#include "input_record.h"
 static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc);
 static unsigned test_stall_ms;  /* (AC_CUTSCENE_STALL) slept after the kernel lock is released */
 /* Parallel mode: supervisor calls run under the kernel lock; any state change may wake other guest threads; a call
@@ -615,6 +616,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   return;
  }
  if(imm==0xB1) {
+  ac_game_steps++;
   static int at30=-1;
   static float debt;  /* real time the cutscene picture is behind, in 30 FPS frames */
   static int was;

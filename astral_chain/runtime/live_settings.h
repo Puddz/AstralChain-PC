@@ -23,6 +23,7 @@ volatile int ac_upscaler=-1;      /* AC_UPSCALER=fsr1 (las/nvn/vulkan/exec.c pos
 volatile float ac_fsr_sharpness=-1;  /* AC_FSR_SHARPNESS */
 volatile int ac_uncapped=-1;      /* AC_UNCAPPED=1: no 60 FPS pacing in gameplay (nvn_hle.h nvn_present_pace) */
 volatile int ac_in_cutscene;      /* (svc #0xB1: the game reports its cutscene mode each frame) */
+volatile LONG ac_game_steps;      /* (svc #0xB1 calls: game frames, for input recordings, input_record.h) */
 volatile int ac_fps_counter=-1;  /* AC_FPS_COUNTER=1: frames per second in the corner (las/menu.cpp) */
 volatile int ac_title_credit=-1;  /* "Port by Puddz" on the title screen (las/menu.cpp); AC_TITLE_CREDIT=0: off */
 volatile int ac_title_own_twin=-1;  /* AC_TITLE_OWN_TWIN=1: the title shows the player's twin (svc #0xB4) */
