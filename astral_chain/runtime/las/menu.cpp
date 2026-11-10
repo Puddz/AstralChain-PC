@@ -30,6 +30,7 @@ extern AcMenuEvent ac_menu_events[256];
 extern volatile long ac_menu_head, ac_menu_tail;
 extern volatile long ac_menu_pad_buttons, ac_menu_pad_lx, ac_menu_pad_ly;
 extern volatile int ac_title_credit;                     // (live_settings.h)
+extern volatile int ac_fps_counter;                      // (live_settings.h)
 extern volatile unsigned long long ac_title_video_tick;  // (romfs_storage.h: last read of a title-screen video)
 void ac_setting_apply(const char *key, const char *value);
 int ac_fullscreen_state(void);
@@ -59,6 +60,8 @@ std::vector<Opt> opts = {
     {"mouse_sens", "Controls", "Mouse camera sensitivity (%)", nullptr, NUMBER, "100", nullptr, 10, 500, true},
     {"mouse_invert", "Controls", "Invert mouse up and down", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"fullscreen", "Display", "Fullscreen", "Also F11 or Alt+Enter. The game starts the way you leave it.", CHECK, "0", nullptr, 0, 0, true},
+    {"fps_counter", "Display", "Show the frame rate", "Frames per second and the average frame time, in the top left corner.",
+     CHECK, "0", nullptr, 0, 0, true},
     {"port_credit", "Display", "Show \"Port by Puddz\" on the title screen", nullptr, CHECK, "1", nullptr, 0, 0, true},
     {"title_own_twin", "Display", "Title screen shows the twin you play as",
      "The game shows the other twin. From the next time the title screen appears.", CHECK, "0", nullptr, 0, 0, true},
@@ -96,6 +99,7 @@ void read_session() {
         else if (k == "ignore_focus") { std::string e = env("AC_IGNORE_FOCUS"); v = !e.empty() && e != "0" ? "1" : "0"; }
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
         else if (k == "port_credit") v = env("AC_TITLE_CREDIT") == "0" ? "0" : "1";
+        else if (k == "fps_counter") v = env("AC_FPS_COUNTER") == "1" ? "1" : "0";
         else if (k == "title_own_twin") v = env("AC_TITLE_OWN_TWIN") == "1" ? "1" : "0";
         o.value = v;
     }
@@ -346,19 +350,56 @@ void draw_credit(float w, float h, ULONGLONG now) {
     dl->AddText(f, size, pos, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.9f * a)), credit_text);
 }
 
+// Frame rate counter (off by default; AC_FPS_COUNTER=1 or the menu's option): frames presented per second and their
+// average time, counted here (menu_render runs once per presented frame) over half-second windows, in the top left
+// corner of the window.
+LARGE_INTEGER fps_t0, fps_freq;
+int fps_frames;
+char fps_text[48];
+
+bool fps_due(void) {
+    if (ac_fps_counter < 0) ac_fps_counter = env("AC_FPS_COUNTER") == "1";
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (!fps_freq.QuadPart) QueryPerformanceFrequency(&fps_freq);
+    if (!ac_fps_counter) { fps_t0.QuadPart = 0; fps_text[0] = 0; return false; }
+    if (!fps_t0.QuadPart) { fps_t0 = now; fps_frames = 0; return fps_text[0] != 0; }
+    fps_frames++;
+    double dt = (double)(now.QuadPart - fps_t0.QuadPart) / (double)fps_freq.QuadPart;
+    if (dt >= 0.5) {
+        snprintf(fps_text, sizeof fps_text, "%.0f fps  %.1f ms", fps_frames / dt, 1000.0 * dt / fps_frames);
+        fps_t0 = now;
+        fps_frames = 0;
+    }
+    return fps_text[0] != 0;
+}
+
+void draw_fps(float w, float h) {
+    (void)w;
+    float size = h * 0.028f;
+    if (size < 14) size = 14;
+    ImFont *f = font ? font : ImGui::GetFont();
+    ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0, fps_text);
+    float m = size * 0.5f;
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled(ImVec2(m * 0.5f, m * 0.5f), ImVec2(m * 1.5f + ts.x, m * 1.5f + ts.y), ImGui::GetColorU32(ImVec4(0, 0, 0, 0.45f)), size * 0.2f);
+    dl->AddText(f, size, ImVec2(m, m), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.95f)), fps_text);
+}
+
 }  // namespace
 
 extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     bool open = ac_menu_open != 0;
     ULONGLONG tick = GetTickCount64();
     bool credit = credit_due(tick);
+    bool fps = fps_due();
     if (!open) {
         if (was_open || ac_menu_head != ac_menu_tail) {  // (closed: drop what came in, let go of keys)
             InterlockedExchange(&ac_menu_tail, ac_menu_head);
             if (inited) { ImGui::SetCurrentContext(ctx); ImGui::GetIO().ClearInputKeys(); pad_last = 0; }
             was_open = false;
         }
-        if (!credit || failed) return;
+        if ((!credit && !fps) || failed) return;
         if (!inited) {
             if (!init()) { failed = true; return; }
             inited = true;
@@ -369,7 +410,8 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
         io.DeltaTime = 1.0f / 60;
         ImGui_ImplVulkan_NewFrame();
         ImGui::NewFrame();
-        draw_credit((float)w, (float)h, tick);
+        if (credit) draw_credit((float)w, (float)h, tick);
+        if (fps) draw_fps((float)w, (float)h);
         ImGui::Render();
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);
         return;
@@ -398,6 +440,7 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
     draw(scale);
+    if (fps) draw_fps((float)w, (float)h);
     was_open = true;
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);
