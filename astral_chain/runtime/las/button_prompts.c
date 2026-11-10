@@ -56,8 +56,10 @@ static int mouse_look = 1;
 /* The runtime's (live_settings.h): the chosen style, the device last used, mouse camera on. */
 extern volatile int ac_prompt_style, ac_prompt_device, ac_mouse_look;
 extern int ac_prompt_parse(const char *v);
+extern int ac_swap_ab_on(void);
 enum { ST_KEYBOARD = 1, ST_SWITCH = 2, ST_XBOX = 3, ST_PLAYSTATION = 4 };
 static volatile int drawn_style = ST_KEYBOARD, drawn_look = 1;  /* what texpatch_generation last reported */
+static volatile int drawn_swap;  /* (AC_SWAP_AB: the Switch's A drawn as the bottom button) */
 
 static int current_style(void) {
     if (ac_prompt_style < 0) ac_prompt_style = ac_prompt_parse(getenv("AC_PROMPTS"));
@@ -362,6 +364,7 @@ static void draw_pad_slot(Canvas *cv, const Slot *sl, int style) {
     float w = (float)cv->w, h = (float)cv->h, s = fminf(w, h), cx = w / 2, cy = h / 2, r = s * 0.49f;
     int a = sl->arg;
     bool ps = style == ST_PLAYSTATION;
+    if (drawn_swap) a = a == IB_A ? IB_B : a == IB_B ? IB_A : a;  /* (A and B swapped: each drawn as the other's button) */
     if (a == IB_A || a == IB_B || a == IB_X || a == IB_Y) {  /* a round button, its symbol cut out */
         fill_ellipse(cv, cx, cy, r, r, 255);
         if (!ps) {  /* Xbox, by position: right B, bottom A, top Y, left X */
@@ -430,13 +433,13 @@ int texpatch_identify(const void *texture) {
 }
 
 uint32_t texpatch_generation(void) {
-    int st = current_style(), look = ac_mouse_look;
-    if (st != drawn_style || look != drawn_look) {
-        drawn_style = st; drawn_look = look;
+    int st = current_style(), look = ac_mouse_look, swap = ac_swap_ab_on() != 0;
+    if (st != drawn_style || look != drawn_look || swap != drawn_swap) {
+        drawn_style = st; drawn_look = look; drawn_swap = swap;
         static const char *const names[] = {"", "keyboard and mouse", "Switch", "Xbox", "PlayStation"};
-        printf("[prompts] button icons: %s\n", names[st]);
+        printf("[prompts] button icons: %s%s\n", names[st], swap ? " (A and B swapped)" : "");
     }
-    return 1 + (uint32_t)st * 2 + (look != 0);
+    return 1 + (uint32_t)st * 2 + (look != 0) + (swap ? 100 : 0);
 }
 
 void texpatch_apply(int id, uint32_t level, uint8_t *data, uint32_t w, uint32_t h, uint32_t row) {

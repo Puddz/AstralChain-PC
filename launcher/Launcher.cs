@@ -159,6 +159,11 @@ namespace AstralChainLauncher
                 OptKind.Choice, "auto", OptTarget.Game, v => v == "auto" ? "" : "AC_PROMPTS=" + v);
             prompts.Choices = new[] { "auto|Automatic (default)", "keyboard|Keyboard and mouse", "xbox|Xbox controller",
                 "playstation|PlayStation controller", "switch|Switch controller" };
+            Add("swap_ab", "Controller", "Swap A and B",
+                "On: the bottom face button (Xbox A, PlayStation cross) confirms, talks and picks menu items, and the " +
+                "right one goes back, as on most PC games. Off: by position, as on the Switch. The button icons follow. " +
+                "Also in the game's menu (F1, or Minus and Plus on a controller).",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_SWAP_AB=1"));
             var rumble = Add("rumble", "Controller", "Rumble strength (%)",
                 "How strongly the controller rumbles when the game asks for it (Xbox pads, and the controllers that " +
                 "go through SDL3). 100 is the default, 0 turns rumble off, 200 is the strongest.",
