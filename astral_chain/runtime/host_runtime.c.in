@@ -732,6 +732,14 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
     if(custom && fw*9.0f==fh*16.0f && res_wide(w,h)) a=(float)w/(float)h;
     uint32_t ba;memcpy(&ba,&a,4);c->v[1]=ba;return;
    }
+   case 0x9A30C4:{  /* the camera's screen rectangle (was str xzr,[x8,#0x260]: x = y = 0; w1, w2 = width, height) */
+    int32_t cw=(int32_t)c->x[1],ch=(int32_t)c->x[2],rx=0,ry=0;
+    /* (the same cameras as the aspect site: 16:9 ones while AC_RESOLUTION is wider) */
+    if(custom && ch>0 && (int64_t)cw*9==(int64_t)ch*16 && res_wide(w,h)) {
+     int32_t ww=(int32_t)((int64_t)ch*w/h);rx=(cw-ww)/2;SETW(1,ww);
+    }
+    memcpy((void*)(uintptr_t)(c->x[8]+0x260),&rx,4);memcpy((void*)(uintptr_t)(c->x[8]+0x264),&ry,4);return;
+   }
   }
   #undef SETW
   boundary("svc-b3-site",c,pc);

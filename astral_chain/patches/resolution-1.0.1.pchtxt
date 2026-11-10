@@ -46,4 +46,9 @@
 // is that resolution's, so the 3D view widens (the site is the one theboy181's "21:9" mod changes, there to a fixed
 // 2.375; github.com/theboy181/switch-ptchtxt-mods). Otherwise the original width / height.
 009A30BC 611600D4 // svc #0xB3: s1 = aspect (was fdiv s1,s3,s1)
+// The camera's screen rectangle (x, y, width, height: 0, 0, 1280, 720) turns its projection into HUD positions
+// (main+0x9A31F0 world to screen, +0x9A3270 back: x = rect.x + (ndc.x + 1) * rect.width / 2). With the wider aspect
+// the rectangle is as wide as the view at the HUD's 720 height and centred on the 16:9 HUD (32:9: -640, 0, 2560,
+// 720), so markers on characters and targets stay on them instead of sitting at the 16:9 offset (issue #21).
+009A30C4 611600D4 // svc #0xB3: [x8+0x260] = rect x, y; w1 = rect width (was str xzr,[x8,#0x260])
 @stop
