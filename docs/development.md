@@ -51,6 +51,10 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
   - `LARECOMP_SCREENSHOT_EVERY=<frames>` saves `frame_N.png` in the run folder.
   - Add `LARECOMP_SCREENSHOT_FROM=<frame>` to save into `frames\` instead.
   - `LARECOMP_SHOT_AT=<frame>,...` captures specific frames.
+  - `LARECOMP_CAPTURE=<first frame>,<count>` saves every frame of a stretch as `frames/cap_N.ppm` without slowing
+    the game (for flicker that depends on timing): copied on the GPU into a ring of 32 buffers and written by a
+    background thread, at half size (`LARECOMP_CAPTURE_SCALE=<n>`: 1/n each way, default 2; about 2.7 MB a frame at
+    2560x1440). Delete the frames once measured.
 - **Pass dumps.** `LARECOMP_DEBUG_FRAME=<frame>` writes every render pass of that frame to `build\pass_NNN.png`
   (create `build\` in the run folder first) and logs each draw with its shader hashes.
   - `LARECOMP_DEBUG_EACH=1` ends the pass before every draw, so each draw's result is its own image; the log says

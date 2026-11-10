@@ -5269,20 +5269,58 @@ void renderer_save_texture_tex(TexBackend *b, const char *path) {
     vmaDestroyImage(g_vk.vma, img, mem);
 }
 
-// LARECOMP_CAPTURE=<first frame>,<count>: the game image of <count> consecutive frames from <first> on, copied on the
-// GPU into host memory without waiting for it (the game keeps its speed, unlike screenshots, which wait for each
-// frame), then written as frames/cap_N.png after the last one (one long pause there). For flicker that depends on
-// timing. Memory: width x height x 4 bytes per frame (5.8 MB at 1600x900).
+// LARECOMP_CAPTURE=<first frame>,<count>: the game image of <count> consecutive frames from <first> on, for flicker that
+// depends on timing. Each frame is drawn (scaled: LARECOMP_CAPTURE_SCALE=<n>, default 2 = half size each way) into one of
+// CAP_RING host buffers on the GPU without waiting for it; a background thread writes each one as frames/cap_N.ppm
+// (uncompressed RGB) once the GPU has finished it, so the game keeps its speed for the whole capture. When the ring is
+// full (the writer behind) the frame waits for its slot.
+#define CAP_RING 32
+static struct {
+    VkBuffer buf[CAP_RING]; VmaAllocation mem[CAP_RING]; uint8_t *ptr[CAP_RING];
+    uint64_t seq[CAP_RING], frame[CAP_RING];
+    volatile int full[CAP_RING];  // 1: copy recorded (seq set), not written yet
+    uint32_t w, h; long total, written; int stop;
+    pthread_mutex_t lock; pthread_cond_t cond;
+} cap;
+static void *cap_writer(void *arg) {
+    (void)arg;
+    uint8_t *row = NULL;
+    for (long k = 0;; k++) {
+        int s = (int)(k % CAP_RING);
+        pthread_mutex_lock(&cap.lock);
+        while (!cap.full[s] && !(cap.stop && k >= cap.total)) pthread_cond_wait(&cap.cond, &cap.lock);
+        int done = !cap.full[s];
+        pthread_mutex_unlock(&cap.lock);
+        if (done) break;
+        while (vk_completed_seq() < cap.seq[s]) SDL_Delay(1);  // (until the GPU has finished this frame)
+        vmaInvalidateAllocation(g_vk.vma, cap.mem[s], 0, VK_WHOLE_SIZE);
+        char path[64];
+        snprintf(path, sizeof path, "frames/cap_%05llu.ppm", (unsigned long long)cap.frame[s]);
+        FILE *f = fopen(path, "wb");
+        if (f) {
+            if (!row) row = malloc((size_t)cap.w * 3);
+            fprintf(f, "P6\n%u %u\n255\n", cap.w, cap.h);
+            for (uint32_t y = 0; y < cap.h; y++) {
+                const uint8_t *src = cap.ptr[s] + (uint64_t)y * cap.w * 4;
+                for (uint32_t x = 0; x < cap.w; x++) { row[x * 3] = src[x * 4]; row[x * 3 + 1] = src[x * 4 + 1]; row[x * 3 + 2] = src[x * 4 + 2]; }
+                fwrite(row, 1, (size_t)cap.w * 3, f);
+            }
+            fclose(f);
+        }
+        pthread_mutex_lock(&cap.lock);
+        cap.full[s] = 0; cap.written++;
+        pthread_cond_broadcast(&cap.cond);
+        pthread_mutex_unlock(&cap.lock);
+    }
+    free(row);
+    LOG("[capture] wrote %ld frames\n", cap.written);
+    return NULL;
+}
 void renderer_capture_tex(TexBackend *b, uint64_t frame) {
     static long first = -2, count, n;
-    static VkBuffer *buf;  // one per frame (one buffer of several GB could not be read whole)
-    static VmaAllocation *mem;
-    static uint8_t **ptr;
     static VkImage img;
     static VmaAllocation imem;
     static VkImageView tv;
-    static uint32_t w, h;
-    static uint64_t *at;
     if (first == -2) {
         const char *e = getenv("LARECOMP_CAPTURE");
         first = -1;
@@ -5294,41 +5332,49 @@ void renderer_capture_tex(TexBackend *b, uint64_t frame) {
     const float *crop = vk_shot_crop();
     vk_end_pass();
     VkCommandBuffer cb = vk_cmd();
-    if (!buf) {
-        w = (uint32_t)(b->width * crop[2]); h = (uint32_t)(b->height * crop[3]);
+    if (!tv) {
+        const char *se = getenv("LARECOMP_CAPTURE_SCALE");
+        int scale = se && atoi(se) > 0 ? atoi(se) : 2;
+        cap.w = (uint32_t)(b->width * crop[2]) / scale; cap.h = (uint32_t)(b->height * crop[3]) / scale;
         VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
-                                .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .extent = {cap.w, cap.h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
                                 .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
-        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = (uint64_t)w * h * 4,
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = (uint64_t)cap.w * cap.h * 4,
                                  .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
         VmaAllocationCreateInfo bai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
                                        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
         VmaAllocationInfo info;
-        at = calloc((size_t)count, sizeof *at);
-        buf = calloc((size_t)count, sizeof *buf);
-        mem = calloc((size_t)count, sizeof *mem);
-        ptr = calloc((size_t)count, sizeof *ptr);
-        bool ok = w && h && at && buf && mem && ptr && vmaCreateImage(g_vk.vma, &ci, &ai, &img, &imem, NULL) == VK_SUCCESS;
-        for (long i = 0; ok && i < count; i++) {
-            ok = vmaCreateBuffer(g_vk.vma, &bi, &bai, &buf[i], &mem[i], &info) == VK_SUCCESS;
-            if (ok) ptr[i] = info.pMappedData;
+        bool ok = cap.w && cap.h && vmaCreateImage(g_vk.vma, &ci, &ai, &img, &imem, NULL) == VK_SUCCESS;
+        for (int i = 0; ok && i < CAP_RING; i++) {
+            ok = vmaCreateBuffer(g_vk.vma, &bi, &bai, &cap.buf[i], &cap.mem[i], &info) == VK_SUCCESS;
+            if (ok) cap.ptr[i] = info.pMappedData;
         }
-        if (!ok) {
-            LOG("[capture] %ld frames of %ux%u: no memory for them\n", count, w, h);
-            first = -1;
-            return;
-        }
+        if (!ok) { LOG("[capture] %ux%u: no memory for the frames\n", cap.w, cap.h); first = -1; return; }
         VkImageViewCreateInfo vci = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = img, .viewType = VK_IMAGE_VIEW_TYPE_2D,
                                      .format = VK_FORMAT_R8G8B8A8_UNORM, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
         VK_CHECK(vkCreateImageView(g_vk.dev, &vci, NULL, &tv));
         vk_image_init_layout(cb, img, VK_IMAGE_ASPECT_COLOR_BIT);
-        LOG("[capture] %ld frames of %ux%u from frame %ld\n", count, w, h, first);
+        mkdir("frames", 0755);
+        pthread_mutex_init(&cap.lock, NULL); pthread_cond_init(&cap.cond, NULL);
+        cap.total = count;
+        pthread_t th; pthread_create(&th, NULL, cap_writer, NULL); pthread_detach(th);
+        LOG("[capture] %ld frames of %ux%u from frame %ld, written as they finish\n", count, cap.w, cap.h, first);
     }
+    int s = (int)(n % CAP_RING);
+    pthread_mutex_lock(&cap.lock);
+    while (cap.full[s]) {  // (the writer is behind: this frame waits for its slot)
+        pthread_mutex_unlock(&cap.lock);
+        renderer_submit();
+        pthread_mutex_lock(&cap.lock);
+        if (cap.full[s]) pthread_cond_wait(&cap.cond, &cap.lock);
+    }
+    pthread_mutex_unlock(&cap.lock);
+    cb = vk_cmd();
     vk_full_barrier(cb);
     VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = tv, .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
                                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
-    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {w, h}}, .layerCount = 1,
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {cap.w, cap.h}}, .layerCount = 1,
                           .colorAttachmentCount = 1, .pColorAttachments = &ca};
     vkCmdBeginRendering(cb, &ri);
     VkDescriptorSet ds = vk_alloc_set(present_set_layout);
@@ -5338,8 +5384,8 @@ void renderer_capture_tex(TexBackend *b, uint64_t frame) {
     vkUpdateDescriptorSets(g_vk.dev, 1, &wr, 0, NULL);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_pipeline(VK_FORMAT_R8G8B8A8_UNORM));
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_layout, 0, 1, &ds, 0, NULL);
-    VkViewport vp = {0, 0, (float)w, (float)h, 0, 1};
-    VkRect2D sc = {{0, 0}, {w, h}};
+    VkViewport vp = {0, 0, (float)cap.w, (float)cap.h, 0, 1};
+    VkRect2D sc = {{0, 0}, {cap.w, cap.h}};
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
     float pv[8] = {renderer_origin_lower_left() ? 1.0f : 0.0f, 0, 0, 0, crop[0], crop[1], crop[2], crop[3]};
@@ -5347,21 +5393,15 @@ void renderer_capture_tex(TexBackend *b, uint64_t frame) {
     vkCmdDraw(cb, 3, 1, 0, 0);
     vkCmdEndRendering(cb);
     vk_full_barrier(cb);
-    VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {w, h, 1}};
-    vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_GENERAL, buf[n], 1, &c);
+    VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {cap.w, cap.h, 1}};
+    vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_GENERAL, cap.buf[s], 1, &c);
     ss_forget();
-    at[n++] = frame;
-    if (n < count) return;
-    renderer_flush();
-    mkdir("frames", 0755);
-    for (long i = 0; i < count; i++) {
-        char path[64];
-        snprintf(path, sizeof path, "frames/cap_%05llu.png", (unsigned long long)at[i]);
-        vmaInvalidateAllocation(g_vk.vma, mem[i], 0, VK_WHOLE_SIZE);
-        vk_save_png(path, ptr[i], w, h);
-        vmaDestroyBuffer(g_vk.vma, buf[i], mem[i]);
-    }
-    LOG("[capture] wrote %ld frames (%llu to %llu)\n", count, (unsigned long long)at[0], (unsigned long long)at[count - 1]);
+    pthread_mutex_lock(&cap.lock);
+    cap.seq[s] = vk_pending_seq(); cap.frame[s] = frame; cap.full[s] = 1;
+    n++;
+    if (n >= count) cap.stop = 1;
+    pthread_cond_broadcast(&cap.cond);
+    pthread_mutex_unlock(&cap.lock);
 }
 
 // ================================================================== executor (renderer.m exec_list)
