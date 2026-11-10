@@ -4503,11 +4503,35 @@ static void draw_(CmdRec *r, bool indexed) {
             vp_oy = (ph - st.rt.color[0]->height * u) * 0.5f;
         }
     }
+    // Wider than 16:9 (AC_RESOLUTION 21:9, 32:9, 48:9; issue #22): the HUD is drawn into its own 1280x720 layer and
+    // placed in a centred 16:9 box, but some UI (subtitles outside cutscenes, the opening credits) is drawn straight
+    // into the wide picture with the game's 1280x720 2D projection, which stretched it to the full width. Those draws
+    // go in the centred 16:9 box too. The UI shaders' (uibaseshader & co.) cbuf 3 = binding 0, rows 8-9 = the projection
+    // (x: 2/1280 ... -1, y: -2/720 ... 1); cbuf 4 = binding 1, row 0 = the element's x. A quad covering the whole
+    // 1280 width (a fade or a backdrop) keeps the full width.
+    bool ui_box = false;
+    if (st.rt.ncolor && st.rt.color[0] && (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 &&
+        stage_hash(st.program, 0) == 0xa09bf88abb4a04a7ull && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 40 * 4) {
+        const float *p = (const float *)(uintptr_t)st.ubuf[0][0].addr;
+        ui_box = fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
+        if (ui_box && r->x[2] <= 6 && k.stride[0] >= 16 && st.vbuf[0].addr && st.vbuf[0].size >= 4 * k.stride[0] &&
+            st.ubuf[0][1].addr && st.ubuf[0][1].size >= 16) {
+            const float *m = (const float *)(uintptr_t)st.ubuf[0][1].addr;
+            float lo = 1e30f, hi = -1e30f;
+            for (int i = 0; i < 4; i++) {
+                const float *v = (const float *)(uintptr_t)(st.vbuf[0].addr + (uint64_t)i * k.stride[0]);
+                float x = m[0] * v[0] + m[1] * v[1] + m[2] * v[2] + m[3] * v[3];
+                lo = fminf(lo, x); hi = fmaxf(hi, x);
+            }
+            if (lo <= 0.5f && hi >= 1279.5f) ui_box = false;
+        }
+    }
     {   // camera-attached effects sized for 16:9 are widened with the view (runtime/hle/widescreen.c)
         extern float widescreen_effect_stretch(uint64_t fs_hash);
         float k = widescreen_effect_stretch(g_cur_fs_hash);
         float vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx;
         if (k > 1.0f) { vx -= vw * (k - 1) / 2; vw *= k; }
+        if (ui_box) { float bw = vp[3] * vp_sy * 16.0f / 9.0f; vx += (vw - bw) / 2; vw = bw; }
         set_viewport(vx, vp[1] * vp_sy + vp_oy, vw, vp[3] * vp_sy, zn, zf);
         if (g_debug_frame) {
             VkRect2D sr = scissor_rect();
