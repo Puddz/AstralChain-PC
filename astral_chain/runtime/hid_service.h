@@ -442,6 +442,9 @@ static void hid_publish(uint64_t now,int focused) {
   int from_xinput=HID_PAD_USED(pad);
   hid_sdl(&pad);
   int from_sdl=!from_xinput && HID_PAD_USED(pad);
+  /* A and B swapped (AC_SWAP_AB): for the game and the in-game menu alike, which both read the Switch's A as
+   * confirm. The keyboard keeps its bindings. */
+  if(ac_swap_ab_on()) pad.buttons=(pad.buttons&~3ull)|(pad.buttons&1)<<1|(pad.buttons>>1&1);
   /* Minus+Plus opens or closes the menu. Either one alone reaches the game up to 100 ms late (the other may follow);
    * a tap shorter than that is still passed on, for 50 ms. */
   const uint64_t both=3ull<<10;
@@ -473,7 +476,6 @@ static void hid_publish(uint64_t now,int focused) {
    (const char*[]){"keyboard and mouse","Xbox controller","Switch controller","PlayStation controller"}[logged&3]);}}
   if(sample.lx && sample.ly) {sample.lx=sample.lx>0 ? 23170 : -23170;sample.ly=sample.ly>0 ? 23170 : -23170;}
   if(sample.rx && sample.ry) {sample.rx=sample.rx>0 ? 23170 : -23170;sample.ry=sample.ry>0 ? 23170 : -23170;}
-  if(ac_swap_ab_on()) pad.buttons=(pad.buttons&~3ull)|(pad.buttons&1)<<1|(pad.buttons>>1&1);  /* (A and B swapped) */
   sample.buttons|=pad.buttons;  /* (each stick from the keys if they move it, else from the controllers) */
   if(!sample.lx && !sample.ly) {sample.lx=pad.lx;sample.ly=pad.ly;}
   if(!sample.rx && !sample.ry) {sample.rx=pad.rx;sample.ry=pad.ry;}
