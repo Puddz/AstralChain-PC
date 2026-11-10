@@ -408,7 +408,7 @@ int nvn_host_cpu_count(void) {SYSTEM_INFO info;GetSystemInfo(&info);return (int)
 void *nvn_host_window(void) {
  app_open();
  SetWindowTextW(app_window,L"Astral Chain (native)");
- /* 1600x900, or 1600 wide at the render resolution's aspect when that is wider than 16:9 (21:9, 32:9 AC_RESOLUTION) */
+ /* 1600x900, or 1600 wide at the render resolution's aspect when that is wider than 16:9 (21:9, 32:9, 48:9 AC_RESOLUTION) */
  res_config();
  int ch=res_wide(res_w,res_h) ? (int)(1600LL*res_h/res_w) : 900;
  RECT r={0,0,1600,ch};AdjustWindowRect(&r,WS_OVERLAPPEDWINDOW,FALSE);

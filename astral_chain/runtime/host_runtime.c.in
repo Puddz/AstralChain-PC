@@ -131,7 +131,7 @@ static void res_config(void) {
          (unsigned long long)(res_pool>>20));fflush(stdout);
  }
 }
-/* Wider than 16:9 (21:9, 32:9): by more than 1%, so 854x480 (16:9 rounded to whole pixels) is not. */
+/* Wider than 16:9 (21:9, 32:9, 48:9): by more than 1%, so 854x480 (16:9 rounded to whole pixels) is not. */
 static int res_wide(int64_t w,int64_t h) {return w*900>h*1616;}
 static uint64_t memory_budget(void) {res_config();return 3ull*1024*1024*1024+(res_pool-0x13600000ull);}
 #define MEMORY_BUDGET memory_budget()
@@ -726,7 +726,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    case 0x9A30BC:{  /* a camera's aspect (was fdiv s1,s3,s1: width / height, the game passes 1280 / 720) */
     float fw,fh;uint32_t bw=(uint32_t)c->v[3],bh=(uint32_t)c->v[1];memcpy(&fw,&bw,4);memcpy(&fh,&bh,4);
     float a=fw/fh;
-    /* AC_RESOLUTION wider than 16:9 (21:9, 32:9): 16:9 cameras take its aspect (the view widens, its height stays) */
+    /* AC_RESOLUTION wider than 16:9 (21:9, 32:9, 48:9): 16:9 cameras take its aspect (the view widens, its height stays) */
     if(custom && fw*9.0f==fh*16.0f && res_wide(w,h)) a=(float)w/(float)h;
     uint32_t ba;memcpy(&ba,&a,4);c->v[1]=ba;return;
    }

@@ -118,14 +118,15 @@ namespace AstralChainLauncher
                 "draws its 3D view at that size and scales it up (a softer picture; the HUD stays sharp), so the " +
                 "graphics card has less to do " +
                 "(a slow processor is not helped). Larger sizes are sharper and need a faster GPU; 3840x2160 is " +
-                "the largest. The 21:9 and 32:9 sizes are for ultrawide screens: the 3D view gets wider and the HUD " +
+                "the largest. The 21:9 and 32:9 sizes are for ultrawide screens, 48:9 for three screens side by side: the 3D view gets wider and the HUD " +
                 "stays 16:9 in the middle (untested on a real ultrawide monitor). Handheld mode keeps 1280x720 and ignores the sizes below it. " +
                 "Applies the next time you press Play.", OptKind.Choice,
                 "1600x900", OptTarget.Game, v => v == "1600x900" ? "" : "AC_RESOLUTION=" + v);
             resolution.Choices = new[] { "854x480|854x480 (480p)", "960x540|960x540 (540p)", "1280x720|1280x720 (720p)",
                 "1600x900|1600x900 (default)", "1920x1080|1920x1080", "2560x1440|2560x1440",
                 "3840x2160|3840x2160", "2560x1080|2560x1080 (21:9)", "3440x1440|3440x1440 (21:9)",
-                "3840x1080|3840x1080 (32:9)", "5120x1440|5120x1440 (32:9)" };
+                "3840x1080|3840x1080 (32:9)", "5120x1440|5120x1440 (32:9)",
+                "5760x1080|5760x1080 (48:9)", "7680x1440|7680x1440 (48:9, drawn at 6788x1272)" };
             var upscaler = Add("upscaler", "Display", "Upscaling (experimental)",
                 "How the picture is enlarged to a bigger window or screen. Smooth: plain scaling (default). " +
                 "AMD FSR 1: edge-aware upscaling and sharpening, crisper on 1440p and 4K screens; works on any GPU. " +
