@@ -148,7 +148,7 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 - **Setup after picking the wrong file**: once a wrong base game or update had been picked, every retry failed with
   the same "belongs to program" message. Setup now extracts again for any other file, and says which file to pick.
 - **Ultrawide render sizes** (this branch; issue #4): 2560x1080 and 3440x1440 (21:9), 3840x1080 and 5120x1440
-  (32:9). See [Experimental options](#experimental-options-this-branch). *Untested on a real ultrawide monitor.*
+  (32:9), 5760x1080 and 7680x1440 (48:9, three screens; issue #19). See [Experimental options](#experimental-options-this-branch). *Untested on a real ultrawide monitor.*
 
 **On this branch since 2026-10-23**
 
@@ -319,7 +319,7 @@ All are in **Settings > Display** and off by default; they apply the next time y
 | --- | --- |
 | **Render resolution** | The size the game draws at: 1600x900 (default, the Switch's docked size, with the game's own dynamic resolution), 1920x1080, 2560x1440 or 3840x2160, at a fixed size. Larger sizes need a faster GPU and more video memory. Measured on an RTX 4090 in the highway chase: about 60 fps at every size |
 | **Render resolution, small** | 1280x720, 960x540 or 854x480, for GPUs that cannot hold 60 fps at 1600x900. Only the 3D view is drawn at that size and scaled up by the game (softer picture); the HUD and menus stay at 1600x900. Handheld mode ignores them |
-| **Render resolution, ultrawide** | 2560x1080 or 3440x1440 (21:9), 3840x1080 or 5120x1440 (32:9). The 3D view gets wider (nothing is stretched), the HUD keeps its 16:9 layout in the middle, and the window opens at that shape; in fullscreen on an ultrawide screen the picture fills it. Checked in screenshots of the street and the opening cutscene; cutscene movies, menus and real ultrawide monitors are untested |
+| **Render resolution, ultrawide** | 2560x1080 or 3440x1440 (21:9), 3840x1080 or 5120x1440 (32:9), 5760x1080 or 7680x1440 (48:9, three screens; 7680x1440 is drawn at 6788x1272). The 3D view gets wider (nothing is stretched), the HUD keeps its 16:9 layout in the middle, and the window opens at that shape; in fullscreen on an ultrawide screen the picture fills it. Checked in screenshots of the street and the opening cutscene; cutscene movies, menus and real ultrawide monitors are untested |
 | **Upscaling** | *Smooth* (default) scales the picture to a larger window or screen; *AMD FSR 1* uses edge-aware upscaling and sharpening, crisper on 1440p and 4K screens. Works on any GPU |
 
 The resolution comes in through a code patch (`astral_chain/patches/resolution-1.0.1.pchtxt`): the game asks the

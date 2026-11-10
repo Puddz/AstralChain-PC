@@ -61,9 +61,9 @@ std::vector<Opt> opts = {
     {"mouse_invert", "Controls", "Invert mouse up and down", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"fullscreen", "Display", "Fullscreen", "Also F11 or Alt+Enter. The game starts the way you leave it.", CHECK, "0", nullptr, 0, 0, true},
     {"resolution", "Display", "Render resolution (experimental)",
-     "1600x900 is the Switch's (with its dynamic resolution). The smaller sizes are for slow GPUs; 21:9 and 32:9 for ultrawide screens.",
+     "1600x900 is the Switch's (with its dynamic resolution). The smaller sizes are for slow GPUs; 21:9 and 32:9 for ultrawide screens, 48:9 for three screens side by side.",
      CHOICE, "1600x900", "854x480|854x480 (480p);960x540|960x540 (540p);1280x720|1280x720 (720p);1600x900|1600x900 (default);1920x1080|1920x1080;2560x1440|2560x1440;3840x2160|3840x2160;"
-     "2560x1080|2560x1080 (21:9);3440x1440|3440x1440 (21:9);3840x1080|3840x1080 (32:9);5120x1440|5120x1440 (32:9)", 0, 0, false},
+     "2560x1080|2560x1080 (21:9);3440x1440|3440x1440 (21:9);3840x1080|3840x1080 (32:9);5120x1440|5120x1440 (32:9);5760x1080|5760x1080 (48:9);7680x1440|7680x1440 (48:9, drawn at 6788x1272)", 0, 0, false},
     {"upscaler", "Display", "Upscaling (experimental)", "Only when the window is larger than the picture.",
      CHOICE, "off", "off|Smooth (default);fsr1|AMD FSR 1", 0, 0, true},
     {"fsr_sharpness", "Display", "FSR 1 sharpening", nullptr, CHOICE, "0.2", "0|Strong;0.2|Normal (default);0.5|Light;1|Very light", 0, 0, true},
