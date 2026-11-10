@@ -473,6 +473,7 @@ static void hid_publish(uint64_t now,int focused) {
    (const char*[]){"keyboard and mouse","Xbox controller","Switch controller","PlayStation controller"}[logged&3]);}}
   if(sample.lx && sample.ly) {sample.lx=sample.lx>0 ? 23170 : -23170;sample.ly=sample.ly>0 ? 23170 : -23170;}
   if(sample.rx && sample.ry) {sample.rx=sample.rx>0 ? 23170 : -23170;sample.ry=sample.ry>0 ? 23170 : -23170;}
+  if(ac_swap_ab_on()) pad.buttons=(pad.buttons&~3ull)|(pad.buttons&1)<<1|(pad.buttons>>1&1);  /* (A and B swapped) */
   sample.buttons|=pad.buttons;  /* (each stick from the keys if they move it, else from the controllers) */
   if(!sample.lx && !sample.ly) {sample.lx=pad.lx;sample.ly=pad.ly;}
   if(!sample.rx && !sample.ry) {sample.rx=pad.rx;sample.ry=pad.ry;}

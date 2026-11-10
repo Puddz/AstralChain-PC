@@ -54,6 +54,9 @@ std::vector<Opt> opts = {
     {"prompts", "Controls", "Button icons in the game",
      "Automatic: the icons follow what you last used (keyboard and mouse, an Xbox, PlayStation or Switch controller).",
      CHOICE, "auto", "auto|Automatic;keyboard|Keyboard and mouse;xbox|Xbox controller;playstation|PlayStation controller;switch|Switch controller", 0, 0, true},
+    {"swap_ab", "Controls", "Swap A and B on the controller",
+     "On: the bottom button (Xbox A, PlayStation cross) confirms and talks, the right one goes back. The button icons follow.",
+     CHECK, "0", nullptr, 0, 0, true},
     {"rumble", "Controls", "Rumble strength (%)", "0 turns rumble off.", NUMBER, "100", nullptr, 0, 200, true},
     {"mouse_look", "Controls", "Mouse moves the camera", "Click in the game to give it the mouse; hold Alt to get the cursor back.",
      CHECK, "1", nullptr, 0, 0, true},
@@ -88,6 +91,7 @@ void read_session() {
         std::string k = o.key, v = o.def;
         if (k == "prompts") { std::string e = env("AC_PROMPTS"); if (!e.empty()) v = e == "0" ? "switch" : e; }
         else if (k == "rumble") { std::string e = env("AC_RUMBLE"); if (!e.empty()) v = e; }
+        else if (k == "swap_ab") v = env("AC_SWAP_AB") == "1" ? "1" : "0";
         else if (k == "mouse_look") v = env("AC_MOUSE_LOOK") == "0" ? "0" : "1";
         else if (k == "mouse_sens") { std::string e = env("AC_MOUSE_SENS"); if (!e.empty()) v = e; }
         else if (k == "mouse_invert") v = env("AC_MOUSE_INVERT") == "1" ? "1" : "0";
