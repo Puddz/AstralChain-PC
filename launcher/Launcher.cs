@@ -432,7 +432,28 @@ namespace AstralChainLauncher
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
-            BackgroundImage = Theme.Backdrop(art, ClientSize, ClientSize.Width / 1120f);
+            using (var g = CreateGraphics()) backdropScale = g.DpiX / 96f;
+            MakeBackdrop();
+        }
+
+        // The backdrop is made for the window's size. If the window changes size after it opens (Windows can enlarge
+        // it, e.g. on a handheld), it is made again: a smaller one would be tiled. The title keeps the DPI's scale,
+        // so it stays in line with the controls.
+        float backdropScale = 1;
+
+        void MakeBackdrop()
+        {
+            if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
+            var old = BackgroundImage;
+            BackgroundImage = Theme.Backdrop(art, ClientSize, backdropScale);
+            if (old != null) old.Dispose();
+        }
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            if (BackgroundImage != null && BackgroundImage.Size != ClientSize && WindowState != FormWindowState.Minimized)
+                MakeBackdrop();
         }
 
         void ShowArt(int index)
@@ -440,10 +461,8 @@ namespace AstralChainLauncher
             artIndex = (index + arts.Length) % arts.Length;
             var old = art;
             art = Theme.LoadArt(arts[artIndex]);
-            var oldBackdrop = BackgroundImage;
-            BackgroundImage = Theme.Backdrop(art, ClientSize, ClientSize.Width / 1120f);
+            MakeBackdrop();
             if (old != null) old.Dispose();
-            if (oldBackdrop != null) oldBackdrop.Dispose();
             artLabel.Text = (artIndex + 1) + " / " + arts.Length;
             settings.Set("background", arts[artIndex]);
             try { settings.Save(); } catch { }
