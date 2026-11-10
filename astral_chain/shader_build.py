@@ -146,6 +146,16 @@ EXT_REVIEWED = (
     '        }\n'
     '        sp(&s, "layout(set = %d, binding = %d) uniform %s t%d;\\n", set, 32 + i, glsl_sampler_type(t), i);',
 )
+# SR_LANEID (S2R 0x00): the thread's lane in its warp. The vendored translator reads it as 0. The game's Forward+ light
+# culling (tilebasedfowardplus.cso) appends a tile's lights warp by warp: the highest lane whose light passed adds the
+# warp's count to the list with one atomicAdd (FLO of the vote, compared with SR_LANEID) and the others take their slot
+# from it. With every lane reading 0, that add only happened when lane 0 alone passed: the count fell behind and lights
+# overwrote each other in the list, so tiles lost lights (issue #20: a dark block with a tile-aligned edge on a truck).
+# Compute shaders: the subgroup invocation (32-lane subgroups, as the SHFL/vote translations assume);
+# other stages keep 0 (not seen used there).
+LANEID_ORIGINAL = '        case 0x00: set_reg(c, d, "0u"); break;'
+LANEID_REVIEWED = ('        case 0x00: set_reg(c, d, c->glsl && c->stage == STAGE_COMPUTE && !getenv("LARECOMP_LANEID_ZERO") ? '
+                   '"gl_SubgroupInvocationID" : "0u"); break;  // (LARECOMP_LANEID_ZERO=1: 0 as before)')
 S2R_ORIGINAL = '        default: sprintf(t, "0u /* sr %#x */", sr); set_reg(c, d, t);'
 # WScaleFactorXY/Z (Ryujinx SReg 30/31): viewport W scaling factors. Astral Chain
 # never calls an NVN W-scaling or viewport-swizzle API (runs 294-296), so the
@@ -169,7 +179,7 @@ def prepare_translator(reference: Path, output: Path) -> Path:
         raise ValueError('unreviewed Maxwell translator identity')
     text = data.decode('utf-8')
     # The tint declaration occurs once each in the GLSL and MSL emitters.
-    patches = [(EXIT_ORIGINAL, EXIT_REVIEWED, 1), (S2R_ORIGINAL, S2R_REVIEWED, 1),
+    patches = [(EXIT_ORIGINAL, EXIT_REVIEWED, 1), (S2R_ORIGINAL, S2R_REVIEWED, 1), (LANEID_ORIGINAL, LANEID_REVIEWED, 1),
                (VOTE_ORIGINAL, VOTE_REVIEWED, 1), (TINT_ORIGINAL, TINT_REVIEWED, 2), (ALPHA_ORIGINAL, ALPHA_REVIEWED, 1)]
     patches += [(o, r, 1) for o, r in zip(CRS_ORIGINAL + GUARD_ORIGINAL + EXT_ORIGINAL,
                                           CRS_REVIEWED + GUARD_REVIEWED + EXT_REVIEWED)]
