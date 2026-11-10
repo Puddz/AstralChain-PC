@@ -95,6 +95,10 @@ namespace AstralChainLauncher
                 "The game window covers the whole screen, without borders (the display mode is not changed). " +
                 "F11 or Alt+Enter switches between fullscreen and a window at any time.",
                 OptKind.Check, "0", OptTarget.Game, When("1", "AC_FULLSCREEN=1"));
+            Add("fps_counter", "Display", "Show the frame rate",
+                "Frames per second and the average frame time, in the top left corner of the game window. Also in " +
+                "the in-game menu (F1).",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_FPS_COUNTER=1"));
             Add("port_credit", "Display", "Show \"Port by Puddz\" on the title screen",
                 "A small credit above the version number while the title screen shows (on by default). Also in the " +
                 "in-game menu (F1).",
