@@ -36,8 +36,12 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
   - `AC_INPUT_REPLAY=<recording folder or input.txt>` plays it back in place of all input, then input is live again.
     A folder with `save\data` replays from that save: it is copied to `<folder>\replay-save` on every replay (the
     recording's copy is never written).
-  - Each change is applied at the game frame it was recorded at (`svc #0xB1` calls since the first input sample), so
-    loading times matter less. `AC_INPUT_REPLAY_CLOCK=seconds` uses the seconds instead.
+  - Each change is applied at the game frame it was recorded at (`svc #0xB1` calls since the first input sample).
+    `AC_INPUT_REPLAY_CLOCK=seconds` uses the seconds instead.
+  - Loading takes a different number of frames on another PC or with other settings, so recordings also mark where
+    cutscenes start and end (`@ <seconds> <frames> cutscene <0|1>` lines). The replay lines up again at each mark,
+    and waits there (up to 30 s) when it gets to a mark before the game does. Replay with the recording's own
+    settings (resolution, texture compression, async submit): they change loading times too.
   - The game is not deterministic: a replay drifts more the longer it runs. Short recordings from a save near the
     problem replay best.
 - **Separate data.** `AC_DATA_DIR=<folder>` replaces the build's code images (`images\`), `romfs.bin` and save

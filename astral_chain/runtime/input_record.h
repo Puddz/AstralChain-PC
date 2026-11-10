@@ -8,14 +8,17 @@
  *
  * input.txt: '#' lines are comments; then one line per change: seconds since the first sample, game frames since then
  * (svc #0xB1 calls, ac_game_steps), the button mask (hex, hid_service.h bits: 0 A ... 9 ZR, 16-23 stick directions),
- * left x y, right x y (-32767..32767, up positive).
+ * left x y, right x y (-32767..32767, up positive). Lines "@ <seconds> <frames> cutscene <0|1>" mark where the game's
+ * cutscene mode turned off or on (svc #0xB1, ac_in_cutscene).
  *
  * AC_INPUT_REPLAY=<recording folder or its input.txt> plays it back from the first sample on, in place of all input,
  * until its last line (then input is live again). A recording folder with save\data replays from that save: it is
  * copied to <folder>\replay-save (replaced on every replay; the recording's own copy is never written) and used as the
- * save folder. Each line is applied when the game reaches its frame count (loading times differ between PCs and
- * runs; replaying the highway route on the test PC, screenshots were closer to the recording's than by seconds);
- * AC_INPUT_REPLAY_CLOCK=seconds follows the seconds instead. */
+ * save folder. Each line is applied when the game reaches its frame count (replaying the highway route on the test PC,
+ * screenshots were closer to the recording's than by seconds); AC_INPUT_REPLAY_CLOCK=seconds follows the seconds.
+ * Loading takes a different number of frames on another PC, so the frame count is lined up again at each "@ cutscene"
+ * mark: when the replay reaches a mark's frame first, it waits there (up to 30 s) for the cutscene to start or end;
+ * when the cutscene starts or ends first, the replay moves on to the mark (a cutscene skipped 3 s in skips 3 s in). */
 static const wchar_t *application_save_path(void);  /* (save_service.h) */
 
 /* ---- recording */
@@ -25,6 +28,7 @@ static uint64_t rec_origin,rec_flushed;
 static LONG rec_steps0;
 static HidSample rec_last;
 static unsigned rec_lines;
+static int rec_cutscene=-1;
 static void input_record_start(uint64_t now) {
  rec_state=0;
  wchar_t v[200];DWORD n=GetEnvironmentVariableW(L"AC_INPUT_RECORD",v,200);
@@ -61,6 +65,11 @@ static void input_record_start(uint64_t now) {
 static void input_record_sample(uint64_t now,const HidSample *s) {
  if(rec_state<0) input_record_start(now);
  if(rec_state!=1) return;
+ if(rec_cutscene<0) rec_cutscene=ac_in_cutscene;
+ else if(ac_in_cutscene!=rec_cutscene) {
+  rec_cutscene=ac_in_cutscene;
+  fprintf(rec_file,"@ %.3f %ld cutscene %d\n",(double)(now-rec_origin)/19200000.0,(long)(ac_game_steps-rec_steps0),rec_cutscene);
+ }
  if(rec_lines && s->buttons==rec_last.buttons && s->lx==rec_last.lx && s->ly==rec_last.ly && s->rx==rec_last.rx &&
     s->ry==rec_last.ry) return;
  fprintf(rec_file,"%.3f %ld %llx %d %d %d %d\n",(double)(now-rec_origin)/19200000.0,(long)(ac_game_steps-rec_steps0),
@@ -75,6 +84,12 @@ static int rp_state=-1;  /* -1 not loaded, 0 off, 1 replaying */
 static InputEvent *rp_events;
 static unsigned rp_count,rp_next;
 static int rp_frames_clock;
+typedef struct { long frames; int cutscene; } InputMark;
+static InputMark *rp_marks;
+static unsigned rp_nmarks,rp_next_mark;
+static long rp_shift;      /* recorded frame = replay frame + rp_shift (moved at each mark) */
+static int rp_cutscene=-1;
+static uint64_t rp_waiting;  /* since when the replay waits at a mark */
 static uint64_t rp_origin;
 static LONG rp_steps0;
 static wchar_t rp_dir[260];
@@ -100,6 +115,11 @@ static void input_replay_load(void) {
  char line[256];unsigned cap=0;
  while(fgets(line,sizeof(line),f)) {
   InputEvent e;unsigned long long b;
+  {double mt;InputMark m;
+   if(line[0]=='@' && sscanf(line,"@ %lf %ld cutscene %d",&mt,&m.frames,&m.cutscene)==3) {
+    InputMark *g=realloc(rp_marks,(rp_nmarks+1)*sizeof(*g));if(g) {rp_marks=g;rp_marks[rp_nmarks++]=m;}
+    continue;
+   }}
   if(line[0]=='#' || sscanf(line,"%lf %ld %llx %d %d %d %d",&e.t,&e.frames,&b,&e.lx,&e.ly,&e.rx,&e.ry)!=7) continue;
   e.buttons=b;
   if(rp_count==cap) {cap=cap ? cap*2 : 4096;InputEvent *g=realloc(rp_events,cap*sizeof(*g));if(!g) break;rp_events=g;}
@@ -109,8 +129,8 @@ static void input_replay_load(void) {
  if(!rp_count) {printf("[input] replay: no input in %ls\n",path);return;}
  char c[16];DWORD n=GetEnvironmentVariableA("AC_INPUT_REPLAY_CLOCK",c,sizeof(c));
  rp_frames_clock=!(n && n<sizeof(c) && !strcmp(c,"seconds"));
- printf("[input] replaying %ls: %u changes over %.1f s (%ld frames), by %s\n",path,rp_count,rp_events[rp_count-1].t,
-        rp_events[rp_count-1].frames,rp_frames_clock ? "frames" : "seconds");fflush(stdout);
+ printf("[input] replaying %ls: %u changes over %.1f s (%ld frames), by %s, %u cutscene marks\n",path,rp_count,
+        rp_events[rp_count-1].t,rp_events[rp_count-1].frames,rp_frames_clock ? "frames" : "seconds",rp_nmarks);fflush(stdout);
  rp_state=1;
 }
 /* Replaces the sample with the recording's; 0 once the recording has ended (or there is none). */
@@ -119,6 +139,30 @@ static int input_replay_sample(uint64_t now,HidSample *s) {
  if(rp_state!=1) return 0;
  if(!rp_origin) {rp_origin=now;rp_steps0=ac_game_steps;}
  double t=(double)(now-rp_origin)/19200000.0;long frames=(long)(ac_game_steps-rp_steps0);
+ if(rp_frames_clock && rp_nmarks) {
+  if(rp_cutscene<0) rp_cutscene=ac_in_cutscene;
+  else if(ac_in_cutscene!=rp_cutscene) {  /* (a cutscene started or ended: line up with the next such mark) */
+   rp_cutscene=ac_in_cutscene;
+   unsigned k=rp_next_mark;
+   while(k<rp_nmarks && k<rp_next_mark+4 && rp_marks[k].cutscene!=rp_cutscene) k++;
+   if(k<rp_nmarks && rp_marks[k].cutscene==rp_cutscene) {
+    long shift=rp_marks[k].frames-frames;
+    printf("[input] replay: cutscene %s at frame %ld, recorded at frame %ld (%+ld)\n",rp_cutscene ? "on" : "off",frames,
+           rp_marks[k].frames,shift-rp_shift);fflush(stdout);
+    rp_shift=shift;rp_next_mark=k+1;rp_waiting=0;
+   } else {printf("[input] replay: cutscene %s at frame %ld, not in the recording here\n",rp_cutscene ? "on" : "off",frames);fflush(stdout);}
+  }
+  long at=frames+rp_shift;
+  if(rp_next_mark<rp_nmarks && at>=rp_marks[rp_next_mark].frames) {  /* (ahead of the game: wait at the mark) */
+   if(!rp_waiting) {rp_waiting=now;printf("[input] replay: waiting for cutscene %s (recorded at frame %ld)\n",
+                     rp_marks[rp_next_mark].cutscene ? "on" : "off",rp_marks[rp_next_mark].frames);fflush(stdout);}
+   if(now-rp_waiting>30ull*19200000) {
+    printf("[input] replay: cutscene %s did not come in 30 s, going on\n",rp_marks[rp_next_mark].cutscene ? "on" : "off");
+    fflush(stdout);rp_next_mark++;rp_waiting=0;
+   } else rp_shift=rp_marks[rp_next_mark].frames-1-frames;
+  }
+  frames+=rp_shift;
+ }
  while(rp_next<rp_count && (rp_frames_clock ? rp_events[rp_next].frames<=frames : rp_events[rp_next].t<=t)) rp_next++;
  if(rp_next==rp_count) {
   /* (the last change has been held for its own line's length, at least a second, then input is live again) */
