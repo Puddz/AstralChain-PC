@@ -4508,13 +4508,16 @@ static void draw_(CmdRec *r, bool indexed) {
     // into the wide picture with the game's 1280x720 2D projection, which stretched it to the full width. Those draws
     // go in the centred 16:9 box too. The UI shaders' (uibaseshader & co.) cbuf 3 = binding 0, rows 8-9 = the projection
     // (x: 2/1280 ... -1, y: -2/720 ... 1); cbuf 4 = binding 1, row 0 = the element's x. A quad covering the whole
-    // 1280 width (a fade or a backdrop) keeps the full width.
+    // 1280 width (a fade or a backdrop) keeps the full width, except a video (uiyuvshader / uiyuvashader: the title
+    // screen's background and logo, Bink movies), which is 16:9 footage and gets the box (black at the sides).
     bool ui_box = false;
     if (st.rt.ncolor && st.rt.color[0] && (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 &&
         stage_hash(st.program, 0) == 0xa09bf88abb4a04a7ull && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 40 * 4) {
         const float *p = (const float *)(uintptr_t)st.ubuf[0][0].addr;
         ui_box = fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
-        if (ui_box && r->x[2] <= 6 && k.stride[0] >= 16 && st.vbuf[0].addr && st.vbuf[0].size >= 4 * k.stride[0] &&
+        uint64_t fsh = stage_hash(st.program, 1);
+        bool video = fsh == 0xf33b4e637319bed0ull || fsh == 0xef0a83385ad50ec7ull;
+        if (ui_box && !video && r->x[2] <= 6 && k.stride[0] >= 16 && st.vbuf[0].addr && st.vbuf[0].size >= 4 * k.stride[0] &&
             st.ubuf[0][1].addr && st.ubuf[0][1].size >= 16) {
             const float *m = (const float *)(uintptr_t)st.ubuf[0][1].addr;
             float lo = 1e30f, hi = -1e30f;
