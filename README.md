@@ -37,6 +37,43 @@ Known issues are listed under [Known issues](#known-issues).
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-11**
+
+- **Detailed frame rate panel** (issue #28; *not yet confirmed in play*): **Settings > Display > Show the frame rate**
+  (also in the in-game menu) is now **Off / Frame rate / Detailed**. Detailed shows a frame time graph, the 1% and
+  0.1% lows, GPU and CPU load, video and system memory, the GPU's temperature, power and clock, the GPU's busy time
+  and the waits per frame, and the window, picture and 3D render sizes. Temperature, power and clock come from the
+  graphics driver's own library (NVIDIA, AMD; nothing extra is downloaded); Intel GPUs show the rest. Tested on NVIDIA
+  only.
+- **Quit game** in the in-game menu, and **Swap A and B** for controllers (PR #23, by red-Geck0; confirmed in play):
+  see *In-game menu* and *Controllers* under [Playing](#playing).
+- **Sharp picture with Windows display scaling** (by red-Geck0, from issue #25; *not yet confirmed here*): with
+  scaling above 100% (common on laptops and handhelds), Windows gave the game a smaller screen and stretched the
+  result, so the picture was blurry. The game now uses the screen's real pixels. In a window it opens at 1600x900
+  real pixels, so with scaling the window looks smaller than before.
+- **Launcher background** no longer tiles when Windows enlarges the launcher after it opens (PR #24, by red-Geck0).
+- **Ultrawide fixes** (this branch; confirmed in play on a 32:9 recording): the light blocks above (issue #20); markers
+  on characters and targets stay on them instead of drifting toward the middle (issue #21); menus, subtitles, the
+  opening credits, the title screen and videos are shown in a centred 16:9 area instead of stretched, while
+  full-screen fades and backdrops still cover the whole width (issue #22).
+
+**2026-11-10**
+
+- **Lights missing in blocks of the screen fixed** (issue #20; confirmed in play): dark, stair-stepped blocks, for
+  example on the side of the truck on the street after the highway chase, at any screen shape.
+- **Input recorder** for reporting problems: **Settings > Troubleshooting > Record controller input** records your
+  buttons and sticks from launch with a copy of your save, into a folder next to your save. Zip it and attach it to an
+  issue, and the problem can be played again on another PC.
+- **Frame rate counter**: **Settings > Display > Show the frame rate** (see 2026-11-11 for the detailed panel).
+
+**2026-11-09**
+
+- **Much less processor use** (*not yet confirmed in play*): three of the game's worker threads each kept a core busy
+  doing nothing; they now really sleep. Highway chase on the test PC: 4.6 busy cores down to 0.8, frame rate the same
+  or slightly better. Mostly matters on laptops (less heat and power).
+- **For GPUs with 4 GB of video memory** (*experimental, not yet tested on a 4 GB GPU*): **Settings > Shaders and
+  performance > Keep the game's memory copy in system RAM** (issue #17).
+
 **2026-11-08**
 
 - **Title screen** (*not yet confirmed in play*): **"Port by Puddz"** above the version number (on by default;
@@ -350,7 +387,9 @@ With less than 20 GB free, setup skips the preparation and the game converts on 
 
 **Controllers.** Xbox pads and compatibles work through XInput. Other controllers work through SDL3: Switch Pro
 Controller, DualSense, DualShock 4, 8BitDo and most USB or Bluetooth pads SDL knows. The buttons follow their
-*position*, as on the Switch: the right face button is A and the bottom one B, whatever their labels. The first
+*position*, as on the Switch: the right face button is A and the bottom one B, whatever their labels.
+**Swap A and B** (**Settings > Controller**, or the in-game menu) makes the bottom button A instead, as in most PC
+games; the button icons follow, and the keyboard keeps its keys. The first
 controller found is used; plug it in before or while the game runs. Controllers rumble when the game asks for it
 (**Settings > Controller > Rumble strength**, 0 turns it off). Not supported yet: the Switch 2 Pro Controller
 and Switch 2 Joy-Cons (SDL's Windows build has no driver for them). With Steam, adding the game as a non-Steam game
