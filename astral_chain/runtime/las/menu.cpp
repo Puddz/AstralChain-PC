@@ -43,6 +43,7 @@ void vk_perf_scene(int *w, int *h);
 void vk_perf_vram(uint64_t *usage, uint64_t *budget, uint64_t *size);
 void vk_perf_sizes(int *win_w, int *win_h, int *img_w, int *img_h);
 const char *vk_perf_gpu_name(void);
+int vk_perf_luid(uint32_t *hi, uint32_t *lo);
 const char *vk_perf_present_mode(void);
 extern volatile unsigned long long ac_title_video_tick;  // (romfs_storage.h: last read of a title-screen video)
 void ac_setting_apply(const char *key, const char *value);
@@ -589,7 +590,9 @@ void adl_sample(Machine &m) {
 }
 
 // GPU load from Windows' counters (any vendor): per engine, the sum over all processes; the busiest engine of the
-// adapter the game uses (the one this process's engines are on), as Task Manager shows it.
+// adapter the game renders on, as Task Manager shows it. The adapter is Vulkan's (its LUID): on a laptop with two GPUs
+// the game also has counters on the other one (for its window), which is mostly idle. Without the LUID: the adapter
+// where this process is busiest.
 struct {
     bool tried, ok;
     PDH_HQUERY q;
@@ -622,22 +625,54 @@ void pdh_sample(Machine &m) {
     auto *it = (PPDH_FMT_COUNTERVALUE_ITEM_W)buf.data();
     if (pdh.get(pdh.c, PDH_FMT_DOUBLE, &bytes, &n, it) != ERROR_SUCCESS) return;
     // instance names: pid_<pid>_luid_0x<hi>_0x<lo>_phys_<n>_eng_<n>_engtype_<type>
-    wchar_t mine[32];
-    swprintf(mine, 32, L"pid_%lu_", GetCurrentProcessId());
-    size_t ml = wcslen(mine);
-    std::wstring luid;
-    for (DWORD i = 0; i < n && luid.empty(); i++) {
-        const wchar_t *nm = it[i].szName, *l = wcsstr(nm, L"_luid_");
-        if (l && !wcsncmp(nm, mine, ml)) { const wchar_t *e = wcsstr(l, L"_phys_"); if (e) luid.assign(l, e); }
+    auto parse = [](const wchar_t *l, uint64_t *id) {  // l: at "_luid_0x"
+        wchar_t *e;
+        uint64_t hi = wcstoul(l + 8, &e, 16);
+        if (wcsncmp(e, L"_0x", 3)) return false;
+        *id = hi << 32 | wcstoul(e + 3, &e, 16);
+        return true;
+    };
+    static int have_vk = -1;
+    static uint64_t vk_id;
+    if (have_vk < 0) {
+        uint32_t hi, lo;
+        have_vk = vk_perf_luid(&hi, &lo);
+        vk_id = (uint64_t)hi << 32 | lo;
     }
-    if (luid.empty()) return;
+    uint64_t want = 0;
+    bool found_want = false;
+    if (have_vk) { want = vk_id; found_want = true; }
+    else {  // the adapter with the most of this process's load
+        wchar_t mine[32];
+        swprintf(mine, 32, L"pid_%lu_", GetCurrentProcessId());
+        size_t ml = wcslen(mine);
+        std::vector<std::pair<uint64_t, double>> mine_by;
+        for (DWORD i = 0; i < n; i++) {
+            const wchar_t *l = wcsstr(it[i].szName, L"_luid_0x");
+            uint64_t id;
+            if (!l || wcsncmp(it[i].szName, mine, ml) || !parse(l, &id) || it[i].FmtValue.CStatus != ERROR_SUCCESS) continue;
+            bool f = false;
+            for (auto &x : mine_by) if (x.first == id) { x.second += it[i].FmtValue.doubleValue; f = true; break; }
+            if (!f) mine_by.push_back({id, it[i].FmtValue.doubleValue});
+        }
+        double most = -1;
+        for (auto &x : mine_by) if (x.second > most) { most = x.second; want = x.first; found_want = true; }
+    }
+    static bool logged;
+    if (!logged) {
+        logged = true;
+        printf("[perf] GPU load: adapter %016llx (%s)\n", (unsigned long long)want, have_vk ? "the Vulkan device's" : found_want ? "busiest for the game" : "none");
+        fflush(stdout);
+    }
+    if (!found_want) return;
     std::vector<std::pair<std::wstring, double>> eng;  // engine (the name from _luid_ on) -> sum over the processes
     for (DWORD i = 0; i < n; i++) {
-        const wchar_t *l = wcsstr(it[i].szName, L"_luid_");
-        if (!l || wcsncmp(l, luid.c_str(), luid.size()) || it[i].FmtValue.CStatus != ERROR_SUCCESS) continue;
-        bool found = false;
-        for (auto &e : eng) if (e.first == l) { e.second += it[i].FmtValue.doubleValue; found = true; break; }
-        if (!found) eng.push_back({std::wstring(l), it[i].FmtValue.doubleValue});
+        const wchar_t *l = wcsstr(it[i].szName, L"_luid_0x");
+        uint64_t id;
+        if (!l || !parse(l, &id) || id != want || it[i].FmtValue.CStatus != ERROR_SUCCESS) continue;
+        bool f = false;
+        for (auto &e : eng) if (e.first == l) { e.second += it[i].FmtValue.doubleValue; f = true; break; }
+        if (!f) eng.push_back({std::wstring(l), it[i].FmtValue.doubleValue});
     }
     double best = 0;
     for (auto &e : eng) best = std::max(best, e.second);
