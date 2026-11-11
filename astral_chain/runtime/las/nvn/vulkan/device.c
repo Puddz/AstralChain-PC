@@ -634,6 +634,17 @@ void vk_perf_sizes(int *win_w, int *win_h, int *img_w, int *img_h) {
     *img_w = g_image_size[0]; *img_h = g_image_size[1];
 }
 const char *vk_perf_gpu_name(void) { return g_vk.props.deviceName; }
+// The GPU's Windows adapter id (LUID: the low 32 bits, then the high), to pick its counters out of Windows' (laptops
+// with two GPUs: the game also has counters on the other one, for its window). 0 when the driver gives none.
+int vk_perf_luid(uint32_t *hi, uint32_t *lo) {
+    VkPhysicalDeviceIDProperties id = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceProperties2 p = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &id};
+    vkGetPhysicalDeviceProperties2(g_vk.phys, &p);
+    if (!id.deviceLUIDValid) return 0;
+    memcpy(lo, id.deviceLUID, 4);
+    memcpy(hi, id.deviceLUID + 4, 4);
+    return 1;
+}
 const char *vk_perf_present_mode(void) { return g_present_mode_name; }
 
 // nvnWindowSetCrop: the part of the window texture that is shown. Astral Chain in handheld mode (AC_HANDHELD=1)
