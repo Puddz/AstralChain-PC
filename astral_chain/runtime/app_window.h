@@ -194,10 +194,16 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
  }
  if((message==WM_KEYDOWN || message==WM_KEYUP || message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) && wparam<256) {
   hid_keys_load();
-  /* F1 opens and closes the in-game menu (unless F1 is a game key); Esc closes it. While it is open, keys go to it. */
+  /* F1 opens and closes the in-game menu's settings, F2 its HUD layout (unless they are game keys); either one over
+   * the other page goes to it. Esc closes the menu. While it is open, keys go to it. */
   int down=message==WM_KEYDOWN || message==WM_SYSKEYDOWN,repeat=(lparam&(1<<30))!=0;
-  if((wparam==VK_F1 && !hid_key_mapped[VK_F1]) || (ac_menu_open && !ac_menu_modal && wparam==VK_ESCAPE)) {
-   if(down && !repeat) menu_set_open(wparam==VK_F1 ? !ac_menu_open : 0);
+  int fkey=(wparam==VK_F1 && !hid_key_mapped[VK_F1]) || (wparam==VK_F2 && !hid_key_mapped[VK_F2]);
+  if(fkey || (ac_menu_open && !ac_menu_modal && wparam==VK_ESCAPE)) {
+   if(down && !repeat) {
+    LONG page=wparam==VK_F2;
+    if(!fkey || (ac_menu_open && ac_menu_page==page)) menu_set_open(0);
+    else {InterlockedExchange(&ac_menu_page,page);menu_set_open(1);}
+   }
    return 0;
   }
   if(ac_menu_open && wparam!=VK_F11 && !(wparam==VK_RETURN && (lparam&(1<<29)))) {
