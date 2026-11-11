@@ -27,6 +27,13 @@ static uint64_t stat_upload_bytes;
 static int prof = -1;
 static uint64_t prof_exec, prof_draw, prof_sets, prof_vtx, prof_submit, prof_pre, prof_key, prof_dyn, prof_tex, prof_up, prof_gpu;
 static VkQueryPool prof_qp;
+// Performance overlay (las/menu.cpp, AC_FPS_COUNTER=2, "Detailed"): while it is on, each submission's GPU time is
+// measured with the same timestamps as LARECOMP_VK_PROF, and the 3D scene's size is taken from the viewports of the
+// draws into the game's scene colour format (R11G11B10F; the game's dynamic resolution renders into part of its
+// targets). menu.cpp reads the totals (vk_perf_*), on the render thread.
+volatile int vk_perf_detail;
+static uint64_t perf_gpu_total;
+static float perf_scene[2], perf_scene_shown[2];
 static uint64_t cum_exec, cum_wait, cum_draws, cum_submits;  // (profiling) never reset: hitch log
 static uint32_t prof_end_line[4096];  // passes ended, by the exec.c line that ended them (0: submit / present)
 uint64_t prof_views_created;  // textures.c vk_image_view cache misses
@@ -322,6 +329,13 @@ static void oq_draw(VkCommandBuffer cb, bool end) {  // around a draw while a co
     else vkCmdEndQuery(cb, q->pool, q->n++);
 }
 
+static bool perf_qp_ready(void) {
+    if (prof_qp) return true;
+    VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = SUBS * 2};
+    if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &prof_qp) != VK_SUCCESS) prof_qp = VK_NULL_HANDLE;
+    return prof_qp != VK_NULL_HANDLE;
+}
+
 static Sub *sub(void) {
     Sub *s = &subs[cur_sub];
     if (s->seq != submit_seq + 1) {  // slot reused: its previous submission must be done
@@ -330,8 +344,11 @@ static Sub *sub(void) {
         cq_resolve_done(s->seq);
         if (s->ts) {  // (profiling) GPU time of that submission
             uint64_t t[2];
-            if (vkGetQueryPoolResults(g_vk.dev, prof_qp, (uint32_t)cur_sub * 2, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && t[1] > t[0])
-                prof_gpu += (uint64_t)((double)(t[1] - t[0]) * g_vk.props.limits.timestampPeriod);
+            if (vkGetQueryPoolResults(g_vk.dev, prof_qp, (uint32_t)cur_sub * 2, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && t[1] > t[0]) {
+                uint64_t ns = (uint64_t)((double)(t[1] - t[0]) * g_vk.props.limits.timestampPeriod);
+                prof_gpu += ns;
+                perf_gpu_total += ns;
+            }
             s->ts = false;
         }
         for (int i = 0; i < s->npools; i++) vkResetDescriptorPool(g_vk.dev, s->pools[i], 0);
@@ -387,7 +404,7 @@ VkCommandBuffer vk_cmd(void) {
             if (q->pool) vkCmdResetQueryPool(s->main, q->pool, 0, OQ_MAX);
         }
         gp_mark(s->main, "(submission start; includes GPU idle before it)");
-        if (prof && prof_qp) {
+        if ((prof && prof_qp) || (vk_perf_detail && perf_qp_ready())) {
             vkCmdResetQueryPool(s->main, prof_qp, (uint32_t)cur_sub * 2, 2);
             vkCmdWriteTimestamp2(s->main, VK_PIPELINE_STAGE_2_NONE, prof_qp, (uint32_t)cur_sub * 2);
             s->ts = true;
@@ -1068,6 +1085,28 @@ static void st_defaults(void) {
 }
 
 static void warm_program(NvnProgram *np);
+// (overlay) Totals since start: GPU time of the submissions measured, CPU time waiting for the GPU, draws waiting for
+// their shaders. The scene size of the last frame (0 when none was drawn: menus, videos).
+void vk_perf_totals(uint64_t *gpu_ns, uint64_t *wait_gpu_ns, uint64_t *wait_shader_ns) {
+    *gpu_ns = perf_gpu_total; *wait_gpu_ns = cum_wait; *wait_shader_ns = cum_built_ns;
+}
+void vk_perf_frame_end(void) {
+    perf_scene_shown[0] = perf_scene[0]; perf_scene_shown[1] = perf_scene[1];
+    perf_scene[0] = perf_scene[1] = 0;
+}
+void vk_perf_scene(int *w, int *h) { *w = (int)perf_scene_shown[0]; *h = (int)perf_scene_shown[1]; }
+void vk_perf_vram(uint64_t *usage, uint64_t *budget, uint64_t *size) {
+    const VkPhysicalDeviceMemoryProperties *mp;
+    vmaGetMemoryProperties(g_vk.vma, &mp);
+    VmaBudget b[VK_MAX_MEMORY_HEAPS];
+    vmaGetHeapBudgets(g_vk.vma, b);
+    *usage = *budget = *size = 0;
+    for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
+        if (mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+            *usage += b[i].usage; *budget += b[i].budget; *size += mp->memoryHeaps[i].size;
+        }
+}
+
 void vk_exec_init(void) {
     {   // program warm-up: nvnProgramSetShaders (objects.c) queues known variants of the program it sets
         extern void (*nvn_program_warm_hook)(NvnProgram *np);
@@ -4176,6 +4215,10 @@ static void draw_(CmdRec *r, bool indexed) {
     Prog *pr = get_program(st.program, &vkey, &fkey);
     if (pr) wait_built(&pr->state);
     if (!pr || atomic_load(&pr->state) != 1) { SKIPPED(); return; }
+    if (vk_perf_detail && st.rt.ncolor && st.rt.color[0] && st.rt.color[0]->format == 0x3F) {  // (overlay: R11G11B10F)
+        if (st.viewport[0][2] > perf_scene[0]) perf_scene[0] = st.viewport[0][2];
+        if (st.viewport[0][3] > perf_scene[1]) perf_scene[1] = st.viewport[0][3];
+    }
     g_mirror_w = 0;
     {   // mirror mode (runtime/hle/mirror.c; as renderer.m): the scene's composite into the window image is mirrored
         extern bool mirror_draw(bool composite);

@@ -95,10 +95,13 @@ namespace AstralChainLauncher
                 "The game window covers the whole screen, without borders (the display mode is not changed). " +
                 "F11 or Alt+Enter switches between fullscreen and a window at any time.",
                 OptKind.Check, "0", OptTarget.Game, When("1", "AC_FULLSCREEN=1"));
-            Add("fps_counter", "Display", "Show the frame rate",
-                "Frames per second and the average frame time, in the top left corner of the game window. Also in " +
-                "the in-game menu (F1).",
-                OptKind.Check, "0", OptTarget.Game, When("1", "AC_FPS_COUNTER=1"));
+            var fps = Add("fps_counter", "Display", "Show the frame rate",
+                "In the top left corner of the game window. Frame rate: frames per second and the average frame time. " +
+                "Detailed: also a frame time graph, the slowest frames (1% and 0.1% lows), GPU and CPU load, video " +
+                "and system memory, the GPU's temperature, power and clock where its driver gives them (NVIDIA, AMD), " +
+                "and the window, picture and 3D render sizes. Also in the in-game menu (F1).",
+                OptKind.Choice, "0", OptTarget.Game, v => v == "1" || v == "2" ? "AC_FPS_COUNTER=" + v : "");
+            fps.Choices = new[] { "0|Off (default)", "1|Frame rate", "2|Detailed" };
             Add("port_credit", "Display", "Show \"Port by Puddz\" on the title screen",
                 "A small credit above the version number while the title screen shows (on by default). Also in the " +
                 "in-game menu (F1).",
