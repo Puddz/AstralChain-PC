@@ -4584,8 +4584,10 @@ static void draw_(CmdRec *r, bool indexed) {
         // +0.4..0.9 on the left, -0.4..-0.9 on the right, the same for mirrored parts), while markers over characters
         // and targets, centred text and pop-ups face the screen (0..0.13). A turned element on its own side of the
         // layout moves out by the width of the empty band beside the 16:9 area; everything else stays. The menu
-        // (Police Gear, minus) and IRIS's panel are turned too, less (the menu -0.325 throughout, IRIS -0.400; the HUD's
-        // right side -0.418 and more), and stay where they are.
+        // (Police Gear, minus) and IRIS's file panel are turned too, less (the menu -0.325 throughout, IRIS -0.400; the
+        // HUD's right side -0.418 and more), and stay where they are. IRIS's profile panel (a person scanned) turns
+        // as the HUD's tutorial box does (-0.58), but also leans back (row 2 column 1 against row 0 column 0: -0.19 to
+        // -0.27 while it comes in and after; the tutorial box -0.12, the item panel -0.26 but turned -0.73): it stays.
         if (!ui_box && st.ubuf[0][1].addr && st.ubuf[0][1].size >= 48 && p[46] != 0 && p[44] == 0 && p[45] == 0 &&
             renderer_texture_presented(st.rt.color[0])) {
             extern int ac_hud_edges_on(void);
@@ -4593,7 +4595,7 @@ static void draw_(CmdRec *r, bool indexed) {
             if (fabsf(m[0]) > 0.05f && ac_hud_edges_on()) {
                 float yaw = m[8] / m[0], tx = m[3];
                 if (yaw > 0.25f && tx < 640) hud_side = -1;
-                else if (yaw < -0.41f && tx > 640) hud_side = 1;
+                else if (yaw < -0.41f && tx > 640 && !(yaw > -0.60f && m[9] / fabsf(m[0]) < -0.15f)) hud_side = 1;
             }
         }
     }
