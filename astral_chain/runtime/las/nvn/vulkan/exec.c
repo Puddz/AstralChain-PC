@@ -4558,11 +4558,11 @@ static void draw_(CmdRec *r, bool indexed) {
     bool ui_box = false;
     int hud_side = 0;  // (AC_HUD_EDGES: -1 to the left edge, 1 to the right)
     uint64_t ui_vs = st.rt.ncolor && st.rt.color[0] ? stage_hash(st.program, 0) : 0;
-    bool ui_tiling = ui_vs == 0x833ab16b25a072acull;  // (uitilingshader: the dot patterns behind the HUD's panels)
+    bool ui_tiling = ui_vs == 0x833ab16b25a072acull;  // (uitilingshader: dot patterns, the menus' dotted lines)
     if (st.rt.ncolor && st.rt.color[0] && (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 &&
         (ui_vs == 0xa09bf88abb4a04a7ull || ui_tiling) && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 48 * 4) {
         const float *p = (const float *)(uintptr_t)st.ubuf[0][0].addr;
-        ui_box = !ui_tiling && fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
+        ui_box = fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
         uint64_t fsh = stage_hash(st.program, 1);
         bool video = fsh == 0xf33b4e637319bed0ull || fsh == 0xef0a83385ad50ec7ull;
         if (ui_box && !video && r->x[2] <= 6 && k.stride[0] >= 16 && st.vbuf[0].addr && st.vbuf[0].size >= 4 * k.stride[0] &&
@@ -4583,7 +4583,9 @@ static void draw_(CmdRec *r, bool indexed) {
         // The side panels are turned toward the middle (a yaw: row 2 column 0 against row 0 column 0, the ratio about
         // +0.4..0.9 on the left, -0.4..-0.9 on the right, the same for mirrored parts), while markers over characters
         // and targets, centred text and pop-ups face the screen (0..0.13). A turned element on its own side of the
-        // layout moves out by the width of the empty band beside the 16:9 area; everything else stays.
+        // layout moves out by the width of the empty band beside the 16:9 area; everything else stays. The menu
+        // (Police Gear, minus) and IRIS's panel are turned too, less (the menu -0.325 throughout, IRIS -0.400; the HUD's
+        // right side -0.418 and more), and stay where they are.
         if (!ui_box && st.ubuf[0][1].addr && st.ubuf[0][1].size >= 48 && p[46] != 0 && p[44] == 0 && p[45] == 0 &&
             renderer_texture_presented(st.rt.color[0])) {
             extern int ac_hud_edges_on(void);
@@ -4591,7 +4593,7 @@ static void draw_(CmdRec *r, bool indexed) {
             if (fabsf(m[0]) > 0.05f && ac_hud_edges_on()) {
                 float yaw = m[8] / m[0], tx = m[3];
                 if (yaw > 0.25f && tx < 640) hud_side = -1;
-                else if (yaw < -0.25f && tx > 640) hud_side = 1;
+                else if (yaw < -0.41f && tx > 640) hud_side = 1;
             }
         }
     }
