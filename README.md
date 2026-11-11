@@ -52,6 +52,10 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   result, so the picture was blurry. The game now uses the screen's real pixels. In a window it opens at 1600x900
   real pixels, so with scaling the window looks smaller than before.
 - **Launcher background** no longer tiles when Windows enlarges the launcher after it opens (PR #24, by red-Geck0).
+- **Ultrawide: HUD at the screen's edges** (this branch; issue #27; experimental, *not yet confirmed in play*):
+  **Settings > Display**, or the in-game menu (changes at once). With a render resolution wider than 16:9, the HUD's
+  side panels (health, minimap, objectives, tutorials) move to the left and right edges instead of staying in the
+  middle 16:9 area; markers over characters, subtitles and menus stay where they are. Off by default.
 - **Ultrawide fixes** (this branch; confirmed in play on a 32:9 recording): the light blocks above (issue #20); markers
   on characters and targets stay on them instead of drifting toward the middle (issue #21); menus, subtitles, the
   opening credits, the title screen and videos are shown in a centred 16:9 area instead of stretched, while

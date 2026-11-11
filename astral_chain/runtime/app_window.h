@@ -134,6 +134,7 @@ void ac_setting_apply(const char *key,const char *value) {
  else if(!strcmp(key,"fps_counter")) {int m=value ? atoi(value) : 0;ac_fps_counter=m>=0 && m<=2 ? m : 0;}
  else if(!strcmp(key,"title_own_twin")) ac_title_own_twin=on;
  else if(!strcmp(key,"swap_ab")) ac_swap_ab=on;
+ else if(!strcmp(key,"hud_edges")) ac_hud_edges=on;
  else if(!strcmp(key,"fullscreen")) {if(app_window) PostMessageW(app_window,WM_AC_FULLSCREEN,on,0);}
  else return;
  printf("[menu] %s=%s\n",key,value ? value : "");fflush(stdout);
