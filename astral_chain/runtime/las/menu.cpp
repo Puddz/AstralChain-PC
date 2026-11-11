@@ -147,62 +147,90 @@ void read_session() {
     }
 }
 
-std::string settings_path() {
-    std::string p = env("AC_SETTINGS_FILE");
-    if (!p.empty()) return p;
-    char exe[MAX_PATH];  // build\game\round-00\trace.exe -> userdata\launcher.ini
-    DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
-    if (!n || n >= sizeof exe) return std::string();
-    std::string s(exe);
-    for (int i = 0; i < 4; i++) { size_t k = s.find_last_of("\\/"); if (k == std::string::npos) return std::string(); s.resize(k); }
-    std::string dir = s + "\\userdata";
-    DWORD a = GetFileAttributesA(dir.c_str());
-    if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) return std::string();
-    return dir + "\\launcher.ini";
+// The launcher's file, as a UTF-16 path (so that any folder name works). Empty: none.
+std::wstring settings_path() {
+    wchar_t buf[1024];
+    DWORD n = GetEnvironmentVariableW(L"AC_SETTINGS_FILE", buf, 1024);
+    if (n && n < 1024) return std::wstring(buf);
+    n = GetModuleFileNameW(NULL, buf, 1024);  // build\game\round-00\trace.exe -> userdata\launcher.ini
+    if (!n || n >= 1024) return std::wstring();
+    std::wstring s(buf);
+    for (int i = 0; i < 4; i++) { size_t k = s.find_last_of(L"\\/"); if (k == std::wstring::npos) return std::wstring(); s.resize(k); }
+    std::wstring dir = s + L"\\userdata";
+    DWORD a = GetFileAttributesW(dir.c_str());
+    if (a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) return std::wstring();
+    return dir + L"\\launcher.ini";
 }
 
-// key=value in the launcher's file: the line replaced, or added. Written to a temporary file, then moved over it.
+// The file's lines. 1: read; 0: there is no such file; -1: it is there and could not be read (in use, no access).
+int read_lines(const std::wstring &path, std::vector<std::string> &lines) {
+    FILE *f = NULL;
+    for (int tries = 0; tries < 10 && !f; tries++) {  // (the launcher or a scanner has it open for a moment)
+        f = _wfopen(path.c_str(), L"rb");
+        if (f) break;
+        DWORD a = GetFileAttributesW(path.c_str()), e = GetLastError();
+        if (a == INVALID_FILE_ATTRIBUTES && (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND)) return 0;
+        Sleep(20);
+    }
+    if (!f) return -1;
+    std::string all;
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) all.append(buf, n);
+    bool bad = ferror(f) != 0;
+    fclose(f);
+    if (bad) return -1;
+    for (size_t at = 0; at < all.size();) {
+        size_t end = all.find('\n', at);
+        if (end == std::string::npos) end = all.size();
+        std::string l = all.substr(at, end - at);
+        while (!l.empty() && l.back() == '\r') l.pop_back();
+        lines.push_back(l);
+        at = end + 1;
+    }
+    return 1;
+}
+
+// key=value in the launcher's file: the line replaced, or added; every other line is kept as it is. Written to a
+// temporary file, then moved over it. Nothing is written when the file is there and cannot be read (its other
+// settings would be lost).
 bool save(const char *key, const std::string &value) {
-    std::string path = settings_path();
+    std::wstring path = settings_path();
     if (path.empty()) return false;
     std::vector<std::string> lines;
-    if (FILE *f = fopen(path.c_str(), "rb")) {
-        char buf[4096];
-        while (fgets(buf, sizeof buf, f)) {
-            std::string l(buf);
-            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
-            lines.push_back(l);
-        }
-        fclose(f);
-    }
+    int got = read_lines(path, lines);
+    if (got < 0) return false;
     if (lines.empty()) lines.push_back("# Astral Chain PC launcher settings");
     std::string prefix = std::string(key) + "=";
     bool found = false;
     for (std::string &l : lines)
         if (l.compare(0, prefix.size(), prefix) == 0) { l = prefix + value; found = true; }
     if (!found) lines.push_back(prefix + value);
-    std::string tmp = path + ".tmp";
-    FILE *f = fopen(tmp.c_str(), "wb");
+    std::wstring tmp = path + L".tmp";
+    FILE *f = _wfopen(tmp.c_str(), L"wb");
     if (!f) return false;
-    for (const std::string &l : lines) fprintf(f, "%s\r\n", l.c_str());
-    bool ok = fclose(f) == 0;
-    return ok && MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+    bool ok = true;
+    for (const std::string &l : lines) ok = fprintf(f, "%s\r\n", l.c_str()) >= 0 && ok;
+    ok = fflush(f) == 0 && ok;
+    ok = fclose(f) == 0 && ok;
+    if (!ok) { DeleteFileW(tmp.c_str()); return false; }
+    for (int tries = 0; tries < 10; tries++) {
+        if (MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) return true;
+        Sleep(20);
+    }
+    DeleteFileW(tmp.c_str());
+    return false;
 }
 
 // A key's value in the launcher's file ("" when it has none).
 std::string load(const char *key) {
-    std::string path = settings_path(), prefix = std::string(key) + "=";
-    if (path.empty()) return std::string();
-    std::string v;
-    if (FILE *f = fopen(path.c_str(), "rb")) {
-        char buf[4096];
-        while (fgets(buf, sizeof buf, f)) {
-            std::string l(buf);
-            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+    std::wstring path = settings_path();
+    std::string prefix = std::string(key) + "=", v;
+    if (path.empty()) return v;
+    std::vector<std::string> lines;
+    if (read_lines(path, lines) > 0)
+        for (const std::string &l : lines)
             if (l.compare(0, prefix.size(), prefix) == 0) v = l.substr(prefix.size());
-        }
-        fclose(f);
-    }
     return v;
 }
 
@@ -271,7 +299,7 @@ bool init() {
     ii.PipelineRenderingCreateInfo.pColorAttachmentFormats = &g_vk.sc_format;
     if (!ImGui_ImplVulkan_Init(&ii)) { printf("[menu] Vulkan backend init failed: no in-game menu\n"); return false; }
     read_session();
-    printf("[menu] ready (settings file: %s)\n", settings_path().empty() ? "none" : settings_path().c_str());
+    printf("[menu] ready (settings file: %ls)\n", settings_path().empty() ? L"none" : settings_path().c_str());
     return true;
 }
 
@@ -305,12 +333,13 @@ void drain(ImGuiIO &io) {
     io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, ly < -0.3f, ly < 0 ? -ly : 0);
 }
 
-void set(Opt &o, const std::string &v) {
+// write: to the launcher's file too (a slider writes when it is let go, not at every step of a drag).
+void set(Opt &o, const std::string &v, bool write = true) {
     if (o.value == v) return;
     o.value = v;
     if (o.live) ac_setting_apply(o.key, v.c_str());
     else restart_needed = true;
-    saved_ok = save(o.key, v) && saved_ok;
+    if (write) saved_ok = save(o.key, v);
 }
 
 bool picture_wide();
@@ -346,7 +375,8 @@ void draw(float scale) {
             if (ImGui::Checkbox("##v", &on)) set(o, on ? "1" : "0");
         } else if (o.kind == NUMBER) {
             int v = atoi(o.value.c_str());
-            if (ImGui::SliderInt("##v", &v, o.lo, o.hi, "%d", ImGuiSliderFlags_AlwaysClamp)) set(o, std::to_string(v));
+            if (ImGui::SliderInt("##v", &v, o.lo, o.hi, "%d", ImGuiSliderFlags_AlwaysClamp)) set(o, std::to_string(v), false);
+            if (ImGui::IsItemDeactivatedAfterEdit()) saved_ok = save(o.key, o.value);
         } else {
             std::vector<std::pair<std::string, std::string>> ch;
             for (const char *p = o.choices; *p;) {
@@ -468,7 +498,7 @@ Opt *find_opt(const char *key) {
 void draw_hud(float scale) {
     ImGuiIO &io = ImGui::GetIO();
     bool busy = ImGui::IsAnyItemActive() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
-    if (!hint_marked) { hint_marked = hint_done = true; saved_ok = save("hud_layout_seen", "1") && saved_ok; }
+    if (!hint_marked) { hint_marked = hint_done = true; saved_ok = save("hud_layout_seen", "1"); }
     float w = 980 * scale;
     if (w > io.DisplaySize.x * 0.92f) w = io.DisplaySize.x * 0.92f;
     // (in the middle: the panels it moves are at the corners, and stay in view)
@@ -535,7 +565,7 @@ void draw_hud(float scale) {
     }
     ImGui::EndDisabled();
     if (done) {
-        saved_ok = save("hud_layout", layout_text()) && saved_ok;
+        saved_ok = save("hud_layout", layout_text());
         printf("[menu] hud_layout=%s\n", layout_text().c_str());
         fflush(stdout);
     }
@@ -1133,8 +1163,10 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     float scale = (float)h / 1080.0f;
     if (scale < 0.5f) scale = 0.5f;
     io.FontGlobalScale = scale;
+    // (each time from the unscaled style: ScaleAllSizes rounds down, and scaling the scaled sizes again loses a pixel)
     static float styled = 1;
-    if (styled != scale) { ImGui::GetStyle().ScaleAllSizes(scale / styled); styled = scale; }
+    static ImGuiStyle base_style = ImGui::GetStyle();
+    if (styled != scale) { ImGui::GetStyle() = base_style; ImGui::GetStyle().ScaleAllSizes(scale); styled = scale; }
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
     static long page_shown = -1;

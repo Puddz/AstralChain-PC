@@ -116,6 +116,12 @@ static void thread_priorities(unsigned effective[33]) {
   if(!changed) break;
  }
 }
+/* A guest lock or arbiter word (4-byte aligned, checked by the callers): read, and replaced only if it still holds
+ * *expected (else *expected gets what it holds now). */
+static inline uint32_t guest_word_load(uint64_t address) {return __atomic_load_n((uint32_t*)(uintptr_t)address,__ATOMIC_SEQ_CST);}
+static inline int guest_word_swap(uint64_t address,uint32_t *expected,uint32_t value) {
+ return __atomic_compare_exchange_n((uint32_t*)(uintptr_t)address,expected,value,0,__ATOMIC_SEQ_CST,__ATOMIC_SEQ_CST);
+}
 static void thread_mutex_memory(uint64_t address) {
  Region r=query(address);
  if((address&3) || r.permission!=3 || r.size-(address-r.base)<4)
@@ -153,16 +159,22 @@ static void thread_condition_signal(uint64_t key,int32_t count) {
   if(chosen==33) {ST32(key,0);break;}
   if(count>0 && signaled>=(unsigned)count) break;
   uint64_t address=guest_threads[chosen].mutex;thread_mutex_memory(address);
-  uint32_t owner=LD32(address);
+  /* Guest code locks and unlocks this word with a compare-and-swap, outside the kernel lock (parallel mode): each
+   * update here is one too, and starts again from the word's new value when the guest changed it in between. */
+  uint32_t owner=guest_word_load(address);
   guest_threads[chosen].condition_key=0;
+  for(;;) {
+   if(!owner) {if(guest_word_swap(address,&owner,guest_threads[chosen].mutex_tag)) break;continue;}
+   unsigned holder=thread_index(owner&~0x40000000u);
+   if(holder==chosen || guest_threads[holder].status==THREAD_EXITED) boundary("condition-mutex-owner",&state,state.pc);
+   if(guest_word_swap(address,&owner,owner|0x40000000u)) break;
+  }
   if(!owner) {
-   ST32(address,guest_threads[chosen].mutex_tag);
    guest_threads[chosen].status=THREAD_RUNNABLE;guest_threads[chosen].mutex=0;parallel_wake(chosen);
    guest_threads[chosen].condition_deadline=0;
   } else {
    unsigned index=thread_index(owner&~0x40000000u);
    if(index==chosen || guest_threads[index].status==THREAD_EXITED) boundary("condition-mutex-owner",&state,state.pc);
-   ST32(address,owner|0x40000000u);
    guest_threads[chosen].status=THREAD_WAIT_MUTEX;guest_threads[chosen].mutex_owner=index;
    guest_threads[chosen].wait_order=++next_wait_order;
    /* The original timeout remains armed while reacquiring the mutex. */
@@ -170,9 +182,9 @@ static void thread_condition_signal(uint64_t key,int32_t count) {
   signaled++;(parallel_mode ? 0 : (thread_reschedule=1));
  }
 }
-/* 32-bit address arbitration is atomic with respect to guest execution: the
- * scheduler cannot interleave another context inside either syscall. Waiters
- * are separate from condition variables and do not acquire a mutex. */
+/* 32-bit address arbitration. Serialized, the scheduler cannot interleave another context inside either syscall;
+ * in parallel mode guest code changes the word meanwhile, so each update is a compare-and-swap (as the console's
+ * kernel does it). Waiters are separate from condition variables and do not acquire a mutex. */
 static uint32_t thread_address_svc(Cpu *c,unsigned imm) {
  uint64_t address=c->x[0];unsigned type=(uint32_t)c->x[1];
  uint32_t value=(uint32_t)c->x[2];int32_t count=(int32_t)c->x[3];
@@ -187,10 +199,11 @@ static uint32_t thread_address_svc(Cpu *c,unsigned imm) {
   Region r=query(address);unsigned permission=1;
   if((imm==0x34 && type==1) || (imm==0x35 && (type==1 || !waiters || count<=0 || waiters<=(unsigned)count))) permission=3;
   if((r.permission&permission)!=permission || r.size-(address-r.base)<4) return 0xd401;
-  uint32_t actual=LD32(address);
+  uint32_t actual=guest_word_load(address);
   if(imm==0x34) {
-   if(type==2 ? actual!=value : (int32_t)actual>=(int32_t)value) return 0xfa01;
-   if(type==1) ST32(address,actual-1u);
+   do {
+    if(type==2 ? actual!=value : (int32_t)actual>=(int32_t)value) return 0xfa01;
+   } while(type==1 && !guest_word_swap(address,&actual,actual-1u));
    int64_t ns=(int64_t)c->x[3];
    if(!ns) return 0xea01;
    guest_threads[current_thread].address_key=address;
@@ -201,7 +214,7 @@ static uint32_t thread_address_svc(Cpu *c,unsigned imm) {
   }
   if(actual!=value) return 0xfa01;
   uint32_t updated=type==1 || !waiters ? value+1u : (count<=0 || waiters<=(unsigned)count ? value-1u : value);
-  if(updated!=value) ST32(address,updated);
+  if(updated!=value && !guest_word_swap(address,&actual,updated)) return 0xfa01;  /* (changed since it was read) */
  }
  unsigned effective[33];thread_priorities(effective);
  for(unsigned n=0;n<waiters && (count<=0 || n<(unsigned)count);n++) {

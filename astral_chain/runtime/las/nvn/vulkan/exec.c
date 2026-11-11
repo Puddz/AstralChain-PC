@@ -3271,7 +3271,9 @@ static void gmem_wb_record(VkCommandBuffer cb, uint64_t seq) {
 // guest buffers resolves its range first (nvn_lazy_flush_hook). LARECOMP_VK_LAZY_WB=0: copy at completion.
 typedef struct { uint64_t addr, size, seq, lo, hi; VkBuffer buf; VmaAllocation mem; void *ptr; uint8_t *done; uint32_t left, faults; WbBlock *blk; } Lazy;
 enum { LAZY_MAX = 512, LAZY_HOT_MAX = 1024 };
-static Lazy lazy_tab[LAZY_MAX], lazy_free[LAZY_MAX];
+// (lazy_free: entries done since gmem_writeback_apply last emptied it; at most the table's, then one more per
+// write-back in flight (wb_flight) taken over in the next apply)
+static Lazy lazy_tab[LAZY_MAX], lazy_free[LAZY_MAX + 256];
 static int lazy_nfree;
 static struct { uint64_t addr, size; } lazy_hot[LAZY_HOT_MAX];  // ranges the CPU reads: eager write-back
 static int lazy_nhot;

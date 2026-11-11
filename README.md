@@ -39,6 +39,27 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-11**
 
+- **Saves and settings made safer, and several stops and freezes addressed** (from a review of the code; *not yet
+  confirmed in play*). Nothing moves: saves, settings and game data stay where they are, and the next **Play**
+  rebuilds the game once as after any update.
+  - **Save backups never hold a half-written save:** the automatic backup next to the saves (`...-snapshots`) is now
+    taken only while the game is not writing, and thrown away and taken again if the game changed its save during
+    the copy. Before, a backup taken in the middle of the next save could be kept as complete.
+  - **`userdata\launcher.ini` is not lost or overwritten:** the in-game menu no longer writes a new file when it
+    cannot read the old one (which dropped key bindings and the other settings); the launcher keeps what the
+    in-game menu saved while it was open, and writes the file in one step. The in-game sliders save when let go, not
+    at every step.
+  - **A folder that was copied or moved is built again** on the next **Play**. Before, a copy kept reading from, and
+    **saving into**, the folder it was copied from, and a moved folder did not start (exit code 31).
+  - **Folder names with letters outside English** (for example `C:\Users\Jörg\...`): the game no longer closes at
+    every start with exit code 31.
+  - **A rare freeze or stop in the game's thread locks** addressed: two places changed a lock's state in two steps
+    while the game changed it too.
+  - **A fast mouse can no longer stop the game** (`host-message-budget`) after a long stall.
+  - **Setup:** a folder path with `[` or `]` is reported at the start instead of failing later; the GPU warm-up's
+    time limit now works when it hangs; a failed **BC7 textures** preparation no longer blocks **Play**; a build
+    cancelled at the wrong moment no longer fails every later build.
+  - **Reports from a downloaded zip say which version it is** (a `VERSION` file filled in when the zip is made).
 - **Detailed frame rate panel** (issue #28; *not yet confirmed in play*): **Settings > Display > Show the frame rate**
   (also in the in-game menu) is now **Off / Frame rate / Detailed**. Detailed shows a frame time graph, the 1% and
   0.1% lows, GPU and CPU load, video and system memory, the GPU's temperature, power and clock, the GPU's busy time
@@ -429,6 +450,10 @@ GPU driver error that Windows logs. The game also stops itself if the GPU stays 
 
 Download the new version over the old one, or `git pull`. The next **Play** rebuilds the game once, in about a
 minute. Your saves, game data and shader cache are kept.
+
+Your saves and settings are in the folder's `userdata` folder, and nothing else holds them. To move the port, move
+the whole folder; to start again from a fresh download, copy `userdata` into the new folder before the first
+**Play**. A moved or copied folder is built again on its next **Play**.
 
 ## Known issues
 
