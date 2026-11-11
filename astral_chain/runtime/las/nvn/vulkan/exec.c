@@ -4586,8 +4586,11 @@ static void draw_(CmdRec *r, bool indexed) {
         // layout moves out by the width of the empty band beside the 16:9 area; everything else stays. The menu
         // (Police Gear, minus) and IRIS's file panel are turned too, less (the menu -0.325 throughout, IRIS -0.400; the
         // HUD's right side -0.418 and more), and stay where they are. IRIS's profile panel (a person scanned) turns
-        // as the HUD's tutorial box does (-0.58), but also leans back (row 2 column 1 against row 0 column 0: -0.19 to
-        // -0.27 while it comes in and after; the tutorial box -0.12, the item panel -0.26 but turned -0.73): it stays.
+        // as the HUD's tutorial box does (-0.58), but also leans back (row 2 column 1 against row 0 column 0, the same
+        // for its mirrored parts: -0.19 to -0.27 while it comes in and after; the tutorial box -0.12, the item panel
+        // -0.26 but turned -0.73): it stays. So does the flicker it comes in with (strips scaled and flipped every frame,
+        // so neither ratio holds; their third column is the panel's pitched one, row 1 column 2 about 0.2-0.26, and they
+        // sit above y 490 in the layout: the HUD's only pitched part, the item panel, is below).
         if (!ui_box && st.ubuf[0][1].addr && st.ubuf[0][1].size >= 48 && p[46] != 0 && p[44] == 0 && p[45] == 0 &&
             renderer_texture_presented(st.rt.color[0])) {
             extern int ac_hud_edges_on(void);
@@ -4595,7 +4598,8 @@ static void draw_(CmdRec *r, bool indexed) {
             if (fabsf(m[0]) > 0.05f && ac_hud_edges_on()) {
                 float yaw = m[8] / m[0], tx = m[3];
                 if (yaw > 0.25f && tx < 640) hud_side = -1;
-                else if (yaw < -0.41f && tx > 640 && !(yaw > -0.60f && m[9] / fabsf(m[0]) < -0.15f)) hud_side = 1;
+                else if (yaw < -0.41f && tx > 640 && !(yaw > -0.60f && m[9] / m[0] < -0.15f) && !(m[6] > 0.15f && m[7] < 490))
+                    hud_side = 1;
             }
         }
     }
