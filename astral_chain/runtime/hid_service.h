@@ -413,6 +413,7 @@ static uint64_t hid_script_buttons(uint64_t now) {
 }
 static int input_replay_sample(uint64_t now,HidSample *s);         /* (input_record.h) */
 static void input_record_sample(uint64_t now,const HidSample *s);
+static void input_record_flush(void);  /* (input_record.h: when the window closes) */
 static void hid_publish(uint64_t now,int focused) {
  if(!hid_page || !hid_active) return;
  unsigned connected=(hid_styles&1) && (hid_ids&1);

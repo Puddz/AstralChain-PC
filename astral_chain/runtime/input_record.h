@@ -134,6 +134,9 @@ static void input_replay_load(void) {
  rp_state=1;
 }
 /* Replaces the sample with the recording's; 0 once the recording has ended (or there is none). */
+/* The window is closing (the X, Alt+F4, Quit game in the menu): what was recorded since the last flush is written, as
+ * the process may end without the C runtime flushing its files. */
+static void input_record_flush(void) { if(rec_state==1) fflush(rec_file); }
 static int input_replay_sample(uint64_t now,HidSample *s) {
  if(rp_state<0) input_replay_load();
  if(rp_state!=1) return 0;

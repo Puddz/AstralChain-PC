@@ -232,6 +232,7 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
  }
  if(message==WM_CLOSE) {
   rumble_stop();
+  input_record_flush();
   /* The game gets the exit request; if shutdown stalls (GPU work, waits), the
    * process must not linger invisibly holding the save lock and GPU memory. */
   if(!app_exit_requested) {HANDLE t=CreateThread(NULL,0,app_exit_watchdog,NULL,0,NULL);if(t)CloseHandle(t);}
