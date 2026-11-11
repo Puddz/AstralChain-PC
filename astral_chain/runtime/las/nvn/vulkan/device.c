@@ -333,6 +333,7 @@ static void vk_pipeline_cache_save_async(void) {
 }
 
 // ================================================================== swapchain
+static const char *g_present_mode_name = "";  // (the performance overlay, las/menu.cpp)
 static VkPresentModeKHR present_mode(void) {
     // MAILBOX by default: the game paces itself (vi.c's emulated 60 Hz vsync), and with FIFO every submission
     // queued behind the one waiting for a window image, so the game's fence waits followed the presentation engine:
@@ -348,6 +349,7 @@ static VkPresentModeKHR present_mode(void) {
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_vk.phys, g_vk.surface, &n, m);
     VkPresentModeKHR got = VK_PRESENT_MODE_FIFO_KHR;
     for (uint32_t i = 0; i < n; i++) if (m[i] == want) got = want;
+    g_present_mode_name = got == VK_PRESENT_MODE_MAILBOX_KHR ? "Mailbox" : got == VK_PRESENT_MODE_IMMEDIATE_KHR ? "Immediate" : "FIFO (vsync)";
     static VkPresentModeKHR logged = (VkPresentModeKHR)-1;
     if (got != logged) {
         logged = got;
@@ -624,6 +626,16 @@ static NvnTexture *g_last_presented;
 
 const float *vk_shot_crop(void) { return g_shot_crop; }
 
+// (the performance overlay, las/menu.cpp) the window's size, the size of the game's picture shown in it, the GPU's
+// name, the presentation mode
+static int g_image_size[2];
+void vk_perf_sizes(int *win_w, int *win_h, int *img_w, int *img_h) {
+    *win_w = (int)g_vk.sc_extent.width; *win_h = (int)g_vk.sc_extent.height;
+    *img_w = g_image_size[0]; *img_h = g_image_size[1];
+}
+const char *vk_perf_gpu_name(void) { return g_vk.props.deviceName; }
+const char *vk_perf_present_mode(void) { return g_present_mode_name; }
+
 // nvnWindowSetCrop: the part of the window texture that is shown. Astral Chain in handheld mode (AC_HANDHELD=1)
 // renders 1280x720 into the top left of its 1600x900 window textures and crops to it. An empty crop: the whole texture.
 static int g_present_crop[4];
@@ -661,6 +673,7 @@ void backend_present(NvnTexture *t) {
             gw = cr[2]; gh = cr[3];
         }
         memcpy(g_shot_crop, uv, sizeof uv);
+        g_image_size[0] = (int)gw; g_image_size[1] = (int)gh;
         double k = dw / gw < dh / gh ? dw / gw : dh / gh, vw = gw * k, vh = gh * k, vx = (dw - vw) / 2, vy = (dh - vh) / 2;
         renderer_set_scale(1.0f, 1.0f);
         VkCommandBuffer cb = vk_cmd();
@@ -673,6 +686,8 @@ void backend_present(NvnTexture *t) {
         if (menu_at && (long)total_frames + 1 == menu_at) { extern volatile long ac_menu_open; ac_menu_open = 1; }
         extern void menu_render(void *cmd, uint32_t w, uint32_t h);
         menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
+        extern void vk_perf_frame_end(void);
+        vk_perf_frame_end();
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("LARECOMP_WINDOW_SHOT") ? atol(getenv("LARECOMP_WINDOW_SHOT")) : 0;
         bool shot = win_shot && (long)total_frames + 1 == win_shot;

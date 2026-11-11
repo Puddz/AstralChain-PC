@@ -10,12 +10,16 @@
 // once where the runtime can (ac_setting_apply), else at the next start, and saved to userdata\launcher.ini, the
 // launcher's own file (AC_SETTINGS_FILE overrides the path; tests use it).
 #include <windows.h>
+#include <psapi.h>
+#include <pdh.h>
+#include <pdhmsg.h>
 #include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
@@ -30,7 +34,16 @@ extern AcMenuEvent ac_menu_events[256];
 extern volatile long ac_menu_head, ac_menu_tail;
 extern volatile long ac_menu_pad_buttons, ac_menu_pad_lx, ac_menu_pad_ly;
 extern volatile int ac_title_credit;                     // (live_settings.h)
-extern volatile int ac_fps_counter;                      // (live_settings.h)
+extern volatile int ac_fps_counter;                      // (live_settings.h) 0 off, 1 frame rate, 2 detailed
+extern volatile int ac_uncapped;                         // (live_settings.h)
+// The renderer's numbers for the detailed frame rate panel (nvn/vulkan/exec.c, device.c)
+extern volatile int vk_perf_detail;
+void vk_perf_totals(uint64_t *gpu_ns, uint64_t *wait_gpu_ns, uint64_t *wait_shader_ns);
+void vk_perf_scene(int *w, int *h);
+void vk_perf_vram(uint64_t *usage, uint64_t *budget, uint64_t *size);
+void vk_perf_sizes(int *win_w, int *win_h, int *img_w, int *img_h);
+const char *vk_perf_gpu_name(void);
+const char *vk_perf_present_mode(void);
 extern volatile unsigned long long ac_title_video_tick;  // (romfs_storage.h: last read of a title-screen video)
 void ac_setting_apply(const char *key, const char *value);
 int ac_fullscreen_state(void);
@@ -63,8 +76,11 @@ std::vector<Opt> opts = {
     {"mouse_sens", "Controls", "Mouse camera sensitivity (%)", nullptr, NUMBER, "100", nullptr, 10, 500, true},
     {"mouse_invert", "Controls", "Invert mouse up and down", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"fullscreen", "Display", "Fullscreen", "Also F11 or Alt+Enter. The game starts the way you leave it.", CHECK, "0", nullptr, 0, 0, true},
-    {"fps_counter", "Display", "Show the frame rate", "Frames per second and the average frame time, in the top left corner.",
-     CHECK, "0", nullptr, 0, 0, true},
+    {"fps_counter", "Display", "Show the frame rate",
+     "In the top left corner. Frame rate: frames per second and the average frame time. Detailed: also a frame time graph, "
+     "the slowest frames, GPU and CPU load, memory, the GPU's temperature and power where its driver gives them, and the "
+     "render sizes.",
+     CHOICE, "0", "0|Off;1|Frame rate;2|Detailed", 0, 0, true},
     {"port_credit", "Display", "Show \"Port by Puddz\" on the title screen", nullptr, CHECK, "1", nullptr, 0, 0, true},
     {"title_own_twin", "Display", "Title screen shows the twin you play as",
      "The game shows the other twin. From the next time the title screen appears.", CHECK, "0", nullptr, 0, 0, true},
@@ -103,7 +119,7 @@ void read_session() {
         else if (k == "ignore_focus") { std::string e = env("AC_IGNORE_FOCUS"); v = !e.empty() && e != "0" ? "1" : "0"; }
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
         else if (k == "port_credit") v = env("AC_TITLE_CREDIT") == "0" ? "0" : "1";
-        else if (k == "fps_counter") v = env("AC_FPS_COUNTER") == "1" ? "1" : "0";
+        else if (k == "fps_counter") { std::string e = env("AC_FPS_COUNTER"); v = e == "1" || e == "2" ? e : "0"; }
         else if (k == "title_own_twin") v = env("AC_TITLE_OWN_TWIN") == "1" ? "1" : "0";
         o.value = v;
     }
@@ -375,20 +391,330 @@ void draw_credit(float w, float h, ULONGLONG now) {
     dl->AddText(f, size, pos, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.9f * a)), credit_text);
 }
 
-// Frame rate counter (off by default; AC_FPS_COUNTER=1 or the menu's option): frames presented per second and their
-// average time, counted here (menu_render runs once per presented frame) over half-second windows, in the top left
-// corner of the window.
-LARGE_INTEGER fps_t0, fps_freq;
+// Frame rate counter (off by default; AC_FPS_COUNTER=1 or 2, or the menu's option): frames presented per second and
+// their average time, counted here (menu_render runs once per presented frame) over half-second windows, in the top
+// left corner of the window. 2 ("Detailed", issue #28) shows a panel instead: the frame time graph and the slowest
+// frames, the machine's load and memory, the GPU's sensors where its driver gives them, the renderer's waits and the
+// render sizes.
+LARGE_INTEGER fps_t0, fps_freq, fps_last;
 int fps_frames;
 char fps_text[48];
 
+int fps_mode(void) {
+    if (ac_fps_counter < 0) { int m = atoi(env("AC_FPS_COUNTER").c_str()); ac_fps_counter = m >= 0 && m <= 2 ? m : 0; }
+    return ac_fps_counter >= 0 && ac_fps_counter <= 2 ? ac_fps_counter : 0;
+}
+
+// ---- detailed: the frames (render thread)
+const int RING = 4096;  // frame times (ms) and when each ended (QPC): the graph, and the lows (over all of them)
+float ring_ms[RING];
+LONGLONG ring_at[RING];
+int ring_n, ring_pos;
+struct Summary {  // made twice a second from the frames and the renderer's totals
+    float fps, avg_ms, max_ms, low1 = -1, low01 = -1;
+    float gpu_ms, wait_gpu_ms, wait_shader_ms;  // per frame
+    uint64_t vram_used, vram_budget, vram_size;
+    int win_w, win_h, img_w, img_h, scene_w, scene_h;
+} sum;
+LONGLONG sum_t0;
+uint64_t sum_gpu0, sum_wait0, sum_shader0;
+int sum_frames;
+
+void frames_reset(void) { fps_last.QuadPart = 0; ring_n = 0; sum_t0 = 0; }
+
+void frames_add(LARGE_INTEGER now) {
+    if (fps_last.QuadPart) {
+        ring_ms[ring_pos] = (float)(1000.0 * (double)(now.QuadPart - fps_last.QuadPart) / (double)fps_freq.QuadPart);
+        ring_at[ring_pos] = now.QuadPart;
+        ring_pos = (ring_pos + 1) % RING;
+        if (ring_n < RING) ring_n++;
+    }
+    fps_last = now;
+    uint64_t gpu, wg, ws;
+    vk_perf_totals(&gpu, &wg, &ws);
+    if (!sum_t0) { sum_t0 = now.QuadPart; sum_gpu0 = gpu; sum_wait0 = wg; sum_shader0 = ws; sum_frames = 0; return; }
+    sum_frames++;
+    double dt = (double)(now.QuadPart - sum_t0) / (double)fps_freq.QuadPart;
+    if (dt < 0.5) return;
+    // the last second's frames: rate, average, longest; the last 4096 frames (68 s at 60 fps): the 1% and 0.1% lows
+    // (the frame time that 1% / 0.1% of the frames take longer than, as a rate)
+    static std::vector<float> v;
+    v.clear();
+    double total = 0;
+    int n1 = 0;
+    float mx = 0;
+    for (int i = 0; i < ring_n; i++) {
+        int k = (ring_pos - 1 - i + RING) % RING;
+        double age = (double)(now.QuadPart - ring_at[k]) / (double)fps_freq.QuadPart;
+        v.push_back(ring_ms[k]);
+        if (age <= 1) { total += ring_ms[k]; n1++; if (ring_ms[k] > mx) mx = ring_ms[k]; }
+    }
+    sum.fps = n1 && total > 0 ? (float)(n1 * 1000.0 / total) : 0;
+    sum.avg_ms = n1 ? (float)(total / n1) : 0;
+    sum.max_ms = mx;
+    sum.low1 = sum.low01 = -1;
+    if (v.size() >= 100) {
+        std::sort(v.begin(), v.end());
+        size_t n = v.size();
+        sum.low1 = 1000.0f / v[n - 1 - n / 100];
+        if (n >= 1000) sum.low01 = 1000.0f / v[n - 1 - n / 1000];
+    }
+    sum.gpu_ms = (float)((gpu - sum_gpu0) / 1e6 / sum_frames);
+    sum.wait_gpu_ms = (float)((wg - sum_wait0) / 1e6 / sum_frames);
+    sum.wait_shader_ms = (float)((ws - sum_shader0) / 1e6 / sum_frames);
+    vk_perf_vram(&sum.vram_used, &sum.vram_budget, &sum.vram_size);
+    vk_perf_sizes(&sum.win_w, &sum.win_h, &sum.img_w, &sum.img_h);
+    vk_perf_scene(&sum.scene_w, &sum.scene_h);
+    sum_t0 = now.QuadPart; sum_gpu0 = gpu; sum_wait0 = wg; sum_shader0 = ws; sum_frames = 0;
+}
+
+// ---- detailed: the machine. Sampled on a thread of its own twice a second while the panel shows (some of these calls
+// take milliseconds). Load and memory from Windows (GetSystemTimes; the "GPU Engine" counters, as Task Manager), the
+// GPU's temperature, power and clock from its driver's own library, loaded at run time and not shipped with the port:
+// NVML (nvml.dll) on NVIDIA, ADL (atiadlxx.dll) on AMD; without them (Intel), those numbers are not shown. The approach
+// is the TotK recomp's overlay's (github.com/valentderah/totk-pc-recomp, runtime/perfmon.c); the ADL declarations are
+// AMD's (github.com/GPUOpen-LibrariesAndSDKs/display-library, include/adl_structures.h and adl_defines.h; MIT).
+struct Machine {
+    float cpu = -1, cpu_game = -1, gpu = -1, gpu_temp = -1, gpu_power = -1, gpu_clock = -1;
+    double ram_used = 0, ram_total = 0, ram_game = 0;
+} mach;
+SRWLOCK mach_lock = SRWLOCK_INIT;
+volatile LONG sampler_on;
+char cpu_name[64];
+
+bool same_gpu(const char *a, const char *b) { return *a && *b && (!strcmp(a, b) || strstr(a, b) || strstr(b, a)); }
+
+// NVML (NVIDIA)
+typedef struct { unsigned gpu, memory; } NvmlUtil;
+struct {
+    bool tried, ok;
+    void *dev;
+    int (*temp)(void *, int, unsigned *);
+    int (*power)(void *, unsigned *);
+    int (*clock)(void *, int, unsigned *);
+    int (*util)(void *, NvmlUtil *);
+} nv;
+
+void nvml_open(const char *gpu) {
+    nv.tried = true;
+    HMODULE l = LoadLibraryExW(L"nvml.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!l) l = LoadLibraryW(L"C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll");
+    if (!l) return;
+    auto init = (int (*)(void))GetProcAddress(l, "nvmlInit_v2");
+    auto count = (int (*)(unsigned *))GetProcAddress(l, "nvmlDeviceGetCount_v2");
+    auto handle = (int (*)(unsigned, void **))GetProcAddress(l, "nvmlDeviceGetHandleByIndex_v2");
+    auto name = (int (*)(void *, char *, unsigned))GetProcAddress(l, "nvmlDeviceGetName");
+    nv.temp = (int (*)(void *, int, unsigned *))GetProcAddress(l, "nvmlDeviceGetTemperature");
+    nv.power = (int (*)(void *, unsigned *))GetProcAddress(l, "nvmlDeviceGetPowerUsage");
+    nv.clock = (int (*)(void *, int, unsigned *))GetProcAddress(l, "nvmlDeviceGetClockInfo");
+    nv.util = (int (*)(void *, NvmlUtil *))GetProcAddress(l, "nvmlDeviceGetUtilizationRates");
+    unsigned n = 0;
+    if (!init || !count || !handle || !name || init() != 0 || count(&n) != 0) return;
+    for (unsigned i = 0; i < n && !nv.ok; i++) {  // the card the game renders on (if that is another vendor's: none)
+        void *d;
+        char nm[96] = "";
+        if (handle(i, &d) == 0 && name(d, nm, sizeof nm) == 0 && same_gpu(nm, gpu)) { nv.dev = d; nv.ok = true; }
+    }
+    printf("[perf] NVML: %s\n", nv.ok ? "the game's GPU found" : "no matching GPU");
+    fflush(stdout);
+}
+
+void nvml_sample(Machine &m) {
+    if (!nv.ok) return;
+    unsigned v;
+    if (nv.temp && nv.temp(nv.dev, 0 /* NVML_TEMPERATURE_GPU */, &v) == 0) m.gpu_temp = (float)v;
+    if (nv.power && nv.power(nv.dev, &v) == 0) m.gpu_power = v / 1000.0f;  // (mW)
+    if (nv.clock && nv.clock(nv.dev, 0 /* NVML_CLOCK_GRAPHICS */, &v) == 0) m.gpu_clock = (float)v;
+    NvmlUtil u;
+    if (m.gpu < 0 && nv.util && nv.util(nv.dev, &u) == 0) m.gpu = (float)u.gpu;
+}
+
+// ADL (AMD)
+#define ADL_MAX_PATH 256
+struct AdapterInfo {
+    int iSize, iAdapterIndex;
+    char strUDID[ADL_MAX_PATH];
+    int iBusNumber, iDeviceNumber, iFunctionNumber, iVendorID;
+    char strAdapterName[ADL_MAX_PATH], strDisplayName[ADL_MAX_PATH];
+    int iPresent, iExist;
+    char strDriverPath[ADL_MAX_PATH], strDriverPathExt[ADL_MAX_PATH], strPNPString[ADL_MAX_PATH];
+    int iOSDisplayIndex;
+};
+struct AdlSensor { int supported, value; };
+struct AdlPmLog { int size; AdlSensor sensors[256]; };
+enum { PMLOG_CLK_GFXCLK = 1, PMLOG_TEMPERATURE_EDGE = 8, PMLOG_INFO_ACTIVITY_GFX = 19, PMLOG_ASIC_POWER = 23,
+       PMLOG_TEMPERATURE_HOTSPOT = 27, PMLOG_BOARD_POWER = 73 };
+struct {
+    bool tried, ok;
+    void *ctx;
+    int index;
+    int (*pmlog)(void *, int, AdlPmLog *);
+} adl;
+
+void *__stdcall adl_alloc(int n) { return malloc((size_t)n); }
+
+void adl_open(const char *gpu) {
+    adl.tried = true;
+    HMODULE l = LoadLibraryExW(L"atiadlxx.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!l) return;
+    auto create = (int (*)(void *(__stdcall *)(int), int, void **))GetProcAddress(l, "ADL2_Main_Control_Create");
+    auto count = (int (*)(void *, int *))GetProcAddress(l, "ADL2_Adapter_NumberOfAdapters_Get");
+    auto info = (int (*)(void *, AdapterInfo *, int))GetProcAddress(l, "ADL2_Adapter_AdapterInfo_Get");
+    adl.pmlog = (int (*)(void *, int, AdlPmLog *))GetProcAddress(l, "ADL2_New_QueryPMLogData_Get");
+    int n = 0;
+    if (!create || !count || !info || !adl.pmlog || create(adl_alloc, 1, &adl.ctx) != 0 || count(adl.ctx, &n) != 0 || n <= 0 || n > 64)
+        return;
+    std::vector<AdapterInfo> a((size_t)n);
+    for (AdapterInfo &x : a) x.iSize = sizeof(AdapterInfo);
+    if (info(adl.ctx, a.data(), (int)(sizeof(AdapterInfo) * a.size())) != 0) return;
+    for (AdapterInfo &x : a)
+        if (x.iVendorID == 0x1002 && same_gpu(x.strAdapterName, gpu)) { adl.index = x.iAdapterIndex; adl.ok = true; break; }
+    printf("[perf] ADL: %s\n", adl.ok ? "the game's GPU found" : "no matching GPU");
+    fflush(stdout);
+}
+
+void adl_sample(Machine &m) {
+    if (!adl.ok) return;
+    static AdlPmLog log;
+    memset(&log, 0, sizeof log);
+    log.size = sizeof log;
+    if (adl.pmlog(adl.ctx, adl.index, &log) != 0) return;
+    const AdlSensor *v = log.sensors;
+    if (m.gpu < 0 && v[PMLOG_INFO_ACTIVITY_GFX].supported) m.gpu = (float)v[PMLOG_INFO_ACTIVITY_GFX].value;
+    if (v[PMLOG_TEMPERATURE_EDGE].supported) m.gpu_temp = (float)v[PMLOG_TEMPERATURE_EDGE].value;
+    else if (v[PMLOG_TEMPERATURE_HOTSPOT].supported) m.gpu_temp = (float)v[PMLOG_TEMPERATURE_HOTSPOT].value;
+    if (v[PMLOG_BOARD_POWER].supported) m.gpu_power = (float)v[PMLOG_BOARD_POWER].value;
+    else if (v[PMLOG_ASIC_POWER].supported) m.gpu_power = (float)v[PMLOG_ASIC_POWER].value;
+    if (v[PMLOG_CLK_GFXCLK].supported) m.gpu_clock = (float)v[PMLOG_CLK_GFXCLK].value;
+}
+
+// GPU load from Windows' counters (any vendor): per engine, the sum over all processes; the busiest engine of the
+// adapter the game uses (the one this process's engines are on), as Task Manager shows it.
+struct {
+    bool tried, ok;
+    PDH_HQUERY q;
+    PDH_HCOUNTER c;
+    PDH_STATUS(WINAPI *open)(LPCWSTR, DWORD_PTR, PDH_HQUERY *);
+    PDH_STATUS(WINAPI *add)(PDH_HQUERY, LPCWSTR, DWORD_PTR, PDH_HCOUNTER *);
+    PDH_STATUS(WINAPI *collect)(PDH_HQUERY);
+    PDH_STATUS(WINAPI *get)(PDH_HCOUNTER, DWORD, LPDWORD, LPDWORD, PPDH_FMT_COUNTERVALUE_ITEM_W);
+} pdh;
+
+void pdh_open(void) {
+    pdh.tried = true;
+    HMODULE l = LoadLibraryExW(L"pdh.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!l) return;
+    pdh.open = (decltype(pdh.open))(void *)GetProcAddress(l, "PdhOpenQueryW");
+    pdh.add = (decltype(pdh.add))(void *)GetProcAddress(l, "PdhAddEnglishCounterW");
+    pdh.collect = (decltype(pdh.collect))(void *)GetProcAddress(l, "PdhCollectQueryData");
+    pdh.get = (decltype(pdh.get))(void *)GetProcAddress(l, "PdhGetFormattedCounterArrayW");
+    if (!pdh.open || !pdh.add || !pdh.collect || !pdh.get || pdh.open(NULL, 0, &pdh.q) != ERROR_SUCCESS) return;
+    if (pdh.add(pdh.q, L"\\GPU Engine(*)\\Utilization Percentage", 0, &pdh.c) != ERROR_SUCCESS) return;
+    pdh.collect(pdh.q);
+    pdh.ok = true;
+}
+
+void pdh_sample(Machine &m) {
+    if (!pdh.ok || pdh.collect(pdh.q) != ERROR_SUCCESS) return;
+    DWORD bytes = 0, n = 0;
+    if (pdh.get(pdh.c, PDH_FMT_DOUBLE, &bytes, &n, NULL) != (PDH_STATUS)PDH_MORE_DATA || !bytes) return;
+    std::vector<unsigned char> buf(bytes);
+    auto *it = (PPDH_FMT_COUNTERVALUE_ITEM_W)buf.data();
+    if (pdh.get(pdh.c, PDH_FMT_DOUBLE, &bytes, &n, it) != ERROR_SUCCESS) return;
+    // instance names: pid_<pid>_luid_0x<hi>_0x<lo>_phys_<n>_eng_<n>_engtype_<type>
+    wchar_t mine[32];
+    swprintf(mine, 32, L"pid_%lu_", GetCurrentProcessId());
+    size_t ml = wcslen(mine);
+    std::wstring luid;
+    for (DWORD i = 0; i < n && luid.empty(); i++) {
+        const wchar_t *nm = it[i].szName, *l = wcsstr(nm, L"_luid_");
+        if (l && !wcsncmp(nm, mine, ml)) { const wchar_t *e = wcsstr(l, L"_phys_"); if (e) luid.assign(l, e); }
+    }
+    if (luid.empty()) return;
+    std::vector<std::pair<std::wstring, double>> eng;  // engine (the name from _luid_ on) -> sum over the processes
+    for (DWORD i = 0; i < n; i++) {
+        const wchar_t *l = wcsstr(it[i].szName, L"_luid_");
+        if (!l || wcsncmp(l, luid.c_str(), luid.size()) || it[i].FmtValue.CStatus != ERROR_SUCCESS) continue;
+        bool found = false;
+        for (auto &e : eng) if (e.first == l) { e.second += it[i].FmtValue.doubleValue; found = true; break; }
+        if (!found) eng.push_back({std::wstring(l), it[i].FmtValue.doubleValue});
+    }
+    double best = 0;
+    for (auto &e : eng) best = std::max(best, e.second);
+    m.gpu = (float)std::min(best, 100.0);
+}
+
+ULONGLONG u64(FILETIME f) { return ((ULONGLONG)f.dwHighDateTime << 32) | f.dwLowDateTime; }
+
+DWORD WINAPI sampler(void *) {
+    std::string gpu = vk_perf_gpu_name();
+    ULONGLONG idle0 = 0, kern0 = 0, user0 = 0, proc0 = 0, wall0 = 0;
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    while (fps_mode() == 2) {
+        Machine m;
+        if (!pdh.tried) pdh_open();
+        if (!nv.tried) nvml_open(gpu.c_str());
+        if (!nv.ok && !adl.tried) adl_open(gpu.c_str());
+        pdh_sample(m);
+        nvml_sample(m);
+        adl_sample(m);
+        FILETIME fi, fk, fu, c, e, pk, pu;
+        ULONGLONG wall = GetTickCount64() * 10000ull;  // (100 ns units, as FILETIME)
+        if (GetSystemTimes(&fi, &fk, &fu) && GetProcessTimes(GetCurrentProcess(), &c, &e, &pk, &pu)) {
+            ULONGLONG idle = u64(fi), kern = u64(fk), user = u64(fu), proc = u64(pk) + u64(pu);
+            if (wall0) {
+                ULONGLONG all = (kern - kern0) + (user - user0), id = idle - idle0;  // (kernel time includes idle)
+                if (all > 0 && all >= id) m.cpu = 100.0f * (float)(all - id) / (float)all;
+                if (wall > wall0) m.cpu_game = 100.0f * (float)(proc - proc0) / (float)((wall - wall0) * si.dwNumberOfProcessors);
+            }
+            idle0 = idle; kern0 = kern; user0 = user; proc0 = proc; wall0 = wall;
+        }
+        MEMORYSTATUSEX ms;
+        ms.dwLength = sizeof ms;
+        if (GlobalMemoryStatusEx(&ms)) { m.ram_total = (double)ms.ullTotalPhys; m.ram_used = (double)(ms.ullTotalPhys - ms.ullAvailPhys); }
+        PROCESS_MEMORY_COUNTERS pmc;
+        pmc.cb = sizeof pmc;
+        if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc)) m.ram_game = (double)pmc.WorkingSetSize;
+        AcquireSRWLockExclusive(&mach_lock);
+        mach = m;
+        ReleaseSRWLockExclusive(&mach_lock);
+        Sleep(500);
+    }
+    InterlockedExchange(&sampler_on, 0);
+    return 0;
+}
+
+void read_cpu_name(void) {
+    HKEY k;
+    DWORD n = sizeof cpu_name - 1;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+        if (RegQueryValueExA(k, "ProcessorNameString", NULL, NULL, (BYTE *)cpu_name, &n) != ERROR_SUCCESS) cpu_name[0] = 0;
+        RegCloseKey(k);
+    }
+    cpu_name[sizeof cpu_name - 1] = 0;
+    char *p = cpu_name;  // (some names start or end with spaces)
+    while (*p == ' ') p++;
+    memmove(cpu_name, p, strlen(p) + 1);
+    for (size_t l = strlen(cpu_name); l && cpu_name[l - 1] == ' ';) cpu_name[--l] = 0;
+}
+
 bool fps_due(void) {
-    if (ac_fps_counter < 0) ac_fps_counter = env("AC_FPS_COUNTER") == "1";
+    int mode = fps_mode();
+    vk_perf_detail = mode == 2;
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     if (!fps_freq.QuadPart) QueryPerformanceFrequency(&fps_freq);
-    if (!ac_fps_counter) { fps_t0.QuadPart = 0; fps_text[0] = 0; return false; }
-    if (!fps_t0.QuadPart) { fps_t0 = now; fps_frames = 0; return fps_text[0] != 0; }
+    if (!mode) { fps_t0.QuadPart = 0; fps_text[0] = 0; frames_reset(); return false; }
+    if (mode == 2) {
+        frames_add(now);
+        if (!sampler_on && !InterlockedExchange(&sampler_on, 1)) {
+            if (!cpu_name[0]) read_cpu_name();
+            HANDLE t = CreateThread(NULL, 0, sampler, NULL, 0, NULL);
+            if (t) { SetThreadPriority(t, THREAD_PRIORITY_BELOW_NORMAL); CloseHandle(t); } else InterlockedExchange(&sampler_on, 0);
+        }
+    } else frames_reset();
+    if (!fps_t0.QuadPart) { fps_t0 = now; fps_frames = 0; return fps_text[0] != 0 || mode == 2; }
     fps_frames++;
     double dt = (double)(now.QuadPart - fps_t0.QuadPart) / (double)fps_freq.QuadPart;
     if (dt >= 0.5) {
@@ -396,11 +722,10 @@ bool fps_due(void) {
         fps_t0 = now;
         fps_frames = 0;
     }
-    return fps_text[0] != 0;
+    return fps_text[0] != 0 || mode == 2;
 }
 
-void draw_fps(float w, float h) {
-    (void)w;
+void draw_fps_simple(float h) {
     float size = h * 0.028f;
     if (size < 14) size = 14;
     ImFont *f = font ? font : ImGui::GetFont();
@@ -409,6 +734,109 @@ void draw_fps(float w, float h) {
     ImDrawList *dl = ImGui::GetForegroundDrawList();
     dl->AddRectFilled(ImVec2(m * 0.5f, m * 0.5f), ImVec2(m * 1.5f + ts.x, m * 1.5f + ts.y), ImGui::GetColorU32(ImVec4(0, 0, 0, 0.45f)), size * 0.2f);
     dl->AddText(f, size, ImVec2(m, m), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.95f)), fps_text);
+}
+
+// The detailed panel: a window of its own in the top left corner (no input, no focus), its text sized for the window.
+void draw_fps_detailed(float h) {
+    float size = h * 0.02f;
+    if (size < 13) size = 13;
+    ImGuiIO &io = ImGui::GetIO();
+    ImFont *f = font ? font : ImGui::GetFont();
+    float pad = size * 0.5f;
+    ImGui::SetNextWindowPos(ImVec2(pad, pad), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(size * 0.7f, size * 0.5f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(size * 0.5f, size * 0.2f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, size * 0.3f);
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(size * 0.4f, size * 0.05f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::Begin("##perf", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImGui::SetWindowFontScale(size / (f->FontSize * io.FontGlobalScale));
+    Machine m;
+    AcquireSRWLockShared(&mach_lock);
+    m = mach;
+    ReleaseSRWLockShared(&mach_lock);
+    const ImVec4 green(0.55f, 0.85f, 0.35f, 1), blue(0.4f, 0.7f, 1, 1), pink(0.95f, 0.5f, 0.75f, 1), gold(0.95f, 0.8f, 0.4f, 1),
+        lav(0.7f, 0.72f, 1, 1), white(1, 1, 1, 0.95f), grey(1, 1, 1, 0.55f);
+    char a[48], b[48], c[48];
+    auto num = [](char *o, const char *fmt, float v) { if (v < 0) snprintf(o, 48, "-"); else snprintf(o, 48, fmt, v); };
+    auto row4 = [](const ImVec4 &col, const char *label, const char *x, const char *y, const char *z) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn(); ImGui::TextColored(col, "%s", label);
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(x);
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(y);
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(z);
+    };
+    if (ImGui::BeginTable("##m", 4, ImGuiTableFlags_SizingFixedFit)) {
+        num(a, "%.0f%%", m.gpu); num(b, "%.0f \xC2\xB0" "C", m.gpu_temp); num(c, "%.0f W", m.gpu_power);
+        row4(green, "GPU", a, m.gpu_temp < 0 ? "" : b, m.gpu_power < 0 ? "" : c);
+        snprintf(a, 48, "%.1f GB", sum.vram_used / 1073741824.0);
+        snprintf(b, 48, "/ %.1f GB", sum.vram_size / 1073741824.0);
+        num(c, "%.0f MHz", m.gpu_clock);
+        row4(green, "VRAM", a, b, m.gpu_clock < 0 ? "" : c);
+        num(a, "%.0f%%", m.cpu); num(c, "game %.0f%%", m.cpu_game);
+        row4(blue, "CPU", a, "", c);
+        snprintf(a, 48, "%.1f GB", m.ram_used / 1073741824.0);
+        snprintf(b, 48, "/ %.1f GB", m.ram_total / 1073741824.0);
+        snprintf(c, 48, "game %.1f GB", m.ram_game / 1073741824.0);
+        row4(pink, "RAM", a, b, c);
+        snprintf(a, 48, "%.0f", sum.fps); num(b, "1%% low %.0f", sum.low1); num(c, "0.1%% low %.0f", sum.low01);
+        row4(white, "FPS", a, b, c);
+        snprintf(a, 48, "%.1f ms", sum.avg_ms); snprintf(b, 48, "max %.1f ms", sum.max_ms);
+        row4(white, "Frame", a, b, "");
+        ImGui::EndTable();
+    }
+    {   // the frame times of the last 4 s, 0-50 ms
+        static float g[RING];
+        int n = 0;
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        for (int i = ring_n - 1; i >= 0; i--) {
+            int k = (ring_pos - 1 - i + RING) % RING;
+            if ((double)(now.QuadPart - ring_at[k]) / (double)fps_freq.QuadPart <= 4) g[n++] = ring_ms[k];
+        }
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.25f, 0.45f, 0.6f));
+        ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(1, 1, 1, 0.85f));
+        ImGui::PlotLines("##ft", g, n, 0, nullptr, 0, 50, ImVec2(size * 20, size * 2.6f));
+        ImGui::PopStyleColor(2);
+    }
+    if (ImGui::BeginTable("##r", 2, ImGuiTableFlags_SizingFixedFit)) {
+        auto row = [](const ImVec4 &col, const char *label, const char *v) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextColored(col, "%s", label);
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(v);
+        };
+        snprintf(a, 48, "%.2f ms", sum.gpu_ms);
+        row(gold, "GPU busy per frame", a);
+        snprintf(a, 48, "%.2f ms", sum.wait_gpu_ms);
+        row(gold, "Waiting for the GPU", a);
+        snprintf(a, 48, "%.2f ms", sum.wait_shader_ms);
+        row(gold, "Waiting for shaders", a);
+        snprintf(a, 48, "%dx%d", sum.win_w, sum.win_h);
+        row(lav, "Window", a);
+        snprintf(a, 48, "%dx%d", sum.img_w, sum.img_h);
+        row(lav, "Game image", a);
+        if (sum.scene_w > 0 && sum.img_w > 0) snprintf(a, 48, "%dx%d, %.0f%%", sum.scene_w, sum.scene_h, 100.0 * sum.scene_w / sum.img_w);
+        else snprintf(a, 48, "-");
+        row(lav, "3D scene", a);
+        int unc = ac_uncapped;
+        if (unc < 0) unc = env("AC_UNCAPPED") == "1";
+        row(lav, "Frame limit", unc ? "uncapped (cutscenes 60)" : "60 FPS");
+        row(lav, "Presentation", vk_perf_present_mode());
+        ImGui::EndTable();
+    }
+    ImGui::TextColored(grey, "%s", vk_perf_gpu_name());
+    if (cpu_name[0]) ImGui::TextColored(grey, "%s", cpu_name);
+    ImGui::End();
+    ImGui::PopStyleVar(5);
+}
+
+void draw_fps(float w, float h) {
+    (void)w;
+    if (fps_mode() == 2) draw_fps_detailed(h);
+    else draw_fps_simple(h);
 }
 
 }  // namespace
