@@ -24,7 +24,7 @@ extern "C" {
 #include "nvn/vulkan/vk.h"
 
 // The runtime's (live_settings.h, app_window.h)
-extern volatile long ac_menu_open, ac_menu_close_request;
+extern volatile long ac_menu_open, ac_menu_close_request, ac_menu_quit_request, ac_menu_modal;
 struct AcMenuEvent { int kind, a, b; };
 extern AcMenuEvent ac_menu_events[256];
 extern volatile long ac_menu_head, ac_menu_tail;
@@ -54,6 +54,9 @@ std::vector<Opt> opts = {
     {"prompts", "Controls", "Button icons in the game",
      "Automatic: the icons follow what you last used (keyboard and mouse, an Xbox, PlayStation or Switch controller).",
      CHOICE, "auto", "auto|Automatic;keyboard|Keyboard and mouse;xbox|Xbox controller;playstation|PlayStation controller;switch|Switch controller", 0, 0, true},
+    {"swap_ab", "Controls", "Swap A and B on the controller",
+     "On: the bottom button (Xbox A, PlayStation cross) confirms and talks, the right one goes back. The button icons follow.",
+     CHECK, "0", nullptr, 0, 0, true},
     {"rumble", "Controls", "Rumble strength (%)", "0 turns rumble off.", NUMBER, "100", nullptr, 0, 200, true},
     {"mouse_look", "Controls", "Mouse moves the camera", "Click in the game to give it the mouse; hold Alt to get the cursor back.",
      CHECK, "1", nullptr, 0, 0, true},
@@ -88,6 +91,7 @@ void read_session() {
         std::string k = o.key, v = o.def;
         if (k == "prompts") { std::string e = env("AC_PROMPTS"); if (!e.empty()) v = e == "0" ? "switch" : e; }
         else if (k == "rumble") { std::string e = env("AC_RUMBLE"); if (!e.empty()) v = e; }
+        else if (k == "swap_ab") v = env("AC_SWAP_AB") == "1" ? "1" : "0";
         else if (k == "mouse_look") v = env("AC_MOUSE_LOOK") == "0" ? "0" : "1";
         else if (k == "mouse_sens") { std::string e = env("AC_MOUSE_SENS"); if (!e.empty()) v = e; }
         else if (k == "mouse_invert") v = env("AC_MOUSE_INVERT") == "1" ? "1" : "0";
@@ -150,6 +154,7 @@ bool save(const char *key, const std::string &value) {
 ImGuiContext *ctx;
 bool inited, failed, was_open, saved_ok = true;
 bool restart_needed;
+bool quit_asked;  // the "Quit game?" question is up
 ImFont *font;
 long pad_last;
 
@@ -314,8 +319,28 @@ void draw(float scale) {
     if (!saved_ok) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "Could not save to userdata\\launcher.ini: changes last until you close the game.");
     ImGui::TextDisabled("Other settings (texture compression, shaders, keys) are in the launcher.");
     if (ImGui::Button("Back to the game")) InterlockedExchange(&ac_menu_close_request, 1);
+    ImGui::SameLine();
+    if (ImGui::Button("Quit game")) { quit_asked = true; ImGui::OpenPopup("Quit game?"); }
     // B on a controller with nothing open closes the menu (Esc and F1: app_window.h)
     if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !busy) InterlockedExchange(&ac_menu_close_request, 1);
+    // Keep playing comes first and has the focus, so a second A press does not quit. (ImGui gives a modal's focus back to
+    // the button that opened it, and does not close a modal on B or Esc by itself; F1 can close the menu under it.)
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Quit game?", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                               ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::TextUnformatted("Progress since the game last saved will be lost.");
+        ImGui::Spacing();
+        bool stay = ImGui::Button("Keep playing");
+        ImGui::SetItemDefaultFocus();
+        ImGui::SameLine();
+        if (ImGui::Button("Quit game")) { InterlockedExchange(&ac_menu_quit_request, 1); stay = true; }
+        if (stay || !quit_asked || ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+            quit_asked = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    InterlockedExchange(&ac_menu_modal, quit_asked);
     ImGui::End();
 }
 
@@ -398,6 +423,8 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
             InterlockedExchange(&ac_menu_tail, ac_menu_head);
             if (inited) { ImGui::SetCurrentContext(ctx); ImGui::GetIO().ClearInputKeys(); pad_last = 0; }
             was_open = false;
+            quit_asked = false;
+            InterlockedExchange(&ac_menu_modal, 0);
         }
         if ((!credit && !fps) || failed) return;
         if (!inited) {
