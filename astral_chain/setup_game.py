@@ -319,6 +319,9 @@ def fingerprint():
             if path.is_file() and '__pycache__' not in path.parts and 'data' not in path.relative_to(root).parts[:1]:
                 digest.update(str(path.relative_to(PROJECT)).encode())
                 digest.update(path.read_bytes())
+    # The build holds this folder's full path (code images, game data, saves): moved or copied, it is built again.
+    # (A copy would otherwise keep reading from, and saving into, the folder it was copied from.)
+    digest.update(os.path.normcase(str(PROJECT)).encode())
     return digest.hexdigest()
 
 
@@ -380,8 +383,13 @@ def prepare_bc7():
               'the GPU instead.')
         return
     stamp.unlink(missing_ok=True)
-    dll = bc7_cache.build_tool(ZIG, BUILD)
-    count, size, seconds = bc7_cache.build(ROMFS_IMAGE, out, dll, progress=lambda line: print(line, flush=True))
+    try:  # (optional: a failure here must not stop the game from starting)
+        dll = bc7_cache.build_tool(ZIG, BUILD)
+        count, size, seconds = bc7_cache.build(ROMFS_IMAGE, out, dll, progress=lambda line: print(line, flush=True))
+    except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as error:
+        print(f'  Preparing BC7 textures failed ({error}). The game converts its textures on the GPU instead.',
+              file=sys.stderr)
+        return
     stamp.write_text(want + '\n', encoding='ascii')
     print(f'  {count} textures, {size / 2**30:.1f} GB in {seconds:.0f} s')
 

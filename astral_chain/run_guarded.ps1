@@ -10,6 +10,8 @@
 param([Parameter(Mandatory=$true)][string]$Run,[int]$Seconds=300,[string]$Script='',[string]$Env='',[switch]$NoConsole)
 $ErrorActionPreference='Stop'
 $project=Split-Path -Parent $PSScriptRoot
+# (PowerShell reads [ and ] in a path as a pattern: files in such a folder are not found)
+if("$project$Run" -match '[\[\]]'){throw "The folder's path has [ or ] in it, which this script cannot work with: rename the folder(s), then press Play again. ($project)"}
 $run=(Resolve-Path $Run).Path
 $round=Join-Path $run 'round-00'
 $exe=Join-Path $round 'trace.exe'

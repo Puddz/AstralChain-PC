@@ -36,6 +36,14 @@ namespace AstralChainLauncher
                     MessageBoxIcon.Warning);
                 return;
             }
+            if (project.IndexOfAny(new[] { '[', ']' }) >= 0)
+            {
+                MessageBox.Show("This folder's path has [ or ] in it:\n\n" + project + "\n\nSetup and the game's start " +
+                    "cannot work with that. Rename the folder (or move it), then start the launcher again. Moving " +
+                    "the whole folder keeps your saves and settings (they are in its userdata folder).",
+                    "Astral Chain PC", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             Application.Run(new MainForm(project));
         }
     }
@@ -211,6 +219,7 @@ namespace AstralChainLauncher
         public void Reload()
         {
             values.Clear();
+            changed.Clear();
             if (!File.Exists(path)) return;
             foreach (var line in File.ReadAllLines(path, Encoding.UTF8))
             {
@@ -218,7 +227,7 @@ namespace AstralChainLauncher
                 if (eq > 0 && !line.StartsWith("#")) values[line.Substring(0, eq).Trim()] = line.Substring(eq + 1);
             }
             string old;
-            if (values.TryGetValue("bc7", out old) && old == "1") values["bc7"] = "gpu";  // (was a checkbox)
+            if (values.TryGetValue("bc7", out old) && old == "1") { values["bc7"] = "gpu"; changed.Add("bc7"); }  // (was a checkbox)
         }
 
         public string Get(string key)
@@ -230,15 +239,37 @@ namespace AstralChainLauncher
         }
 
         public string Raw(string key) { string v; return values.TryGetValue(key, out v) ? v : null; }
-        public void Set(string key, string value) { values[key] = value; }
+        public void Set(string key, string value)
+        {
+            string old;
+            if (values.TryGetValue(key, out old) && old == value) return;
+            values[key] = value;
+            changed.Add(key);
+        }
         public bool On(string key) { return Get(key) == "1"; }
+
+        // Only what was set here since the file was read replaces the file's values: the in-game menu writes this file
+        // too, while the launcher is open. Written under another name, then put in place, so a write cut short
+        // (a crash, the power) leaves the old file. A file that is there and cannot be read stops the save (throws).
+        readonly HashSet<string> changed = new HashSet<string>();
 
         public void Save()
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
+            if (File.Exists(path))
+                foreach (var line in File.ReadAllLines(path, Encoding.UTF8))
+                {
+                    int eq = line.IndexOf('=');
+                    if (eq <= 0 || line.StartsWith("#")) continue;
+                    string key = line.Substring(0, eq).Trim();
+                    if (!changed.Contains(key)) values[key] = line.Substring(eq + 1);
+                }
             var lines = new List<string> { "# Astral Chain PC launcher settings" };
             lines.AddRange(values.OrderBy(kv => kv.Key).Select(kv => kv.Key + "=" + kv.Value));
-            File.WriteAllLines(path, lines, new UTF8Encoding(false));
+            string part = path + ".new";
+            File.WriteAllLines(part, lines, new UTF8Encoding(false));
+            if (File.Exists(path)) File.Replace(part, path, null); else File.Move(part, path);
+            changed.Clear();
         }
 
         // "NAME=value;..." for one target
@@ -1014,17 +1045,33 @@ namespace AstralChainLauncher
             catch { }
         }
 
+        // The commit: from the checkout (a worktree's .git is a file naming its folder), or, in a downloaded zip, from
+        // the VERSION file that git fills in when it makes the zip.
         string GitVersion()
         {
             try
             {
                 string git = Path.Combine(project, ".git");
+                string common = git;
+                if (File.Exists(git))
+                {
+                    string dir = File.ReadAllText(git).Trim();
+                    if (dir.StartsWith("gitdir:")) dir = dir.Substring(7).Trim();
+                    git = Path.GetFullPath(Path.Combine(project, dir));
+                    string c = Path.Combine(git, "commondir");
+                    common = File.Exists(c) ? Path.GetFullPath(Path.Combine(git, File.ReadAllText(c).Trim())) : git;
+                }
+                else if (!Directory.Exists(git))
+                {
+                    string v = File.ReadAllText(Path.Combine(project, "VERSION")).Trim();
+                    return v.StartsWith("$") ? "unknown (not a git checkout)" : "zip " + v;
+                }
                 string head = File.ReadAllText(Path.Combine(git, "HEAD")).Trim();
                 if (!head.StartsWith("ref: ")) return head;
                 string reference = head.Substring(5);
-                string file = Path.Combine(git, reference.Replace('/', '\\'));
+                string file = Path.Combine(common, reference.Replace('/', '\\'));
                 if (File.Exists(file)) return reference + " " + File.ReadAllText(file).Trim();
-                string packed = Path.Combine(git, "packed-refs");
+                string packed = Path.Combine(common, "packed-refs");
                 if (File.Exists(packed))
                     foreach (var line in File.ReadAllLines(packed))
                         if (line.EndsWith(" " + reference)) return reference + " " + line.Split(' ')[0];

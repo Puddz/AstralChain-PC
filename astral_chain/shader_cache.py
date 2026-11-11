@@ -20,6 +20,8 @@ import os
 import struct
 import subprocess
 import sys
+import threading
+import time
 
 from .shader_build import prepare_translator
 
@@ -312,6 +314,11 @@ def warm_gpu(game_build: Path, shaders: Path, glslang: Path) -> None:
     process = subprocess.Popen([str(exe)], cwd=game_build, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                text=True, errors='replace')
     shown = False
+    # (the limit, while its output is read: a warm-up that hangs is stopped, which also ends the loop below)
+    limit = threading.Timer(900, process.kill)
+    limit.daemon = True
+    limit.start()
+    started = time.monotonic()
     try:
         for line in process.stdout:
             words = line.split()
@@ -323,10 +330,14 @@ def warm_gpu(game_build: Path, shaders: Path, glslang: Path) -> None:
                     print()
                 if words[1:2] != ['skipped']:
                     print('  GPU ready: ' + ' '.join(words[1:]))
-        process.wait(timeout=900)
+        process.wait(timeout=60)
+        if time.monotonic() - started >= 900:
+            raise subprocess.TimeoutExpired(str(exe), 900)
     except subprocess.TimeoutExpired:
         process.kill()
         print('\n  GPU warm-up stopped (took too long); the game compiles in play instead.', file=sys.stderr)
+    finally:
+        limit.cancel()
 
 
 def prepare(romfs: Path, game: Path, game_build: Path, zig: Path, glslang: Path, build: Path) -> None:

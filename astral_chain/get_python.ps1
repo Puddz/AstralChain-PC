@@ -5,6 +5,11 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # (Windows PowerShell's progress bar slows downloads a lot)
 $project = Split-Path -Parent $PSScriptRoot
+# (PowerShell reads [ and ] in a path as a pattern: files in such a folder are not found, or not removed)
+if ($project -match '[\[\]]') {
+    Write-Output "== The folder's path has [ or ] in it, which setup cannot work with: rename the folder(s), then start again. ($project)"
+    exit 1
+}
 $version = '3.14.9'
 $url = "https://api.nuget.org/v3-flatcontainer/python/$version/python.$version.nupkg"
 $sha256 = '7cd9d07aec975212344dc6f7e45019378cf6775dd564181e269010a1eddaaec7'
