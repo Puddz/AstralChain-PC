@@ -61,6 +61,7 @@ The keyboard keys are in the launcher's **Controls** window, not here.
 | Setting | Default | What it does | Variable |
 | --- | --- | --- | --- |
 | **Rumble strength (%)** **F1** | 100 | How strongly the controller rumbles (Xbox pads, and the controllers that go through SDL3). 0 turns rumble off, 200 is the strongest | `AC_RUMBLE=<n>` |
+| **Swap A and B** **F1** | Off | Off: the buttons go by position, as on the Switch, where A (confirm, talk) is the right face button. On: the bottom face button (Xbox A, PlayStation cross) is A. The game, the in-game menu and the button icons all follow it; the keyboard keeps its keys | `AC_SWAP_AB=1` |
 
 ## Shaders and performance
 
