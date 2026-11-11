@@ -140,6 +140,12 @@ namespace AstralChainLauncher
                 "How much FSR 1 sharpens after upscaling. Only used with AMD FSR 1.", OptKind.Choice, "0.2",
                 OptTarget.Game, v => v == "0.2" ? "" : "AC_FSR_SHARPNESS=" + v);
             sharpen.Choices = new[] { "0|Strong", "0.2|Normal (default)", "0.5|Light", "1|Very light" };
+            Add("hud_edges", "Display", "Ultrawide: HUD at the screen's edges (experimental)",
+                "With a render resolution wider than 16:9 (21:9, 32:9, 48:9), the HUD's side panels (health, Legion, " +
+                "minimap, objectives, tutorials) move to the left and right edges of the screen instead of staying in " +
+                "the middle 16:9 area. Markers over characters and targets, subtitles and menus stay where they are. " +
+                "Also in the game's menu (F1), where it changes at once.",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_HUD_EDGES=1"));
             Add("handheld", "Display", "Handheld mode: render at 1280x720",
                 "The game runs as on a Switch out of its dock: it renders at 1280x720 instead of 1600x900, for GPUs " +
                 "that cannot hold 60 fps. The picture is scaled to the window as before. Applies the next time you press Play.",

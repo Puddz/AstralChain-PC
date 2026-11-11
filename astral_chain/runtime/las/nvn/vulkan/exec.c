@@ -1289,11 +1289,13 @@ static void pass_size(int *w, int *h) {
     *h = (int)lroundf(*h * pass_sy);
 }
 
+static float hud_shift_px;  // (AC_HUD_EDGES: the HUD element drawn now moves sideways; a narrower scissor moves with it)
 static VkRect2D scissor_rect(void) {
     int w, h;
     pass_size(&w, &h);
     if (!w) return (VkRect2D){{0, 0}, {pass_w, pass_h}};
     int x = st.scissor[0][0], y = st.scissor[0][1], sw = st.scissor[0][2], sh = st.scissor[0][3];
+    if (hud_shift_px != 0 && st.rt.ncolor && st.rt.color[0] && sw < 16384 && !(x <= 0 && x + sw >= (int)st.rt.color[0]->width)) x += (int)hud_shift_px;
     if (vp_sx != 1 || vp_sy != 1 || vp_ox != 0 || vp_oy != 0) {
         double x0 = floor(x * (double)vp_sx + vp_ox), y0 = floor(y * (double)vp_sy + vp_oy);
         double x1 = ceil(((double)x + sw) * vp_sx + vp_ox), y1 = ceil(((double)y + sh) * vp_sy + vp_oy);
@@ -4554,6 +4556,7 @@ static void draw_(CmdRec *r, bool indexed) {
     // 1280 width (a fade or a backdrop) keeps the full width, except a video (uiyuvshader / uiyuvashader: the title
     // screen's background and logo, Bink movies), which is 16:9 footage and gets the box (black at the sides).
     bool ui_box = false;
+    int hud_side = 0;  // (AC_HUD_EDGES: -1 to the left edge, 1 to the right)
     if (st.rt.ncolor && st.rt.color[0] && (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 &&
         stage_hash(st.program, 0) == 0xa09bf88abb4a04a7ull && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 40 * 4) {
         const float *p = (const float *)(uintptr_t)st.ubuf[0][0].addr;
@@ -4571,6 +4574,23 @@ static void draw_(CmdRec *r, bool indexed) {
             }
             if (lo <= 0.5f && hi >= 1279.5f) ui_box = false;
         }
+        // HUD at the screen's edges (AC_HUD_EDGES=1, the F1 menu; issue #27). The gameplay HUD is drawn with a 3D
+        // projection (cbuf 3 rows 8-11, w = z + 2040) at its 16:9 layout in the middle of the wide picture; cbuf 4 = the
+        // element's world matrix (rows 0-2), its translation (column 3) the element's place in the 1280x720 layout.
+        // The side panels are turned toward the middle (a yaw: row 2 column 0 against row 0 column 0, the ratio about
+        // +0.4..0.9 on the left, -0.4..-0.9 on the right, the same for mirrored parts), while markers over characters
+        // and targets, centred text and pop-ups face the screen (0..0.13). A turned element on its own side of the
+        // layout moves out by the width of the empty band beside the 16:9 area; everything else stays.
+        if (!ui_box && st.ubuf[0][1].addr && st.ubuf[0][1].size >= 48 && p[46] != 0 && p[44] == 0 && p[45] == 0 &&
+            renderer_texture_presented(st.rt.color[0])) {
+            extern int ac_hud_edges_on(void);
+            const float *m = (const float *)(uintptr_t)st.ubuf[0][1].addr;
+            if (fabsf(m[0]) > 0.05f && ac_hud_edges_on()) {
+                float yaw = m[8] / m[0], tx = m[3];
+                if (yaw > 0.25f && tx < 640) hud_side = -1;
+                else if (yaw < -0.25f && tx > 640) hud_side = 1;
+            }
+        }
     }
     {   // camera-attached effects sized for 16:9 are widened with the view (runtime/hle/widescreen.c)
         extern float widescreen_effect_stretch(uint64_t fs_hash);
@@ -4578,6 +4598,11 @@ static void draw_(CmdRec *r, bool indexed) {
         float vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx;
         if (k > 1.0f) { vx -= vw * (k - 1) / 2; vw *= k; }
         if (ui_box) { float bw = vp[3] * vp_sy * 16.0f / 9.0f; vx += (vw - bw) / 2; vw = bw; }
+        hud_shift_px = 0;
+        if (hud_side) {
+            hud_shift_px = hud_side * ((float)st.rt.color[0]->width - st.rt.color[0]->height * 16.0f / 9.0f) / 2 * vp_sx;
+            vx += hud_shift_px;
+        }
         set_viewport(vx, vp[1] * vp_sy + vp_oy, vw, vp[3] * vp_sy, zn, zf);
         if (g_debug_frame) {
             VkRect2D sr = scissor_rect();
@@ -4588,6 +4613,7 @@ static void draw_(CmdRec *r, bool indexed) {
         }
     }
     apply_scissor();
+    hud_shift_px = 0;
     float rs0[4] = {vp_sx, vp_sy, vp_ox, vp_oy};
     uint64_t prof_t1_ = prof ? SDL_GetTicksNS() : 0;
     VkDescriptorSet fset = stage_set(pr, pr->set_layout[1], 1, 1, pr->fi, rs0, tint, 0, 0, 0, fii);

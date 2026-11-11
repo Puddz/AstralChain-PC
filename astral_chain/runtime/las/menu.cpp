@@ -84,6 +84,9 @@ std::vector<Opt> opts = {
     {"upscaler", "Display", "Upscaling (experimental)", "Only when the window is larger than the picture.",
      CHOICE, "off", "off|Smooth (default);fsr1|AMD FSR 1", 0, 0, true},
     {"fsr_sharpness", "Display", "FSR 1 sharpening", nullptr, CHOICE, "0.2", "0|Strong;0.2|Normal (default);0.5|Light;1|Very light", 0, 0, true},
+    {"hud_edges", "Display", "Ultrawide: HUD at the screen's edges (experimental)",
+     "With a render resolution wider than 16:9, the HUD's side panels (health, minimap, objectives, tutorials) move to "
+     "the edges of the screen. Markers over characters stay where they are.", CHECK, "0", nullptr, 0, 0, true},
     {"fps_counter", "Display", "Show the frame rate",
      "In the top left corner. Frame rate: frames per second and the average frame time. Detailed: also a frame time graph, "
      "the slowest frames, GPU and CPU load, memory, the GPU's temperature and power where its driver gives them, and the "
@@ -116,6 +119,7 @@ void read_session() {
         if (k == "prompts") { std::string e = env("AC_PROMPTS"); if (!e.empty()) v = e == "0" ? "switch" : e; }
         else if (k == "rumble") { std::string e = env("AC_RUMBLE"); if (!e.empty()) v = e; }
         else if (k == "swap_ab") v = env("AC_SWAP_AB") == "1" ? "1" : "0";
+        else if (k == "hud_edges") v = env("AC_HUD_EDGES") == "1" ? "1" : "0";
         else if (k == "mouse_look") v = env("AC_MOUSE_LOOK") == "0" ? "0" : "1";
         else if (k == "mouse_sens") { std::string e = env("AC_MOUSE_SENS"); if (!e.empty()) v = e; }
         else if (k == "mouse_invert") v = env("AC_MOUSE_INVERT") == "1" ? "1" : "0";
