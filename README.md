@@ -60,6 +60,11 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   **Settings > Display**, or the in-game menu (changes at once). With a render resolution wider than 16:9, the HUD's
   side panels (health, minimap, objectives, tutorials) move to the left and right edges instead of staying in the
   middle 16:9 area; markers over characters, subtitles and menus stay where they are. Off by default.
+- **HUD layout (F2)** (this branch; issue #27; *not yet confirmed in play*): in the game, **F2** (or the button under
+  the option in the F1 menu) opens a window to place the HUD on a screen wider than 16:9: for each corner's panels
+  (top left, bottom left, top right, bottom right) how far they move toward the edge (0-100%) and up or down, with
+  the game drawn behind it so each change shows at once. Saved with the other settings. The first time the HUD shows
+  on a wide screen, a line at the top says F2 is there (until you have opened it once).
 - **Ultrawide fixes** (this branch; confirmed in play on a 32:9 recording): the light blocks above (issue #20); markers
   on characters and targets stay on them instead of drifting toward the middle (issue #21); menus, subtitles, the
   opening credits, the title screen and videos are shown in a centred 16:9 area instead of stretched, while
@@ -352,6 +357,10 @@ controller. **Button icons** in the in-game menu or the launcher's **Settings > 
 the settings menu over the game; the game pauses while it is open. Esc, F1 or Minus and Plus close it. Changes that
 need a restart say so. The menu saves to the same settings file as the launcher. **Quit game** at the bottom of the
 menu closes the game, after asking first, so a controller alone is enough.
+
+**HUD layout** (upscaling and texture-dump branches, render resolutions wider than 16:9). **F2**, or **HUD layout** in
+the F1 menu, opens a window where you choose where the HUD's side panels go: for each corner, how far toward the
+screen's edge and how far up or down. F2, Esc or B close it.
 
 F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
 

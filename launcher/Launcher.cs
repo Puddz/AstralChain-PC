@@ -144,7 +144,8 @@ namespace AstralChainLauncher
                 "With a render resolution wider than 16:9 (21:9, 32:9, 48:9), the HUD's side panels (health, Legion, " +
                 "minimap, objectives, tutorials) move to the left and right edges of the screen instead of staying in " +
                 "the middle 16:9 area. Markers over characters and targets, subtitles and menus stay where they are. " +
-                "Also in the game's menu (F1), where it changes at once.",
+                "Also in the game's menu (F1), where it changes at once. In the game, F2 opens the HUD layout: how far " +
+                "each corner's panels move toward the edge, and up or down.",
                 OptKind.Check, "0", OptTarget.Game, When("1", "AC_HUD_EDGES=1"));
             Add("handheld", "Display", "Handheld mode: render at 1280x720",
                 "The game runs as on a Switch out of its dock: it renders at 1280x720 instead of 1600x900, for GPUs " +

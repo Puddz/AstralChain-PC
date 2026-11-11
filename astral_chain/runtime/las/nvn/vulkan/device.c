@@ -691,10 +691,14 @@ void backend_present(NvnTexture *t) {
         float pv[8] = {renderer_origin_lower_left() ? 1.0f : 0.0f, 0, 0, 0, uv[0], uv[1], uv[2], uv[3]};
         vk_present_draw(cb, b, (float)vx, (float)vy, (float)vw, (float)vh, pv);
         // Astral Chain: the in-game settings menu over the picture (menu.cpp; nothing while it is closed).
-        // (test) AC_MENU_AT=<frame>: open it at that frame.
+        // (test) AC_MENU_AT=<frame>: open it at that frame (AC_MENU_PAGE=1: on the HUD layout).
         static long menu_at = -1;
         if (menu_at < 0) menu_at = getenv("AC_MENU_AT") ? atol(getenv("AC_MENU_AT")) : 0;
-        if (menu_at && (long)total_frames + 1 == menu_at) { extern volatile long ac_menu_open; ac_menu_open = 1; }
+        if (menu_at && (long)total_frames + 1 == menu_at) {
+            extern volatile long ac_menu_open, ac_menu_page;
+            ac_menu_page = getenv("AC_MENU_PAGE") ? atol(getenv("AC_MENU_PAGE")) : 0;
+            ac_menu_open = 1;
+        }
         extern void menu_render(void *cmd, uint32_t w, uint32_t h);
         menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
         extern void vk_perf_frame_end(void);
