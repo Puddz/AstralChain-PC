@@ -108,6 +108,7 @@ static void save_file_dispatch(unsigned session,uint8_t *buffer,const IpcRequest
   uint64_t size;memcpy(&size,request->arguments,8);
   if(size>INT64_MAX)boundary("save-file-setsize-extent",&state,state.pc);
   LARGE_INTEGER end;end.QuadPart=(LONGLONG)size;
+  InterlockedIncrement(&save_changes);
   if(SetFilePointerEx(file,end,NULL,FILE_BEGIN) && SetEndOfFile(file)) {reply_result(buffer,request,0);return;}
   error=GetLastError();
  } else if(request->command==4) {

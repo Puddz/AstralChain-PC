@@ -1530,15 +1530,17 @@ uint64_t rt_ticks(void) {
  if(!QueryPerformanceCounter(&counter) || counter.QuadPart<0) boundary("timer-counter",&state,state.pc);
  return (uint64_t)(((__uint128_t)(uint64_t)counter.QuadPart*19200000ull)/(uint64_t)frequency.QuadPart);
 }
-static void reserve(uint64_t base,size_t size,const char *file) {
+/* file: the code image to load there (a UTF-16 path, so that any folder name works), or NULL. */
+static void reserve(uint64_t base,size_t size,const wchar_t *file) {
  void *p=VirtualAlloc((void*)(uintptr_t)base,size,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
  if(p!=(void*)(uintptr_t)base) {fprintf(stderr,"Memory mapping failed: %lu\n",GetLastError()); exit(30);}
- char moved[MAX_PATH];DWORD n;
+ wchar_t moved[MAX_PATH];DWORD n;
  /* AC_DATA_DIR relocates the build's code images (portable test bundles). */
- if(file && (n=GetEnvironmentVariableA("AC_DATA_DIR",moved,MAX_PATH)) && n<MAX_PATH) {
-  const char *name=strrchr(file,'/');
-  if(snprintf(moved+n,MAX_PATH-n,"\\images\\%s",name?name+1:file)>=(int)(MAX_PATH-n)) {fprintf(stderr,"Image path too long\n"); exit(31);}
+ if(file && (n=GetEnvironmentVariableW(L"AC_DATA_DIR",moved,MAX_PATH)) && n<MAX_PATH) {
+  const wchar_t *name=wcsrchr(file,L'/');
+  int k=swprintf(moved+n,MAX_PATH-n,L"\\images\\%ls",name?name+1:file);
+  if(k<0 || k>=(int)(MAX_PATH-n)) {fprintf(stderr,"Image path too long\n"); exit(31);}
   file=moved;
  }
- if(file) { FILE *f=fopen(file,"rb"); if(!f || fread(p,1,size,f)!=size) {fprintf(stderr,"Image read failed\n"); exit(31);} fclose(f); }
+ if(file) { FILE *f=_wfopen(file,L"rb"); if(!f || fread(p,1,size,f)!=size) {fprintf(stderr,"Image read failed: %ls\n",file); exit(31);} fclose(f); }
 }

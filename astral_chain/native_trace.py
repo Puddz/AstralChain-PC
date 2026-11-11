@@ -303,15 +303,16 @@ def cache_image(cache, data):
     cache.mkdir(parents=True,exist_ok=True)
     digest=hashlib.sha256(data).hexdigest()
     path=cache/(digest+'.image')
-    if path.exists():
-        if path.stat().st_size!=len(data):
-            raise FormatError('Cached module image size mismatch')
+    # A file that does not match (a write cut short, e.g. the build cancelled) is written again; under another name
+    # first, so that a cut-short write never has the final name.
+    good=False
+    if path.exists() and path.stat().st_size==len(data):
         with path.open('rb') as stream:
-            if hashlib.file_digest(stream,'sha256').hexdigest()!=digest:
-                raise FormatError('Cached module image content mismatch')
-    else:
-        with path.open('xb') as stream:
-            stream.write(data)
+            good=hashlib.file_digest(stream,'sha256').hexdigest()==digest
+    if not good:
+        part=path.with_name(path.name+'.part')
+        part.write_bytes(data)
+        os.replace(part,path)
     return path
 
 
@@ -444,7 +445,10 @@ if(BCryptGenRandom(NULL,(PUCHAR)entropy,sizeof(entropy),BCRYPT_USE_SYSTEM_PREFER
         setup += '{const char *gw=getenv("AC_GPU_WARM"); if(gw && *gw){ extern int vk_gpu_warm(const char *folder); return vk_gpu_warm(gw);} }\n'
     for module in image.modules:
         image_file=cache_image(output.parent/'native-images',module.nso.image)
-        setup += f'reserve({module.base}ull,{module.nso.size},{json.dumps(image_file.as_posix())});\n'
+        # (the path as UTF-16 units: a narrow string is read in the PC's code page, and fails on other letters)
+        name = image_file.as_posix().encode('utf-16le')
+        units = ','.join(map(str, struct.unpack('<%dH' % (len(name)//2), name)))
+        setup += f'reserve({module.base}ull,{module.nso.size},(const wchar_t[]){{{units},0}});\n'
     seeds = [entry]+args.seed
     if args.seed_initializers:
         for module in image.modules:

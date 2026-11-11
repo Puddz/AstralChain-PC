@@ -267,7 +267,8 @@ static void app_pump(void) {
   double ms=1000.0*(double)(b.QuadPart-a.QuadPart)/(double)f.QuadPart;
   if(ms>30.0) printf("PUMP PeekMessage took %.0f ms\n",ms);
   if(!got) break;
-  if(++count>4096) boundary("host-message-budget",&state,state.pc);
+  /* (a backlog, e.g. a fast mouse's reports queued during a long stall: the rest at the next pump) */
+  if(++count>4096) {static int said;if(!said++) printf("PUMP more than 4096 messages queued\n");break;}
   {const char *w=rt_where("dispatch message");TranslateMessage(&message);DispatchMessageW(&message);rt_where(w);}
   QueryPerformanceCounter(&a);
   ms=1000.0*(double)(a.QuadPart-b.QuadPart)/(double)f.QuadPart;

@@ -106,8 +106,37 @@ static uint64_t save_capacity(const SaveStore *store) {uint64_t size;memcpy(&siz
 /* Each commit is also copied, in the background, to <save>-snapshots\<date-time>\data (the newest 30 are kept):
  * checkpoints to load again later, e.g. the one just before a cutscene (tests with AC_DATA_DIR), and a backup.
  * AC_SAVE_SNAPSHOTS=0 turns this off. */
-/* Returns 0, or the Win32 error of the first entry that could not be copied. (A file the game has open for writing
- * cannot be read while it is: retried for up to 2 s.) */
+/* Counts every change the game makes to its save (create, delete, rename, resize, write, commit): a snapshot during
+ * which it moved holds a save caught half-way, and is not kept (snapshot_take). */
+static volatile LONG save_changes;
+/* One file. The source is opened without sharing it for writing, so a file the game has open for writing cannot be
+ * copied (CopyFile would copy it, half-written), and the game cannot start writing it during the copy: both wait
+ * (here up to 2 s; the game's OpenFile below). Deleting and renaming it stay possible (the game stops if they fail).
+ * snapshot_any: the last resort of snapshot_thread, a copy whatever the game has open. */
+static int snapshot_any;
+static DWORD snapshot_copy_file(const wchar_t *from,const wchar_t *to) {
+ HANDLE in=INVALID_HANDLE_VALUE;
+ DWORD share=FILE_SHARE_READ|FILE_SHARE_DELETE|(snapshot_any ? FILE_SHARE_WRITE : 0);
+ for(int tries=0;;tries++) {
+  in=CreateFileW(from,GENERIC_READ,share,NULL,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,NULL);
+  if(in!=INVALID_HANDLE_VALUE || GetLastError()!=ERROR_SHARING_VIOLATION || tries>=40)break;
+  Sleep(50);
+ }
+ if(in==INVALID_HANDLE_VALUE)return GetLastError();
+ HANDLE out=CreateFileW(to,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,0,NULL);
+ if(out==INVALID_HANDLE_VALUE) {DWORD error=GetLastError();CloseHandle(in);return error;}
+ static uint8_t block[1<<16];  /* (one snapshot thread at a time: snapshot_busy) */
+ DWORD error=0,got=0,put=0;
+ for(;;) {
+  if(!ReadFile(in,block,sizeof(block),&got,NULL)) {error=GetLastError();break;}
+  if(!got)break;
+  if(!WriteFile(out,block,got,&put,NULL) || put!=got) {error=GetLastError() ? GetLastError() : ERROR_WRITE_FAULT;break;}
+ }
+ if(!error && !FlushFileBuffers(out)) error=GetLastError();
+ CloseHandle(out);CloseHandle(in);
+ return error;
+}
+/* Returns 0, or the Win32 error of the first entry that could not be copied. */
 static DWORD snapshot_copy(const wchar_t *from,const wchar_t *to) {
  if(!CreateDirectoryW(to,NULL) && GetLastError()!=ERROR_ALREADY_EXISTS)return GetLastError();
  wchar_t pattern[1100];swprintf(pattern,1100,L"%ls\\*",from);
@@ -117,12 +146,7 @@ static DWORD snapshot_copy(const wchar_t *from,const wchar_t *to) {
   if(!wcscmp(f.cFileName,L".") || !wcscmp(f.cFileName,L".."))continue;
   wchar_t a[1100],b[1100];swprintf(a,1100,L"%ls\\%ls",from,f.cFileName);swprintf(b,1100,L"%ls\\%ls",to,f.cFileName);
   if(f.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY) error=snapshot_copy(a,b);
-  else for(int tries=0;;tries++) {
-   if(CopyFileW(a,b,FALSE)) {error=0;break;}
-   error=GetLastError();
-   if(error!=ERROR_SHARING_VIOLATION || tries>=40)break;
-   Sleep(50);
-  }
+  else error=snapshot_copy_file(a,b);
  } while(!error && FindNextFileW(h,&f));
  FindClose(h);
  return error;
@@ -142,9 +166,11 @@ static void snapshot_delete(const wchar_t *path) {
 }
 static wchar_t snapshot_root[221];
 static volatile LONG snapshot_busy,snapshot_again;
-/* One snapshot: copied into <date-time>.part, renamed to <date-time> only when every file was copied; older ones
- * are removed (beyond the newest 30) only after a snapshot succeeded. */
-static void snapshot_take(void) {
+/* One snapshot: copied into <date-time>.part, renamed to <date-time> only when every file was copied and the game
+ * changed nothing in its save meanwhile; older ones are removed (beyond the newest 30) only after a snapshot
+ * succeeded. Returns 1 when the save changed during the copy (taken again by snapshot_thread), else 0. */
+static int snapshot_take(void) {
+ LONG before=save_changes;
  wchar_t dir[1100],from[1100],part[1100],done[1100];
  swprintf(dir,1100,L"\\\\?\\%ls-snapshots",snapshot_root);CreateDirectoryW(dir,NULL);
  SYSTEMTIME t;GetLocalTime(&t);
@@ -154,11 +180,12 @@ static void snapshot_take(void) {
  swprintf(from,1100,L"\\\\?\\%ls\\data",snapshot_root);
  wchar_t data[1100];swprintf(data,1100,L"%ls\\data",part);
  DWORD error=CreateDirectoryW(part,NULL) ? snapshot_copy(from,data) : GetLastError();
+ if(!snapshot_any && (error==ERROR_SHARING_VIOLATION || (!error && save_changes!=before))) {snapshot_delete(part);return 1;}
  if(!error) {
   if(GetFileAttributesW(done)!=INVALID_FILE_ATTRIBUTES) snapshot_delete(done);  /* (two in the same second) */
   if(!MoveFileExW(part,done,0)) error=GetLastError();
  }
- if(error) {snapshot_delete(part);printf("SAVE snapshot failed win32=%lu (older snapshots kept)\n",error);return;}
+ if(error) {snapshot_delete(part);printf("SAVE snapshot failed win32=%lu (older snapshots kept)\n",error);return 0;}
  /* keep the newest 30 (names sort by time); leftover .part folders (a copy cut short) are removed */
  wchar_t pattern[1100],names[64][32];unsigned n=0;swprintf(pattern,1100,L"%ls\\*",dir);
  WIN32_FIND_DATAW f;HANDLE h=FindFirstFileW(pattern,&f);
@@ -176,6 +203,7 @@ static void snapshot_take(void) {
   wcscpy(names[oldest],names[--n]);
  }
  printf("SAVE snapshot %ls\n",done);
+ return 0;
 }
 static DWORD WINAPI snapshot_thread(void *argument) {
  (void)argument;
@@ -183,7 +211,12 @@ static DWORD WINAPI snapshot_thread(void *argument) {
  for(;;) {
   snapshot_again=0;
   Sleep(500);  /* (writes made right after the commit call) */
-  snapshot_take();
+  int moved=0;
+  for(int tries=0;tries<20 && (moved=snapshot_take());tries++) Sleep(500);  /* (the game is saving: after it) */
+  if(moved) {  /* (never quiet, or a file kept open for writing: a copy as it is, rather than none) */
+   printf("SAVE snapshot: the save kept changing; copied as it is\n");
+   snapshot_any=1;snapshot_take();snapshot_any=0;
+  }
   if(snapshot_again)continue;
   snapshot_busy=0;
   if(!snapshot_again || InterlockedCompareExchange(&snapshot_busy,1,0))break;
@@ -204,6 +237,7 @@ static int save_fs_command(SaveStore *store,const IpcRequest *request,const uint
                            uint32_t *result,uint64_t *value,int *has_value,HANDLE *opened) {
  *result=0;*has_value=0;*opened=NULL;
  unsigned command=request->command;
+ if(command<=6 || command==10) InterlockedIncrement(&save_changes);
  if(command==10) { /* Commit: writes are already in place; files still open are flushed (closed ones were on close) */
   app_save_write_tick=GetTickCount64();
   DWORD error=save_flush_written(NULL);
@@ -290,6 +324,7 @@ static DWORD save_file_write(HANDLE file,uint64_t offset,const void *data,uint32
  if(!SetFilePointerEx(file,position,NULL,FILE_BEGIN))return GetLastError();
  guest_io_prepare((uint64_t)(uintptr_t)data,size);
  app_save_write_tick=GetTickCount64();  /* (the exit watchdog waits for save writes to finish) */
+ InterlockedIncrement(&save_changes);
  DWORD written=0;if(size && (!WriteFile(file,data,size,&written,NULL) || written!=size))return GetLastError() ? GetLastError() : ERROR_WRITE_FAULT;
  save_mark_written(file);
  return 0;
