@@ -4557,10 +4557,12 @@ static void draw_(CmdRec *r, bool indexed) {
     // screen's background and logo, Bink movies), which is 16:9 footage and gets the box (black at the sides).
     bool ui_box = false;
     int hud_side = 0;  // (AC_HUD_EDGES: -1 to the left edge, 1 to the right)
+    uint64_t ui_vs = st.rt.ncolor && st.rt.color[0] ? stage_hash(st.program, 0) : 0;
+    bool ui_tiling = ui_vs == 0x833ab16b25a072acull;  // (uitilingshader: the dot patterns behind the HUD's panels)
     if (st.rt.ncolor && st.rt.color[0] && (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 &&
-        stage_hash(st.program, 0) == 0xa09bf88abb4a04a7ull && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 40 * 4) {
+        (ui_vs == 0xa09bf88abb4a04a7ull || ui_tiling) && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 48 * 4) {
         const float *p = (const float *)(uintptr_t)st.ubuf[0][0].addr;
-        ui_box = fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
+        ui_box = !ui_tiling && fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
         uint64_t fsh = stage_hash(st.program, 1);
         bool video = fsh == 0xf33b4e637319bed0ull || fsh == 0xef0a83385ad50ec7ull;
         if (ui_box && !video && r->x[2] <= 6 && k.stride[0] >= 16 && st.vbuf[0].addr && st.vbuf[0].size >= 4 * k.stride[0] &&
@@ -4574,7 +4576,8 @@ static void draw_(CmdRec *r, bool indexed) {
             }
             if (lo <= 0.5f && hi >= 1279.5f) ui_box = false;
         }
-        // HUD at the screen's edges (AC_HUD_EDGES=1, the F1 menu; issue #27). The gameplay HUD is drawn with a 3D
+        // HUD at the screen's edges (AC_HUD_EDGES=1, the F1 menu; issue #27). The gameplay HUD (uibaseshader, and
+        // uitilingshader for the dot patterns behind its panels) is drawn with a 3D
         // projection (cbuf 3 rows 8-11, w = z + 2040) at its 16:9 layout in the middle of the wide picture; cbuf 4 = the
         // element's world matrix (rows 0-2), its translation (column 3) the element's place in the 1280x720 layout.
         // The side panels are turned toward the middle (a yaw: row 2 column 0 against row 0 column 0, the ratio about
