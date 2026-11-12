@@ -4600,6 +4600,12 @@ static void draw_(CmdRec *r, bool indexed) {
         // The F2 HUD layout (las/menu.cpp) moves each corner's panels on from there: across, a share of that band
         // (100% the edge, 0 the 16:9 place), and up or down; a panel's corner is its side and its height in the
         // layout (above or below y 360: the HUD's panels keep to the corners, their parts within 300 of them).
+        // The Legion wheel (Y held; issue #29) is at the player, and its parts are turned every way: the ring that
+        // follows the stick lies on its side (rolled a quarter turn, so the yaw ratio above is its tilt over nearly
+        // nothing), the cube's faces spin about a slanted axis, a spinner leans forward. A panel's parts are upright
+        // instead: their x axis level (its y part under 0.09 of its length, the cube's faces 0.41 and more), their
+        // y axis up or down (0.92 and more of its length), and leaning back or not at all (the normal's y part 0 to
+        // 0.38 for one facing the screen; the spinner -0.41). Parts of no height are left as they were.
         if (!ui_box && st.ubuf[0][1].addr && st.ubuf[0][1].size >= 48 && p[46] != 0 && p[44] == 0 && p[45] == 0 &&
             renderer_texture_presented(st.rt.color[0])) {
             const float *m = (const float *)(uintptr_t)st.ubuf[0][1].addr;
@@ -4608,6 +4614,13 @@ static void draw_(CmdRec *r, bool indexed) {
                 if (yaw > 0.25f && tx < 640) hud_side = -1;
                 else if (yaw < -0.41f && tx > 640 && !(yaw > -0.60f && m[9] / m[0] < -0.15f) && !(m[6] > 0.15f && m[7] < 490))
                     hud_side = 1;
+                if (hud_side) {
+                    float xl = sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]), yl = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
+                    float nx = m[4] * m[9] - m[8] * m[5], ny = m[8] * m[1] - m[0] * m[9], nz = m[0] * m[5] - m[4] * m[1];
+                    float nl = sqrtf(nx * nx + ny * ny + nz * nz);
+                    if (yl > 1e-4f && (fabsf(m[4]) >= 0.2f * xl || fabsf(m[5]) < 0.85f * yl || (nz >= 0 ? ny : -ny) < -0.1f * nl))
+                        hud_side = 0;
+                }
                 if (hud_side) {
                     extern volatile long ac_hud_seen;  // (live_settings.h: the menu's hint that F2 places the HUD)
                     if (!ac_hud_seen) ac_hud_seen = 1;
