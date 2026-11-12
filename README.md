@@ -23,22 +23,6 @@ program, and its graphics run on Vulkan. There is no emulator and no JIT
 > and reviewed by the project's owner. It is shared as is, as a fan project. As with any code from the internet, you
 > build and run it at your own discretion.
 
-## Status
-
-| | |
-| --- | --- |
-| Tested | From the title screen through File 01 (its boss fight included) and File 02, into File 03, with the in-game camera taking photos (played by the owner) |
-| Frame rate | 60 fps target, cutscenes included (Dynamic-FPS patch, game speed correct at any frame rate). RTX 4090 / Ryzen 7 7800X3D: 57-60 fps. `AC_CUTSCENE_FPS=30` plays cutscenes exactly as the original does |
-| Stability | Driver watchdog plus a GPU hang stop. No driver resets since 2026-10-19 across dozens of test runs |
-| Saving | Works (tested in File 01) |
-| Shader pauses | Shaders are compiled for your GPU before the game starts. Simulated first play of an area never recorded: 7 pauses over 50 ms, 0.49 s in total (26 and 8.0 s before 2026-10-21) |
-| Controllers | Keyboard and mouse, and Xbox-style pads through XInput (every connected pad is read). Other pads (Switch Pro Controller, DualSense, DualShock 4, 8BitDo) go through SDL3: tested with a virtual SDL pad only, not yet with a real one |
-| Not yet tested | The rest of File 03 and everything after it |
-
-What changed and when: [What's new](docs/changelog.md). Open problems: [Known issues](docs/known-issues.md). Report
-problems as [issues](https://github.com/Puddz/AstralChain-PC/issues): play with **Play with diagnostics** until it
-happens, then attach the zip that **Create report** makes (it holds no game files).
-
 ## Features
 
 - Native code, not emulation: the game's ARM64 code is translated to C and compiled for Windows x64, and its NVN
@@ -112,6 +96,9 @@ Start **`Astral Chain Launcher.exe`** and press **Play**.
 - [Known issues](docs/known-issues.md) and [troubleshooting](docs/troubleshooting.md)
 - [Texture mods](docs/texture-mods.md) (this branch)
 - [How it works](docs/how-it-works.md) and [development notes](docs/development.md)
+
+Report problems as [issues](https://github.com/Puddz/AstralChain-PC/issues): play with **Play with diagnostics** until
+it happens, then attach the zip that **Create report** makes (it holds no game files).
 
 ## Branches
 
