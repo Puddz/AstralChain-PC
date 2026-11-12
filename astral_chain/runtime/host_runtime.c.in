@@ -111,14 +111,14 @@ static int heap_gpu_pinned;
  * size below that is ignored there. */
 static int res_w=-1,res_h,res_fixed;  /* res_fixed: AC_RESOLUTION given (no dynamic resolution) */
 static uint64_t res_pool;
-/* AC_UPSCALER=fsr (temporal upscaling, las/nvn/vulkan/temporal.c; issue #31): the 3D scene is drawn at the render
+/* AC_UPSCALER=fsr or dlss (temporal upscaling, las/nvn/vulkan/temporal.c; issue #31): the 3D scene is drawn at the render
  * resolution divided by AC_UPSCALE_QUALITY's ratio (native 1, quality 1.5, balanced 1.7, performance 2, ultra 3) and
  * the upscaler brings it to the render resolution, where the HUD is drawn. The game has this split itself: its
  * dynamic resolution levels are the scene's sizes under one display size (svc #0xB3). res_scene_w = 0: off. */
 static int res_scene_w,res_scene_h;
 static void res_scene_config(void) {
  char u[16],q[24];DWORD un=GetEnvironmentVariableA("AC_UPSCALER",u,sizeof(u));
- if(!un || un>=sizeof(u) || strcmp(u,"fsr")) return;
+ if(!un || un>=sizeof(u) || (strcmp(u,"fsr") && strcmp(u,"dlss"))) return;
  DWORD qn=GetEnvironmentVariableA("AC_UPSCALE_QUALITY",q,sizeof(q));
  double ratio=1.5;
  if(qn && qn<sizeof(q)) ratio=!strcmp(q,"native")?1.0:!strcmp(q,"balanced")?1.7:!strcmp(q,"performance")?2.0:!strcmp(q,"ultra")?3.0:1.5;

@@ -23,6 +23,7 @@ $vars=@{
   AC_GLSLANG=(Join-Path $project 'tools\glslang\bin\glslang.exe')
   AC_SDL3=(Join-Path $project 'tools\sdl3\SDL3.dll')
   AC_FSR_DIR=(Join-Path $project 'tools\fsr')
+  AC_DLSS_DIR=(Join-Path $project 'tools\dlss')
   AC_HLE_SYMBOLS='_ZN2nn2pl13GetSharedFontEPiPNS0_14SharedFontDataEiNS_8settings12LanguageCodeE=0x700d00aa70;_ZN2nn2pl20GetSharedFontAddressENS0_14SharedFontTypeE=0x700d00a560;_ZN2nn2pl17GetSharedFontSizeENS0_14SharedFontTypeE=0x700d00a700'
 }
 # Builds record their own SDK-derived addresses (native_trace --build-only writes run-env.txt).

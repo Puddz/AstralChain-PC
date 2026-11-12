@@ -157,9 +157,20 @@ static void create_device(void) {
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[12];
+    const char *ext[20];
     uint32_t n_ext = 0;
     ext[n_ext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    // Astral Chain, temporal upscaling (temporal.c; only when AC_UPSCALER asks for it): DLSS's device extensions, and
+    // for both upscalers 16-bit floats in shaders and buffer device addresses where the GPU has them.
+    extern int vk_tu_mode(void);
+    int upscaler = vk_tu_mode();
+    bool dlss_ext = upscaler == 2 && has_ext(ep, ne, "VK_NVX_binary_import") && has_ext(ep, ne, "VK_NVX_image_view_handle") &&
+                    has_ext(ep, ne, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+    if (dlss_ext) {
+        ext[n_ext++] = "VK_NVX_binary_import";
+        ext[n_ext++] = "VK_NVX_image_view_handle";
+        ext[n_ext++] = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME;
+    } else if (upscaler == 2) LOG("[vk] DLSS: this GPU's driver lacks the extensions it needs\n");
     g_vk.custom_border = has_ext(ep, ne, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
     if (g_vk.custom_border) ext[n_ext++] = VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME;
     g_vk.divisor = has_ext(ep, ne, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
@@ -187,7 +198,8 @@ static void create_device(void) {
     VkPhysicalDeviceRobustness2FeaturesEXT r2have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
     VkPhysicalDeviceVulkan13Features f13have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                                                 .pNext = robust2 ? &r2have : NULL};
-    VkPhysicalDeviceFeatures2 have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &f13have};
+    VkPhysicalDeviceVulkan12Features f12have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, .pNext = &f13have};
+    VkPhysicalDeviceFeatures2 have = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &f12have};
     vkGetPhysicalDeviceFeatures2(g_vk.phys, &have);
     if (gpl) {
         VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gf = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT};
@@ -222,6 +234,12 @@ static void create_device(void) {
                                             .timelineSemaphore = VK_TRUE, .shaderInt8 = VK_TRUE, .samplerMirrorClampToEdge = VK_TRUE,
                                             .uniformAndStorageBuffer8BitAccess = VK_TRUE, .storageBuffer8BitAccess = VK_TRUE,
                                             .scalarBlockLayout = VK_TRUE, .pNext = &f13};
+    if (upscaler) {
+        f12.shaderFloat16 = f12have.shaderFloat16;
+        f12.bufferDeviceAddress = f12have.bufferDeviceAddress;
+        f13.subgroupSizeControl = f13have.subgroupSizeControl;
+        f13.computeFullSubgroups = f13have.computeFullSubgroups;
+    }
     VkPhysicalDeviceVulkan11Features f11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
                                             .storageBuffer16BitAccess = VK_TRUE, .pNext = &f12};
     VkPhysicalDeviceFaultFeaturesEXT ff = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT, .deviceFault = VK_TRUE,

@@ -1,4 +1,5 @@
-// Temporal upscaling (Astral Chain, optional; issue #31): AMD FSR 4 / 3.1 through AMD's FSR API DLLs.
+// Temporal upscaling (Astral Chain, optional; issue #31): AMD FSR 4 / 3.1 through AMD's FSR API DLLs, or NVIDIA DLSS
+// (DLAA at the native ratio) through the driver's NGX library.
 //
 // The game draws its 3D scene at a "level" size (1440x810 under its 1600x900 picture; dynamic resolution) and its
 // last scene pass, filtersmaablend, scales that into the display-size picture the HUD is then drawn on. With
@@ -14,19 +15,33 @@
 //    for the others, the pixel's depth taken back through this frame's view-projection and forward through the last
 //    one (the camera's motion). NDC y points up, pixel y down.
 //
-// The DLLs (tools\fsr, AC_FSR_DIR): amd_fidelityfx_loader_vk.dll and amd_fidelityfx_upscaler_vk.dll, from AMD's FSR
-// SDK (signedbin). Without them, or if the context cannot be made, the game's own pass runs as before.
+// FSR (AC_UPSCALER=fsr): the DLLs (tools\fsr, AC_FSR_DIR) are amd_fidelityfx_loader_vk.dll and
+// amd_fidelityfx_upscaler_vk.dll, from AMD's FSR SDK (signedbin). Without them, or if the context cannot be made,
+// the game's own pass runs as before.
+//
+// DLSS (AC_UPSCALER=dlss; NVIDIA RTX GPUs): NGX is the driver's _nvngx.dll (found through the registry, as NVIDIA's
+// SDK library finds it), called directly: the SDK's library is built for MSVC and cannot be linked here, and its
+// headers may not be put in an open repository, so the few declarations needed are written out below. The functions
+// are the DLL's exports; NVSDK_NGX_Parameter is a C++ object whose methods are called through its (MSVC) vtable:
+// Set(void*) 0, Set(int) 3, Set(unsigned) 4, Set(double) 5, Set(float) 6, Set(ull) 7, Get(void**) 8, Get(int*) 11,
+// Get(unsigned*) 12. The DLSS model is nvngx_dlss.dll in tools\dlss (AC_DLSS_DIR), or the one NVIDIA's app keeps
+// up to date on the PC. The device needs VK_NVX_binary_import, VK_NVX_image_view_handle, VK_KHR_push_descriptor and
+// buffer device addresses (device.c enables them when AC_UPSCALER=dlss).
 #include "vk.h"
 #include "api/include/vk/ffx_api_vk.h"
 #include "upscalers/include/ffx_upscale.h"
 
 #include <SDL3/SDL_timer.h>
 #include <math.h>
+#include <stdio.h>
+#include <wchar.h>
 #include <stdlib.h>
 #include <string.h>
 
 __declspec(dllimport) void *LoadLibraryA(const char *name);
+__declspec(dllimport) void *LoadLibraryW(const wchar_t *name);
 __declspec(dllimport) void *GetProcAddress(void *module, const char *name);
+__declspec(dllimport) int MultiByteToWideChar(unsigned cp, unsigned long flags, const char *s, int n, wchar_t *w, int wn);
 
 typedef struct {
     float near_z, fov_y;
@@ -37,7 +52,7 @@ typedef struct {
 } TuCamera;
 
 static struct {
-    int mode;        // -1 not read, 0 off, 1 FSR
+    int mode;        // -1 not read, 0 off, 1 FSR, 2 DLSS
     int state;       // 0 not tried, 1 ready, 2 unavailable
     PfnFfxCreateContext create;
     PfnFfxDestroyContext destroy;
@@ -56,11 +71,11 @@ static struct {
     VkDescriptorSetLayout prep_set;
 } tu = {.mode = -1};
 
-// AC_UPSCALER=fsr: AMD FSR (4 where the GPU and driver have it, else 3.1).
+// AC_UPSCALER=fsr: AMD FSR (4 where the GPU and driver have it, else 3.1); =dlss: NVIDIA DLSS.
 int vk_tu_mode(void) {
     if (tu.mode < 0) {
         const char *u = getenv("AC_UPSCALER");
-        tu.mode = u && !strcmp(u, "fsr") ? 1 : 0;
+        tu.mode = u && !strcmp(u, "fsr") ? 1 : u && !strcmp(u, "dlss") ? 2 : 0;
     }
     return tu.state == 2 ? 0 : tu.mode;
 }
@@ -219,6 +234,181 @@ static bool tu_context(uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
     return true;
 }
 
+// ================================================================== DLSS (NGX)
+typedef struct NgxParam NgxParam;
+typedef struct NgxHandle NgxHandle;
+#define NGX_OK 1u
+typedef struct {  // NVSDK_NGX_FeatureCommonInfo
+    struct { const wchar_t *const *path; unsigned length; } paths;
+    void *internal;
+    struct { void (*callback)(const char *msg, int level, int feature); int min_level; bool only; } log;
+} NgxCommon;
+typedef struct {  // NVSDK_NGX_Resource_VK
+    struct { VkImageView view; VkImage image; VkImageSubresourceRange range; VkFormat format; unsigned width, height; } img;
+    int type;  // 0: image view
+    bool read_write;
+} NgxImage;
+static struct {
+    void *core;
+    unsigned (*init)(const char *project, int engine, const char *engine_version, const wchar_t *data_path, VkInstance inst,
+                     VkPhysicalDevice pd, VkDevice dev, PFN_vkGetInstanceProcAddr gipa, PFN_vkGetDeviceProcAddr gdpa, int sdk_version,
+                     const NgxCommon *common);
+    unsigned (*capability)(NgxParam **out);
+    unsigned (*allocate)(NgxParam **out);
+    unsigned (*destroy_params)(NgxParam *p);
+    unsigned (*create)(VkDevice dev, VkCommandBuffer cb, int feature, NgxParam *p, NgxHandle **out);
+    unsigned (*evaluate)(VkCommandBuffer cb, const NgxHandle *h, const NgxParam *p, void *progress);
+    unsigned (*release)(NgxHandle *h);
+    NgxParam *params;
+    NgxHandle *feature;
+    uint32_t rw, rh, ow, oh;
+    bool inited;
+} ngx;
+#define NGX_VT(p, i) ((*(void ***)(p))[i])
+static void ngx_set_ptr(NgxParam *p, const char *n, void *v) { ((void (*)(NgxParam *, const char *, void *))NGX_VT(p, 0))(p, n, v); }
+static void ngx_set_i(NgxParam *p, const char *n, int v) { ((void (*)(NgxParam *, const char *, int))NGX_VT(p, 3))(p, n, v); }
+static void ngx_set_ui(NgxParam *p, const char *n, unsigned v) { ((void (*)(NgxParam *, const char *, unsigned))NGX_VT(p, 4))(p, n, v); }
+static void ngx_set_f(NgxParam *p, const char *n, float v) { ((void (*)(NgxParam *, const char *, float))NGX_VT(p, 6))(p, n, v); }
+static unsigned ngx_get_i(NgxParam *p, const char *n, int *v) { return ((unsigned (*)(NgxParam *, const char *, int *))NGX_VT(p, 11))(p, n, v); }
+static unsigned ngx_get_ui(NgxParam *p, const char *n, unsigned *v) { return ((unsigned (*)(NgxParam *, const char *, unsigned *))NGX_VT(p, 12))(p, n, v); }
+
+static void ngx_log(const char *msg, int level, int feature) {
+    (void)level; (void)feature;
+    size_t n = msg ? strlen(msg) : 0;
+    LOG("[dlss] %s%s", msg ? msg : "", n && msg[n - 1] == '\n' ? "" : "\n");
+}
+
+// The driver's NGX core: <driver store>\_nvngx.dll, its folder in the registry (HKLM, either key).
+static void *ngx_core(void) {
+    void *adv = LoadLibraryA("advapi32.dll");
+    if (!adv) return NULL;
+    long (*get)(void *key, const wchar_t *sub, const wchar_t *value, unsigned long flags, unsigned long *type, void *data, unsigned long *size) =
+        (long (*)(void *, const wchar_t *, const wchar_t *, unsigned long, unsigned long *, void *, unsigned long *))GetProcAddress(adv, "RegGetValueW");
+    if (!get) return NULL;
+    static const wchar_t *const keys[2][2] = {
+        {L"System\\CurrentControlSet\\Services\\nvlddmkm\\NGXCore", L"NGXPath"},
+        {L"SOFTWARE\\NVIDIA Corporation\\Global\\NGXCore", L"FullPath"}};
+    for (int i = 0; i < 2; i++) {
+        wchar_t path[600];
+        unsigned long size = 520 * sizeof(wchar_t);
+        if (get((void *)(uintptr_t)0x80000002u /* HKEY_LOCAL_MACHINE */, keys[i][0], keys[i][1], 2 /* RRF_RT_REG_SZ */, NULL, path, &size)) continue;
+        size_t n = wcslen(path);
+        static const wchar_t name[] = L"\\_nvngx.dll";
+        memcpy(path + n, name, sizeof name);
+        void *m = LoadLibraryW(path);
+        if (m) return m;
+    }
+    return NULL;
+}
+
+static bool ngx_load(void) {
+    if (tu.state) return tu.state == 1;
+    tu.state = 2;
+    ngx.core = ngx_core();
+    if (!ngx.core) { LOG("[dlss] NVIDIA's NGX library was not found (no RTX driver?): the game's own scaling is used\n"); return false; }
+    ngx.init = (void *)GetProcAddress(ngx.core, "NVSDK_NGX_VULKAN_Init_ProjectID_Ext");
+    ngx.capability = (void *)GetProcAddress(ngx.core, "NVSDK_NGX_VULKAN_GetCapabilityParameters");
+    ngx.allocate = (void *)GetProcAddress(ngx.core, "NVSDK_NGX_VULKAN_AllocateParameters");
+    ngx.destroy_params = (void *)GetProcAddress(ngx.core, "NVSDK_NGX_VULKAN_DestroyParameters");
+    ngx.create = (void *)GetProcAddress(ngx.core, "NVSDK_NGX_VULKAN_CreateFeature1");
+    ngx.evaluate = (void *)GetProcAddress(ngx.core, "NVSDK_NGX_VULKAN_EvaluateFeature");
+    ngx.release = (void *)GetProcAddress(ngx.core, "NVSDK_NGX_VULKAN_ReleaseFeature");
+    if (!ngx.init || !ngx.capability || !ngx.allocate || !ngx.create || !ngx.evaluate || !ngx.release) {
+        LOG("[dlss] the driver's NGX library is too old for this (update the NVIDIA driver): the game's own scaling is used\n");
+        return false;
+    }
+    // where nvngx_dlss.dll may be: tools\dlss, then the game's folder (NGX also knows the copy NVIDIA's app updates)
+    static wchar_t dir[600], here[] = L".";
+    const char *d = getenv("AC_DLSS_DIR");
+    static const wchar_t *list[2];
+    unsigned nlist = 0;
+    if (d && *d && MultiByteToWideChar(65001, 0, d, -1, dir, 599) > 0) list[nlist++] = dir;
+    list[nlist++] = here;
+    NgxCommon common = {.paths = {list, nlist}, .log = {ngx_log, getenv("AC_DLSS_LOG") ? 1 : 0, true}};
+    if (!getenv("AC_DLSS_LOG")) common.log.callback = NULL, common.log.only = false;
+    // a project id of our own (a GUID), engine type "custom"
+    unsigned rc = ngx.init("5d4c1a0e-7b6f-4c57-9d3e-ac31dc2026b1", 0, "1.0", here, g_vk.inst, g_vk.phys, g_vk.dev, vkGetInstanceProcAddr,
+                           vkGetDeviceProcAddr, 0x15, &common);
+    if (rc != NGX_OK) { LOG("[dlss] NGX did not start (%#x): the game's own scaling is used\n", rc); return false; }
+    ngx.inited = true;
+    NgxParam *cap = NULL;
+    int available = 0, need_driver = 0;
+    unsigned major = 0, minor = 0;
+    if (ngx.capability(&cap) != NGX_OK || !cap) { LOG("[dlss] no capability parameters: the game's own scaling is used\n"); return false; }
+    ngx_get_i(cap, "SuperSampling.Available", &available);
+    ngx_get_i(cap, "SuperSampling.NeedsUpdatedDriver", &need_driver);
+    if (!available) {
+        int why = 0;
+        ngx_get_i(cap, "SuperSampling.FeatureInitResult", &why);
+        ngx_get_ui(cap, "SuperSampling.MinDriverVersionMajor", &major);
+        ngx_get_ui(cap, "SuperSampling.MinDriverVersionMinor", &minor);
+        if (need_driver) LOG("[dlss] DLSS needs NVIDIA driver %u.%u or newer: the game's own scaling is used\n", major, minor);
+        else LOG("[dlss] DLSS is not available here (%#x; an RTX GPU and nvngx_dlss.dll in tools\\dlss are needed): the game's own "
+                 "scaling is used\n", (unsigned)why);
+        return false;
+    }
+    if (ngx.allocate(&ngx.params) != NGX_OK || !ngx.params) { LOG("[dlss] no parameters: the game's own scaling is used\n"); return false; }
+    tu.state = 1;
+    return true;
+}
+
+static bool ngx_feature(VkCommandBuffer cb, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
+    if (ngx.feature && ngx.rw == rw && ngx.rh == rh && ngx.ow == ow && ngx.oh == oh) return true;
+    if (ngx.feature) { vkDeviceWaitIdle(g_vk.dev); ngx.release(ngx.feature); ngx.feature = NULL; }
+    NgxParam *p = ngx.params;
+    // the quality level NGX is told: by the ratio (0 performance, 1 balanced, 2 quality, 3 ultra performance, 5 DLAA)
+    float ratio = (float)ow / (float)rw;
+    int quality = ratio < 1.05f ? 5 : ratio < 1.6f ? 2 : ratio < 1.85f ? 1 : ratio < 2.5f ? 0 : 3;
+    // the presets NVIDIA's SDK library fills in when the application names none (its version 0x15)
+    static const struct { const char *name; unsigned preset; } presets[] = {
+        {"DLSS.Hint.Render.Preset.DLAA", 0x8000000b}, {"DLSS.Hint.Render.Preset.Quality", 0x8000000b},
+        {"DLSS.Hint.Render.Preset.Balanced", 0x8000000b}, {"DLSS.Hint.Render.Preset.Performance", 0x8000000d},
+        {"DLSS.Hint.Render.Preset.UltraQuality", 0x8000000b}, {"DLSS.Hint.Render.Preset.UltraPerformance", 0x8000000c}};
+    for (unsigned i = 0; i < sizeof presets / sizeof *presets; i++) {
+        unsigned v = 0;
+        if (ngx_get_ui(p, presets[i].name, &v) != NGX_OK || !v) ngx_set_ui(p, presets[i].name, presets[i].preset);
+    }
+    ngx_set_ui(p, "CreationNodeMask", 1);
+    ngx_set_ui(p, "VisibilityNodeMask", 1);
+    ngx_set_ui(p, "Width", rw);
+    ngx_set_ui(p, "Height", rh);
+    ngx_set_ui(p, "OutWidth", ow);
+    ngx_set_ui(p, "OutHeight", oh);
+    ngx_set_i(p, "PerfQualityValue", quality);
+    ngx_set_i(p, "DLSS.Feature.Create.Flags", 1 << 1);  // motion vectors at the render size; LDR colour, depth 0 near
+    ngx_set_i(p, "DLSS.Enable.Output.Subrects", 0);
+    uint64_t t0 = SDL_GetTicksNS();
+    unsigned rc = ngx.create(g_vk.dev, cb, 1 /* SuperSampling */, p, &ngx.feature);
+    if (rc != NGX_OK || !ngx.feature) {
+        LOG("[dlss] feature %ux%u -> %ux%u failed (%#x): the game's own scaling is used\n", rw, rh, ow, oh, rc);
+        ngx.feature = NULL;
+        tu.state = 2;
+        return false;
+    }
+    LOG("[dlss] %s: %ux%u -> %ux%u (%.0f ms)\n", quality == 5 ? "DLAA" : "DLSS", rw, rh, ow, oh, (SDL_GetTicksNS() - t0) / 1e6);
+    ngx.rw = rw; ngx.rh = rh; ngx.ow = ow; ngx.oh = oh;
+    tu.rw = rw; tu.rh = rh; tu.ow = ow; tu.oh = oh;
+    tu.frame = 0;
+    return true;
+}
+
+static void ngx_layout(VkCommandBuffer cb, TexBackend *b, VkImageLayout from, VkImageLayout to) {
+    VkImageMemoryBarrier2 m = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                               .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                               .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                               .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                               .oldLayout = from, .newLayout = to, .image = b->image,
+                               .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                               .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &m};
+    vkCmdPipelineBarrier2(cb, &di);
+}
+
+static NgxImage ngx_image(TexBackend *b, VkImageView view, bool write) {
+    NgxImage r = {.img = {view, b->image, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}, b->format, b->width, b->height}, .type = 0, .read_write = write};
+    return r;
+}
+
 static float halton(uint32_t i, uint32_t base) {
     float f = 1, r = 0;
     for (; i; i /= base) { f /= base; r += f * (float)(i % base); }
@@ -227,7 +417,7 @@ static float halton(uint32_t i, uint32_t base) {
 
 // Per presented frame: the next jitter (the sequence FSR documents: Halton 2, 3 over 8 * (output / render)^2 frames).
 void vk_tu_frame(void) {
-    if (!tu.ctx || !tu.rw) { tu.jx = tu.jy = 0; return; }
+    if ((!tu.ctx && !ngx.feature) || !tu.rw) { tu.jx = tu.jy = 0; return; }
     float ratio = (float)tu.ow / (float)tu.rw;
     uint32_t phases = (uint32_t)(8.0f * ratio * ratio + 0.5f);
     if (phases < 8) phases = 8;
@@ -242,7 +432,7 @@ void vk_tu_frame(void) {
 
 // The sub-pixel offset for a scene draw into a w x h target. False: that is not the upscaler's render size.
 bool vk_tu_jitter(uint32_t w, uint32_t h, float *jx, float *jy) {
-    if (!tu.ctx || w != tu.rw || h != tu.rh) return false;
+    if ((!tu.ctx && !ngx.feature) || w != tu.rw || h != tu.rh) return false;
     *jx = tu.jx; *jy = tu.jy;
     return true;
 }
@@ -265,7 +455,7 @@ float vk_tu_lod_bias(void) {
     return bias;
 }
 
-bool vk_tu_running(void) { return tu.ctx != NULL && tu.ok_frames > 0; }
+bool vk_tu_running(void) { return (tu.ctx != NULL || ngx.feature != NULL) && tu.ok_frames > 0 && tu.state == 1; }
 
 static struct FfxApiResource tu_resource(TexBackend *b, uint32_t format, uint32_t usage, uint32_t state) {
     struct FfxApiResource r = {0};
@@ -285,7 +475,8 @@ static struct FfxApiResource tu_resource(TexBackend *b, uint32_t format, uint32_
 // color (tonemapped scene), depth and vel (the models' float velocity, or NULL) at the render size -> dst (display size).
 // Outside any pass. False: nothing was done (the caller draws the game's own pass).
 bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, TexBackend *vel, TexBackend *dst, const TuCamera *cam) {
-    if (!vk_tu_mode() || !tu_load()) return false;
+    int mode = vk_tu_mode();
+    if (!mode || !(mode == 2 ? ngx_load() : tu_load())) return false;
     if (!color || !depth || !dst || !color->image || !depth->image || !dst->image) return false;
     if (color->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 || !(depth->aspect & VK_IMAGE_ASPECT_DEPTH_BIT)) return false;
     if (depth->width != color->width || depth->height != color->height) return false;
@@ -294,8 +485,8 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     if (vel && (vel->width != color->width || vel->height != color->height || !vel->image)) vel = NULL;
     uint32_t rw = color->width, rh = color->height, ow = dst->width, oh = dst->height;
     if (!tu_prep_ready()) { tu.state = 2; return false; }
-    bool fresh = !tu.ctx || tu.rw != rw || tu.rh != rh || tu.ow != ow || tu.oh != oh;
-    if (!tu_context(rw, rh, ow, oh)) return false;
+    bool fresh = (mode == 2 ? !ngx.feature : !tu.ctx) || tu.rw != rw || tu.rh != rh || tu.ow != ow || tu.oh != oh;
+    if (mode == 2 ? !ngx_feature(vk_cmd(), rw, rh, ow, oh) : !tu_context(rw, rh, ow, oh)) return false;
 
     TexBackend *d = tu_image(&tu.depth, VK_FORMAT_R32_SFLOAT, rw, rh);
     TexBackend *mv = tu_image(&tu.mv, VK_FORMAT_R16G16_SFLOAT, rw, rh);
@@ -334,6 +525,51 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     if (dt < 1) dt = 1;
     if (dt > 100) dt = 100;
 
+    static float jsx = 0, jsy;
+    if (jsx == 0) {  // (AC_UPSCALE_JITTER=<x sign>,<y sign>: testing)
+        jsx = 1; jsy = 1;
+        const char *e = getenv("AC_UPSCALE_JITTER");
+        if (e) sscanf(e, "%f,%f", &jsx, &jsy);
+    }
+    if (mode == 2) {
+        // (NGX reads its inputs as shader-read images and writes the output as a general one)
+        ngx_layout(cb, color, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        ngx_layout(cb, d, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        ngx_layout(cb, mv, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        NgxImage ic = ngx_image(color, tu_view(color, VK_IMAGE_ASPECT_COLOR_BIT), false);
+        NgxImage id = ngx_image(d, tu_view(d, VK_IMAGE_ASPECT_COLOR_BIT), false);
+        NgxImage im = ngx_image(mv, tu_view(mv, VK_IMAGE_ASPECT_COLOR_BIT), false);
+        NgxImage io = ngx_image(out, tu_view(out, VK_IMAGE_ASPECT_COLOR_BIT), true);
+        NgxParam *p = ngx.params;
+        ngx_set_ptr(p, "Color", &ic);
+        ngx_set_ptr(p, "Output", &io);
+        ngx_set_ptr(p, "Depth", &id);
+        ngx_set_ptr(p, "MotionVectors", &im);
+        ngx_set_f(p, "Jitter.Offset.X", jsx * tu.jx);
+        ngx_set_f(p, "Jitter.Offset.Y", jsy * tu.jy);
+        ngx_set_f(p, "Sharpness", 0);
+        ngx_set_i(p, "Reset", fresh || (cam && cam->cut));
+        ngx_set_f(p, "MV.Scale.X", 1);
+        ngx_set_f(p, "MV.Scale.Y", 1);
+        ngx_set_ptr(p, "TransparencyMask", NULL);
+        ngx_set_ptr(p, "ExposureTexture", NULL);
+        ngx_set_ptr(p, "DLSS.Input.Bias.Current.Color.Mask", NULL);
+        ngx_set_f(p, "FrameTimeDeltaInMsec", dt);
+        ngx_set_ui(p, "DLSS.Render.Subrect.Dimensions.Width", rw);
+        ngx_set_ui(p, "DLSS.Render.Subrect.Dimensions.Height", rh);
+        ngx_set_f(p, "DLSS.Pre.Exposure", 1);
+        ngx_set_f(p, "DLSS.Exposure.Scale", 1);
+        unsigned rc = ngx.evaluate(cb, ngx.feature, p, NULL);
+        ngx_layout(cb, color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+        ngx_layout(cb, d, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+        ngx_layout(cb, mv, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+        if (rc != NGX_OK) {
+            LOG("[dlss] evaluate failed (%#x): the game's own scaling is used\n", rc);
+            tu.state = 2;
+            return false;
+        }
+        goto copy_out;
+    }
     struct ffxDispatchDescUpscale dd = {0};
     dd.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
     dd.commandList = (void *)cb;
@@ -343,12 +579,6 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     dd.depth = tu_resource(d, FFX_API_SURFACE_FORMAT_R32_FLOAT, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dd.motionVectors = tu_resource(mv, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dd.output = tu_resource(out, FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-    static float jsx = 0, jsy;
-    if (jsx == 0) {  // (AC_UPSCALE_JITTER=<x sign>,<y sign>: testing)
-        jsx = 1; jsy = 1;
-        const char *e = getenv("AC_UPSCALE_JITTER");
-        if (e) sscanf(e, "%f,%f", &jsx, &jsy);
-    }
     dd.jitterOffset.x = jsx * tu.jx;
     dd.jitterOffset.y = jsy * tu.jy;
     dd.motionVectorScale.x = 1;
@@ -374,6 +604,7 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
         tu.state = 2;
         return false;
     }
+copy_out:
     vk_full_barrier(cb);
     VkImageCopy c = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                      .extent = {ow, oh, 1}};
