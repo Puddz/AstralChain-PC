@@ -4831,7 +4831,10 @@ static void draw_(CmdRec *r, bool indexed) {
         // for its mirrored parts: -0.19 to -0.27 while it comes in and after; the tutorial box -0.12, the item panel
         // -0.26 but turned -0.73): it stays. So does the flicker it comes in with (strips scaled and flipped every frame,
         // so neither ratio holds; their third column is the panel's pitched one, row 1 column 2 about 0.2-0.26, and they
-        // sit above y 490 in the layout: the HUD's only pitched part, the item panel, is below).
+        // sit above y 490 in the layout: the HUD's only pitched part, the item panel, is below). The rings that show a
+        // Legion skill's cooldown (issue #32; at the bottom right, by the item panel) are turned and lean as the profile
+        // panel does (-0.53, -0.21): what tells them apart is their place, x 1180-1240 in the layout, the profile panel
+        // being by the person aimed at in the middle (its parts at x 800-1015): from x 1100 on such a part moves.
         // The F2 HUD layout (las/menu.cpp) moves each corner's panels on from there: across, a share of that band
         // (100% the edge, 0 the 16:9 place), and up or down; a panel's corner is its side and its height in the
         // layout (above or below y 360: the HUD's panels keep to the corners, their parts within 300 of them).
@@ -4847,7 +4850,7 @@ static void draw_(CmdRec *r, bool indexed) {
             if (fabsf(m[0]) > 0.05f) {
                 float yaw = m[8] / m[0], tx = m[3];
                 if (yaw > 0.25f && tx < 640) hud_side = -1;
-                else if (yaw < -0.41f && tx > 640 && !(yaw > -0.60f && m[9] / m[0] < -0.15f) && !(m[6] > 0.15f && m[7] < 490))
+                else if (yaw < -0.41f && tx > 640 && !(yaw > -0.60f && m[9] / m[0] < -0.15f && tx < 1100) && !(m[6] > 0.15f && m[7] < 490))
                     hud_side = 1;
                 if (hud_side) {
                     float xl = sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]), yl = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);

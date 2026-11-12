@@ -26,6 +26,12 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   stick, at times the cube in the middle) at the right of the screen. Those parts were taken for the HUD's side
   panels and moved to the edge; they now stay with the wheel. Seen fixed in a replay of the report's recording at
   3840x1080.
+- **Ultrawide: Legion skill cooldown rings move with the skill panel** (issue #32; *not yet confirmed in play*): with
+  **Ultrawide: HUD at the screen's edges** on, the ring that counts down a Legion skill's cooldown stayed where the
+  HUD is at 16:9 while the rest of the bottom right panel was at the screen's edge. The rings are turned like the
+  panel IRIS shows for a scanned person, which stays in place, and were taken for it; they are now told apart by
+  where they are. In a scripted run at 3840x1080 (ZL held, X) the ring was at the edge with its panel, and IRIS's
+  panel was still next to the person scanned.
 
 **2026-11-11**
 
