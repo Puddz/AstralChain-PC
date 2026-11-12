@@ -1094,7 +1094,14 @@ void vk_perf_frame_end(void) {
     perf_scene_shown[0] = perf_scene[0]; perf_scene_shown[1] = perf_scene[1];
     perf_scene[0] = perf_scene[1] = 0;
 }
-void vk_perf_scene(int *w, int *h) { *w = (int)perf_scene_shown[0]; *h = (int)perf_scene_shown[1]; }
+bool vk_tu_size(uint32_t *w, uint32_t *h);
+void vk_perf_scene(int *w, int *h) {
+    // (with DLSS / FSR the scene's size is the upscaler's input: the game's bloom pass, at half the output size, is a
+    // larger float target than the scene at the lower qualities)
+    uint32_t tw, th;
+    if (vk_tu_size(&tw, &th)) { *w = (int)tw; *h = (int)th; return; }
+    *w = (int)perf_scene_shown[0]; *h = (int)perf_scene_shown[1];
+}
 void vk_perf_vram(uint64_t *usage, uint64_t *budget, uint64_t *size) {
     const VkPhysicalDeviceMemoryProperties *mp;
     vmaGetMemoryProperties(g_vk.vma, &mp);

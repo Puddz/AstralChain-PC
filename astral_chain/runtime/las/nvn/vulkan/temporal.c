@@ -544,6 +544,13 @@ float vk_tu_lod_bias(void) {
     return bias;
 }
 
+// The upscaler's input size, while it runs (the frame rate panel's "3D scene").
+bool vk_tu_size(uint32_t *w, uint32_t *h) {
+    if ((!tu.ctx && !ngx.feature) || !tu.ok_frames || tu.state != 1) return false;
+    *w = tu.rw; *h = tu.rh;
+    return true;
+}
+
 bool vk_tu_running(void) { return (tu.ctx != NULL || ngx.feature != NULL) && tu.ok_frames > 0 && tu.state == 1; }
 
 static struct FfxApiResource tu_resource(TexBackend *b, uint32_t format, uint32_t usage, uint32_t state) {
