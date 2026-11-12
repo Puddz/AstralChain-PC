@@ -2,6 +2,12 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-12**
+
+- **Frame rate display: choose its corner** (issue #30; *not yet confirmed in play*): **Settings > Display > Frame
+  rate: corner** in the launcher, and in the in-game menu (**F1**): top left (as before), top right, bottom left or
+  bottom right, for the plain counter and the detailed panel. It moves at once.
+
 **2026-11-11**
 
 - **Saves and settings made safer, and several stops and freezes addressed** (from a review of the code; *not yet

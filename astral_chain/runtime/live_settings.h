@@ -25,6 +25,7 @@ volatile int ac_uncapped=-1;      /* AC_UNCAPPED=1: no 60 FPS pacing in gameplay
 volatile int ac_in_cutscene;      /* (svc #0xB1: the game reports its cutscene mode each frame) */
 volatile LONG ac_game_steps;      /* (svc #0xB1 calls: game frames, for input recordings, input_record.h) */
 volatile int ac_fps_counter=-1;  /* AC_FPS_COUNTER=1: frames per second in the corner, 2: the detailed panel (las/menu.cpp) */
+volatile int ac_fps_corner=-1;   /* AC_FPS_CORNER=tl, tr, bl, br: the corner it is drawn in (0-3; issue #30) */
 volatile int ac_title_credit=-1;  /* "Port by Puddz" on the title screen (las/menu.cpp); AC_TITLE_CREDIT=0: off */
 volatile int ac_title_own_twin=-1;  /* AC_TITLE_OWN_TWIN=1: the title shows the player's twin (svc #0xB4) */
 volatile int ac_swap_ab=-1;      /* AC_SWAP_AB=1: the controllers' A and B swapped (hid_service.h, las/button_prompts.c) */
