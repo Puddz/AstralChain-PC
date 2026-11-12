@@ -4,10 +4,16 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-12**
 
+- **Render resolutions, AMD FSR 1 and ultrawide are now in the main version:** the `upscaling` branch was merged
+  into `main`. Everything it added is off unless you choose it (the default is still 1600x900): render resolutions
+  from 854x480 to 4K, AMD FSR 1, 21:9 to 48:9 with the HUD at the screen's edges and the HUD layout page (**F2**).
+  See [Experimental options](playing.md#experimental-options). To update an `upscaling` install, unzip the `main`
+  zip over it (or `git switch main`); saves and settings are kept. In a replay of one recording at the default
+  settings, the picture and the frame rate were the same before and after the merge.
 - **Frame rate display: choose its corner** (issue #30; *not yet confirmed in play*): **Settings > Display > Frame
   rate: corner** in the launcher, and in the in-game menu (**F1**, and on the HUD layout page, **F2**): top left (as before), top
   right, bottom left or bottom right, for the plain counter and the detailed panel. It moves at once.
-- **Ultrawide: Legion wheel no longer doubled** (this branch) (issue #29; confirmed in play): with **Ultrawide: HUD
+- **Ultrawide: Legion wheel no longer doubled** (issue #29; confirmed in play): with **Ultrawide: HUD
   at the screen's edges** on, holding Y showed a second copy of parts of the Legion wheel (the ring that follows the
   stick, at times the cube in the middle) at the right of the screen. Those parts were taken for the HUD's side
   panels and moved to the edge; they now stay with the wheel. Seen fixed in a replay of the report's recording at
@@ -49,16 +55,16 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   result, so the picture was blurry. The game now uses the screen's real pixels. In a window it opens at 1600x900
   real pixels, so with scaling the window looks smaller than before.
 - **Launcher background** no longer tiles when Windows enlarges the launcher after it opens (PR #24, by red-Geck0).
-- **Ultrawide: HUD at the screen's edges** (this branch; issue #27; experimental, *not yet confirmed in play*):
+- **Ultrawide: HUD at the screen's edges** (issue #27; experimental, confirmed in play):
   **Settings > Display**, or the in-game menu (changes at once). With a render resolution wider than 16:9, the HUD's
   side panels (health, minimap, objectives, tutorials) move to the left and right edges instead of staying in the
   middle 16:9 area; markers over characters, subtitles and menus stay where they are. Off by default.
-- **HUD layout (F2)** (this branch; issue #27; *not yet confirmed in play*): in the game, **F2** (or the button under
+- **HUD layout (F2)** (issue #27; confirmed in play): in the game, **F2** (or the button under
   the option in the F1 menu) opens a window to place the HUD on a screen wider than 16:9: for each corner's panels
   (top left, bottom left, top right, bottom right) how far they move toward the edge (0-100%) and up or down, with
   the game drawn behind it so each change shows at once. Saved with the other settings. The first time the HUD shows
   on a wide screen, a line at the top says F2 is there (until you have opened it once).
-- **Ultrawide fixes** (this branch; confirmed in play on a 32:9 recording): the light blocks above (issue #20); markers
+- **Ultrawide fixes** (confirmed in play on a 32:9 recording): the light blocks above (issue #20); markers
   on characters and targets stay on them instead of drifting toward the middle (issue #21); menus, subtitles, the
   opening credits, the title screen and videos are shown in a centred 16:9 area instead of stretched, while
   full-screen fades and backdrops still cover the whole width (issue #22).
@@ -100,7 +106,7 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 - **Texture mods** (`texture-dump` branch only; issue #14): **Settings > Mods** can dump every texture the game
   loads as a DDS file named by a hash of its data, and load edited DDS files with those names in place of the
   game's, at any size (HD textures). See [Texture mods](texture-mods.md). *Not yet confirmed in play.*
-- **Smaller render sizes for slow GPUs** (this branch; issue #4): 1280x720, 960x540 and 854x480 in **Render
+- **Smaller render sizes for slow GPUs** (issue #4): 1280x720, 960x540 and 854x480 in **Render
   resolution**. The 3D view is drawn at that size and the game scales it up, as its own dynamic resolution does; the
   HUD and menus stay sharp. It only lightens the graphics card's work: a slow processor is not helped. Highway save,
   RTX 4090, GPU time per frame compared with 1600x900: 720p -6%, 540p -20%, 480p -25%; a weaker GPU should gain
@@ -154,8 +160,7 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   controller change: Windows had placed one of the program's own thread stacks where the game then put one of its
   thread stacks. The game now places its memory around such allocations. Forced in a test (a large block reserved
   there on purpose): the game stopped without the fix and played with it.
-- **Mouse support, keyboard and mouse button icons, two bindings per action** (on main since 2026-10-25, now on
-  this branch too). Click in the game window to give it the mouse: it turns the camera, left click attacks (ZR),
+- **Mouse support, keyboard and mouse button icons, two bindings per action** (on main since 2026-10-25). Click in the game window to give it the mouse: it turns the camera, left click attacks (ZR),
   right click calls the Legion (ZL), the wheel changes weapons. Hold Alt to get the cursor back. Sensitivity,
   invert and the button icons are in **Settings > Mouse and keyboard**. New default keys: Shift sprints, Space
   dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives). Keys you had changed in Controls
@@ -193,16 +198,15 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   darker of the two brightnesses. *Not yet confirmed in play.*
 - **Setup after picking the wrong file**: once a wrong base game or update had been picked, every retry failed with
   the same "belongs to program" message. Setup now extracts again for any other file, and says which file to pick.
-- **Ultrawide render sizes** (this branch; issue #4): 2560x1080 and 3440x1440 (21:9), 3840x1080 and 5120x1440
-  (32:9), 5760x1080 and 7680x1440 (48:9, three screens; issue #19). See [Experimental options](playing.md#experimental-options-this-branch). *Untested on a real ultrawide monitor.*
+- **Ultrawide render sizes** (issue #4): 2560x1080 and 3440x1440 (21:9), 3840x1080 and 5120x1440
+  (32:9), 5760x1080 and 7680x1440 (48:9, three screens; issue #19). See [Experimental options](playing.md#experimental-options). *Untested on a real ultrawide monitor.*
 
-**On this branch since 2026-10-23**
+**On the `upscaling` branch since 2026-10-23 (in `main` since 2026-11-12)**
 
 - **Render resolution** (issue #4): 1920x1080, 2560x1440 and 3840x2160 besides the default 1600x900.
 - **AMD FSR 1 upscaling** option.
 
-This is the experimental [`upscaling`](https://github.com/Puddz/AstralChain-PC/tree/upscaling) branch: everything in
-the main version plus the options under [Experimental options](playing.md#experimental-options-this-branch).
+The options are under [Experimental options](playing.md#experimental-options).
 
 **2026-10-23**
 

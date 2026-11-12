@@ -17,7 +17,7 @@ The keyboard keys are in the launcher's **Controls** window, not here.
 - [Controller](#controller)
 - [Shaders and performance](#shaders-and-performance)
 - [Troubleshooting](#troubleshooting)
-- [Only on the upscaling and texture-dump branches](#only-on-the-upscaling-and-texture-dump-branches)
+- [Render resolution, upscaling and ultrawide](#render-resolution-upscaling-and-ultrawide)
 - [Only on the texture-dump branch: Mods](#only-on-the-texture-dump-branch-mods)
 
 ## Game
@@ -85,9 +85,9 @@ The keyboard keys are in the launcher's **Controls** window, not here.
 | **Show console windows** | Off | Shows the game's console and the watchdog's window | (launcher only) |
 | **Extra environment variables** | Empty | `NAME=value;NAME=value`, passed to the game; see [development notes](development.md) | (these are the variables) |
 
-## Only on the upscaling and texture-dump branches
+## Render resolution, upscaling and ultrawide
 
-These are in the **Display** group (and **F1**) of the `upscaling` and `texture-dump` downloads.
+These are in the **Display** group (and **F1**).
 
 | Setting | Default | What it does | Variable |
 | --- | --- | --- | --- |
