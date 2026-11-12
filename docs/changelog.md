@@ -4,6 +4,9 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-12**
 
+- **Frame rate display: choose its corner** (issue #30; *not yet confirmed in play*): **Settings > Display > Frame
+  rate: corner** in the launcher, and in the in-game menu (**F1**, and on the HUD layout page, **F2**): top left (as before), top
+  right, bottom left or bottom right, for the plain counter and the detailed panel. It moves at once.
 - **Ultrawide: Legion wheel no longer doubled** (this branch) (issue #29; confirmed in play): with **Ultrawide: HUD
   at the screen's edges** on, holding Y showed a second copy of parts of the Legion wheel (the ring that follows the
   stick, at times the cube in the middle) at the right of the screen. Those parts were taken for the HUD's side
