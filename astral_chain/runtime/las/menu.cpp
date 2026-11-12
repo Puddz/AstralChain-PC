@@ -41,6 +41,7 @@ extern volatile long ac_menu_head, ac_menu_tail;
 extern volatile long ac_menu_pad_buttons, ac_menu_pad_lx, ac_menu_pad_ly;
 extern volatile int ac_title_credit;                     // (live_settings.h)
 extern volatile int ac_fps_counter;                      // (live_settings.h) 0 off, 1 frame rate, 2 detailed
+extern volatile int ac_fps_corner;                       // (live_settings.h) 0 top left, 1 top right, 2 bottom left, 3 bottom right
 extern volatile int ac_uncapped;                         // (live_settings.h)
 // The renderer's numbers for the detailed frame rate panel (nvn/vulkan/exec.c, device.c)
 extern volatile int vk_perf_detail;
@@ -95,10 +96,12 @@ std::vector<Opt> opts = {
      "the edges of the screen. Markers over characters stay where they are. HUD layout (F2): how far each corner's "
      "panels move, and up or down.", CHECK, "0", nullptr, 0, 0, true},
     {"fps_counter", "Display", "Show the frame rate",
-     "In the top left corner. Frame rate: frames per second and the average frame time. Detailed: also a frame time graph, "
+     "Frame rate: frames per second and the average frame time. Detailed: also a frame time graph, "
      "the slowest frames, GPU and CPU load, memory, the GPU's temperature and power where its driver gives them, and the "
      "render sizes.",
      CHOICE, "0", "0|Off;1|Frame rate;2|Detailed", 0, 0, true},
+    {"fps_corner", "Display", "Frame rate: corner", "The corner of the window the frame rate is shown in.",
+     CHOICE, "tl", "tl|Top left (default);tr|Top right;bl|Bottom left;br|Bottom right", 0, 0, true},
     {"port_credit", "Display", "Show \"Port by Puddz\" on the title screen", nullptr, CHECK, "1", nullptr, 0, 0, true},
     {"title_own_twin", "Display", "Title screen shows the twin you play as",
      "The game shows the other twin. From the next time the title screen appears.", CHECK, "0", nullptr, 0, 0, true},
@@ -142,6 +145,7 @@ void read_session() {
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
         else if (k == "port_credit") v = env("AC_TITLE_CREDIT") == "0" ? "0" : "1";
         else if (k == "fps_counter") { std::string e = env("AC_FPS_COUNTER"); v = e == "1" || e == "2" ? e : "0"; }
+        else if (k == "fps_corner") { std::string e = env("AC_FPS_CORNER"); v = e == "tr" || e == "bl" || e == "br" ? e : "tl"; }
         else if (k == "title_own_twin") v = env("AC_TITLE_OWN_TWIN") == "1" ? "1" : "0";
         o.value = v;
     }
@@ -342,6 +346,27 @@ void set(Opt &o, const std::string &v, bool write = true) {
     if (write) saved_ok = save(o.key, v);
 }
 
+// A CHOICE option's list (the caller has pushed an ID and set the width).
+void combo(Opt &o) {
+    std::vector<std::pair<std::string, std::string>> ch;
+    for (const char *p = o.choices; *p;) {
+        const char *bar = strchr(p, '|'), *end = strchr(p, ';');
+        if (!end) end = p + strlen(p);
+        ch.emplace_back(std::string(p, bar), std::string(bar + 1, end));
+        p = *end ? end + 1 : end;
+    }
+    const char *shown = o.value.c_str();
+    for (auto &c : ch) if (c.first == o.value) shown = c.second.c_str();
+    if (ImGui::BeginCombo("##v", shown)) {
+        for (auto &c : ch) {
+            bool sel = c.first == o.value;
+            if (ImGui::Selectable(c.second.c_str(), sel)) set(o, c.first);
+            if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+}
+
 bool picture_wide();
 
 void draw(float scale) {
@@ -377,25 +402,7 @@ void draw(float scale) {
             int v = atoi(o.value.c_str());
             if (ImGui::SliderInt("##v", &v, o.lo, o.hi, "%d", ImGuiSliderFlags_AlwaysClamp)) set(o, std::to_string(v), false);
             if (ImGui::IsItemDeactivatedAfterEdit()) saved_ok = save(o.key, o.value);
-        } else {
-            std::vector<std::pair<std::string, std::string>> ch;
-            for (const char *p = o.choices; *p;) {
-                const char *bar = strchr(p, '|'), *end = strchr(p, ';');
-                if (!end) end = p + strlen(p);
-                ch.emplace_back(std::string(p, bar), std::string(bar + 1, end));
-                p = *end ? end + 1 : end;
-            }
-            const char *shown = o.value.c_str();
-            for (auto &c : ch) if (c.first == o.value) shown = c.second.c_str();
-            if (ImGui::BeginCombo("##v", shown)) {
-                for (auto &c : ch) {
-                    bool sel = c.first == o.value;
-                    if (ImGui::Selectable(c.second.c_str(), sel)) set(o, c.first);
-                    if (sel) ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-        }
+        } else combo(o);
         if (!strcmp(o.key, "hud_edges")) {
             ImGui::SetCursorPosX(label_w);
             if (ImGui::Button("HUD layout (F2)...")) InterlockedExchange(&ac_menu_page, 1);
@@ -564,6 +571,18 @@ void draw_hud(float scale) {
         done = true;
     }
     ImGui::EndDisabled();
+    if (Opt *o = find_opt("fps_corner")) {  // (issue #30; also on the settings page)
+        ImGui::Spacing();
+        ImGui::PushID(o->key);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Frame rate: corner");
+        ImGui::SameLine(label_w);
+        ImGui::SetNextItemWidth(-1);
+        combo(*o);
+        ImGui::PopID();
+        Opt *shown = find_opt("fps_counter");
+        if (shown && shown->value == "0") ImGui::TextDisabled("The frame rate is not shown now: Show the frame rate, in Settings (F1).");
+    }
     if (done) {
         saved_ok = save("hud_layout", layout_text());
         printf("[menu] hud_layout=%s\n", layout_text().c_str());
@@ -628,8 +647,8 @@ void draw_credit(float w, float h, ULONGLONG now) {
 }
 
 // Frame rate counter (off by default; AC_FPS_COUNTER=1 or 2, or the menu's option): frames presented per second and
-// their average time, counted here (menu_render runs once per presented frame) over half-second windows, in the top
-// left corner of the window. 2 ("Detailed", issue #28) shows a panel instead: the frame time graph and the slowest
+// their average time, counted here (menu_render runs once per presented frame) over half-second windows, in a corner
+// of the window (top left; AC_FPS_CORNER=tr, bl, br or the menu's option: another one, issue #30). 2 ("Detailed", issue #28) shows a panel instead: the frame time graph and the slowest
 // frames, the machine's load and memory, the GPU's sensors where its driver gives them, the renderer's waits and the
 // render sizes.
 LARGE_INTEGER fps_t0, fps_freq, fps_last;
@@ -639,6 +658,12 @@ char fps_text[48];
 int fps_mode(void) {
     if (ac_fps_counter < 0) { int m = atoi(env("AC_FPS_COUNTER").c_str()); ac_fps_counter = m >= 0 && m <= 2 ? m : 0; }
     return ac_fps_counter >= 0 && ac_fps_counter <= 2 ? ac_fps_counter : 0;
+}
+
+// The corner: bit 0 right, bit 1 bottom.
+int fps_corner(void) {
+    if (ac_fps_corner < 0) { std::string e = env("AC_FPS_CORNER"); ac_fps_corner = e == "tr" ? 1 : e == "bl" ? 2 : e == "br" ? 3 : 0; }
+    return ac_fps_corner & 3;
 }
 
 // ---- detailed: the frames (render thread)
@@ -995,25 +1020,30 @@ bool fps_due(void) {
     return fps_text[0] != 0 || mode == 2;
 }
 
-void draw_fps_simple(float h) {
+void draw_fps_simple(float w, float h) {
     float size = h * 0.028f;
     if (size < 14) size = 14;
     ImFont *f = font ? font : ImGui::GetFont();
     ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0, fps_text);
     float m = size * 0.5f;
     ImDrawList *dl = ImGui::GetForegroundDrawList();
-    dl->AddRectFilled(ImVec2(m * 0.5f, m * 0.5f), ImVec2(m * 1.5f + ts.x, m * 1.5f + ts.y), ImGui::GetColorU32(ImVec4(0, 0, 0, 0.45f)), size * 0.2f);
-    dl->AddText(f, size, ImVec2(m, m), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.95f)), fps_text);
+    int corner = fps_corner();
+    float bw = ts.x + m, bh = ts.y + m;  // the box, half a margin from the corner's two edges
+    float x0 = corner & 1 ? w - m * 0.5f - bw : m * 0.5f, y0 = corner & 2 ? h - m * 0.5f - bh : m * 0.5f;
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + bw, y0 + bh), ImGui::GetColorU32(ImVec4(0, 0, 0, 0.45f)), size * 0.2f);
+    dl->AddText(f, size, ImVec2(x0 + m * 0.5f, y0 + m * 0.5f), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.95f)), fps_text);
 }
 
-// The detailed panel: a window of its own in the top left corner (no input, no focus), its text sized for the window.
-void draw_fps_detailed(float h) {
+// The detailed panel: a window of its own in the chosen corner (no input, no focus), its text sized for the window.
+void draw_fps_detailed(float w, float h) {
     float size = h * 0.02f;
     if (size < 13) size = 13;
     ImGuiIO &io = ImGui::GetIO();
     ImFont *f = font ? font : ImGui::GetFont();
     float pad = size * 0.5f;
-    ImGui::SetNextWindowPos(ImVec2(pad, pad), ImGuiCond_Always);
+    int corner = fps_corner();
+    ImGui::SetNextWindowPos(ImVec2(corner & 1 ? w - pad : pad, corner & 2 ? h - pad : pad), ImGuiCond_Always,
+                            ImVec2(corner & 1 ? 1.0f : 0.0f, corner & 2 ? 1.0f : 0.0f));
     ImGui::SetNextWindowBgAlpha(0.6f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(size * 0.7f, size * 0.5f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(size * 0.5f, size * 0.2f));
@@ -1104,9 +1134,8 @@ void draw_fps_detailed(float h) {
 }
 
 void draw_fps(float w, float h) {
-    (void)w;
-    if (fps_mode() == 2) draw_fps_detailed(h);
-    else draw_fps_simple(h);
+    if (fps_mode() == 2) draw_fps_detailed(w, h);
+    else draw_fps_simple(w, h);
 }
 
 }  // namespace
