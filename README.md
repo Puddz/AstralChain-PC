@@ -1,27 +1,27 @@
 # Astral Chain PC
 
-
-> [!IMPORTANT]
-> **This project was built entirely with AI.** All of the code, tooling, reverse engineering and
-> documentation in this repository was written by an AI model (Anthropic's Claude, through Claude Code, and Codex), directed,
-> tested and reviewed by the project's owner. It is shared as is, as a fan project. If you prefer not to use
-> AI-written code, you are free to skip it. As with any code from the internet, you build and run it at your own
-> discretion.
+**Astral Chain PC** is an unofficial native Windows port of *Astral Chain* (Nintendo Switch, PlatinumGames, 2019),
+made by static recompilation: the game's ARM64 code is translated to C and compiled into an ordinary Windows x64
+program, and its graphics run on Vulkan. There is no emulator and no JIT
+([how it works](docs/how-it-works.md)).
 
 > [!NOTE]
 > **This is the `texture-dump` branch** (experimental): the `upscaling` branch plus texture dumping and texture
 > replacement for modders (issue #14). See [Texture mods](docs/texture-mods.md).
 
-An unofficial, experimental native Windows port of *Astral Chain* (Nintendo Switch, PlatinumGames, 2019), made by
-**static recompilation**. The game's ARM64 code is translated to C and compiled into an ordinary Windows x64
-program, and its NVN graphics calls run on Vulkan. There is no emulator or JIT.
+> [!IMPORTANT]
+> **No game files are included.** You need your own legally obtained copy of *Astral Chain*, dumped from your own
+> console: the base game, the v1.0.1 update and your `prod.keys`. How to dump them is not covered here, and requests
+> for game files will be closed.
+>
+> The game is built from your files on your PC, so the result contains the game. It is for your own use: do not share
+> the `build`, `game` or `userdata` folders.
 
-You build it yourself from **your own** legally dumped game and keys. This repository contains no game code, assets,
-shaders, keys or firmware, and never will. Everything the setup produces comes from your dump: do not share the
-`build/`, `game/` or `userdata/` folders.
-
-> **AI disclosure.** Most of the code, tooling, reverse engineering and documentation here was written by Claude
-> (Anthropic) through Claude Code, directed and tested by the repository owner. It is shared as-is as a fan project.
+> [!NOTE]
+> **This project was built entirely with AI.** All of the code, tooling, reverse engineering and documentation in
+> this repository was written by an AI model (Anthropic's Claude, through Claude Code, and Codex), directed, tested
+> and reviewed by the project's owner. It is shared as is, as a fan project. As with any code from the internet, you
+> build and run it at your own discretion.
 
 ## Status
 
@@ -35,269 +35,49 @@ shaders, keys or firmware, and never will. Everything the setup produces comes f
 | Controllers | Keyboard and mouse, and Xbox-style pads through XInput (every connected pad is read). Other pads (Switch Pro Controller, DualSense, DualShock 4, 8BitDo) go through SDL3: tested with a virtual SDL pad only, not yet with a real one |
 | Not yet tested | The rest of File 03 and everything after it |
 
-Known issues are listed under [Known issues](#known-issues).
+What changed and when: [What's new](docs/changelog.md). Open problems: [Known issues](docs/known-issues.md). Report
+problems as [issues](https://github.com/Puddz/AstralChain-PC/issues): play with **Play with diagnostics** until it
+happens, then attach the zip that **Create report** makes (it holds no game files).
 
-## What's new
+## Features
 
-Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
+- Native code, not emulation: the game's ARM64 code is translated to C and compiled for Windows x64, and its NVN
+  graphics calls run on Vulkan
+- Base game with its v1.0.1 update, built on your PC from your own dump
+- 60 fps, in-engine cutscenes included, with each camera cut kept at its original length to stay with the voices
+  (not yet confirmed in play); a 30 fps cutscene switch, and an uncapped frame rate (experimental)
+- A launcher that installs, updates and starts the game, with every setting explained
+- In-game settings menu (**F1**, or Minus and Plus on a controller) and a frame rate panel, from a plain counter to
+  frame time graph, 1% lows, GPU and CPU load
+- Render resolutions from 854x480 to 4K, at a fixed size, and **AMD FSR 1** scaling to the window or screen
+- Ultrawide, 21:9 to 48:9: a wider 3D view with nothing stretched; markers, subtitles, menus and movies keep their
+  shape; the HUD's side panels can sit at the screen's edges, each corner placed with **F2**
+- Texture mods: dump every texture the game loads as DDS, and replace textures with edited ones at any size
+  ([guide](docs/texture-mods.md))
+- Keyboard and mouse with remapping and mouse camera; Xbox controllers, and Switch Pro, DualSense, DualShock 4 and
+  8BitDo pads through SDL3; rumble; button prompts for keyboard, Xbox, PlayStation or Switch, following what you use
+- Shaders compiled for your GPU before the game starts, not during play
+- BC7 texture compression for GPUs with 8 GB of video memory or less (7.2 GB down to 4.7 GB in the highway chase)
+- Saving, with an automatic backup of the newest 30 saves
+- Input recording and one-click reports, so a bug can be replayed from the place it happened
+- Closes the game on a graphics driver error or a GPU hang, before Windows resets the driver
 
-**2026-11-12**
+## Installing
 
-- **Ultrawide: Legion wheel no longer doubled** (this branch) (issue #29; *not yet confirmed in play*): with **Ultrawide: HUD
-  at the screen's edges** on, holding Y showed a second copy of parts of the Legion wheel (the ring that follows the
-  stick, at times the cube in the middle) at the right of the screen. Those parts were taken for the HUD's side
-  panels and moved to the edge; they now stay with the wheel. Seen fixed in a replay of the report's recording at
-  3840x1080.
+Download the zip from the [latest release](https://github.com/Puddz/AstralChain-PC/releases/latest) (or `git clone`
+this repository), unzip it to a short local path such as `C:\Games\AstralChain-PC`, start
+**`Astral Chain Launcher.exe`** and press **Install game**. It asks for:
 
-**2026-11-11**
+- your `prod.keys`;
+- your own copy of the base game (title ID `01007300020FA000`, XCI or NSP);
+- the v1.0.1 update NSP (exactly v1.0.1).
 
-- **Saves and settings made safer, and several stops and freezes addressed** (from a review of the code; *not yet
-  confirmed in play*). Nothing moves: saves, settings and game data stay where they are, and the next **Play**
-  rebuilds the game once as after any update.
-  - **Save backups never hold a half-written save:** the automatic backup next to the saves (`...-snapshots`) is now
-    taken only while the game is not writing, and thrown away and taken again if the game changed its save during
-    the copy. Before, a backup taken in the middle of the next save could be kept as complete.
-  - **`userdata\launcher.ini` is not lost or overwritten:** the in-game menu no longer writes a new file when it
-    cannot read the old one (which dropped key bindings and the other settings); the launcher keeps what the
-    in-game menu saved while it was open, and writes the file in one step. The in-game sliders save when let go, not
-    at every step.
-  - **A folder that was copied or moved is built again** on the next **Play**. Before, a copy kept reading from, and
-    **saving into**, the folder it was copied from, and a moved folder did not start (exit code 31).
-  - **Folder names with letters outside English** (for example `C:\Users\Jörg\...`): the game no longer closes at
-    every start with exit code 31.
-  - **A rare freeze or stop in the game's thread locks** addressed: two places changed a lock's state in two steps
-    while the game changed it too.
-  - **A fast mouse can no longer stop the game** (`host-message-budget`) after a long stall.
-  - **Setup:** a folder path with `[` or `]` is reported at the start instead of failing later; the GPU warm-up's
-    time limit now works when it hangs; a failed **BC7 textures** preparation no longer blocks **Play**; a build
-    cancelled at the wrong moment no longer fails every later build.
-  - **Reports from a downloaded zip say which version it is** (a `VERSION` file filled in when the zip is made).
-- **Detailed frame rate panel** (issue #28; *not yet confirmed in play*): **Settings > Display > Show the frame rate**
-  (also in the in-game menu) is now **Off / Frame rate / Detailed**. Detailed shows a frame time graph, the 1% and
-  0.1% lows, GPU and CPU load, video and system memory, the GPU's temperature, power and clock, the GPU's busy time
-  and the waits per frame, and the window, picture and 3D render sizes. Temperature, power and clock come from the
-  graphics driver's own library (NVIDIA, AMD; nothing extra is downloaded); Intel GPUs show the rest. Tested on NVIDIA
-  only.
-- **Quit game** in the in-game menu, and **Swap A and B** for controllers (PR #23, by red-Geck0; confirmed in play):
-  see *In-game menu* and *Controllers* under [Playing](#playing).
-- **Sharp picture with Windows display scaling** (by red-Geck0, from issue #25; *not yet confirmed here*): with
-  scaling above 100% (common on laptops and handhelds), Windows gave the game a smaller screen and stretched the
-  result, so the picture was blurry. The game now uses the screen's real pixels. In a window it opens at 1600x900
-  real pixels, so with scaling the window looks smaller than before.
-- **Launcher background** no longer tiles when Windows enlarges the launcher after it opens (PR #24, by red-Geck0).
-- **Ultrawide: HUD at the screen's edges** (this branch; issue #27; experimental, *not yet confirmed in play*):
-  **Settings > Display**, or the in-game menu (changes at once). With a render resolution wider than 16:9, the HUD's
-  side panels (health, minimap, objectives, tutorials) move to the left and right edges instead of staying in the
-  middle 16:9 area; markers over characters, subtitles and menus stay where they are. Off by default.
-- **HUD layout (F2)** (this branch; issue #27; *not yet confirmed in play*): in the game, **F2** (or the button under
-  the option in the F1 menu) opens a window to place the HUD on a screen wider than 16:9: for each corner's panels
-  (top left, bottom left, top right, bottom right) how far they move toward the edge (0-100%) and up or down, with
-  the game drawn behind it so each change shows at once. Saved with the other settings. The first time the HUD shows
-  on a wide screen, a line at the top says F2 is there (until you have opened it once).
-- **Ultrawide fixes** (this branch; confirmed in play on a 32:9 recording): the light blocks above (issue #20); markers
-  on characters and targets stay on them instead of drifting toward the middle (issue #21); menus, subtitles, the
-  opening credits, the title screen and videos are shown in a centred 16:9 area instead of stretched, while
-  full-screen fades and backdrops still cover the whole width (issue #22).
+It then extracts the game's data, translates the game's code to C, and compiles the game and its shaders on your PC:
+roughly **15-40 minutes** the first time. If a step fails, fix the cause and press **Install game** again; finished
+steps are skipped. Without the launcher, `setup.cmd` does the same in a console window
+(`setup.cmd --keys X:\prod.keys --base X:\AstralChain.xci --update X:\AstralChain-v1.0.1.nsp`).
 
-**2026-11-10**
-
-- **Lights missing in blocks of the screen fixed** (issue #20; confirmed in play): dark, stair-stepped blocks, for
-  example on the side of the truck on the street after the highway chase, at any screen shape.
-- **Input recorder** for reporting problems: **Settings > Troubleshooting > Record controller input** records your
-  buttons and sticks from launch with a copy of your save, into a folder next to your save. Zip it and attach it to an
-  issue, and the problem can be played again on another PC.
-- **Frame rate counter**: **Settings > Display > Show the frame rate** (see 2026-11-11 for the detailed panel).
-
-**2026-11-09**
-
-- **Much less processor use** (*not yet confirmed in play*): three of the game's worker threads each kept a core busy
-  doing nothing; they now really sleep. Highway chase on the test PC: 4.6 busy cores down to 0.8, frame rate the same
-  or slightly better. Mostly matters on laptops (less heat and power).
-- **For GPUs with 4 GB of video memory** (*experimental, not yet tested on a 4 GB GPU*): **Settings > Shaders and
-  performance > Keep the game's memory copy in system RAM** (issue #17).
-
-**2026-11-08**
-
-- **Title screen** (*not yet confirmed in play*): **"Port by Puddz"** above the version number (on by default;
-  **Settings > Display**, or the in-game menu, turns it off), and an option for the twin on the roof: the game shows
-  the twin you did *not* choose; **Settings > Display > Title screen shows the twin you play as** (off by default)
-  shows yours. See *Title screen* under [Playing](#playing).
-- **All the settings explained** in one place: [docs/settings.md](docs/settings.md).
-- **The game window comes to the front when it opens** (issue #15; *not yet confirmed*): the game reads keys and
-  controllers only while its window is the active one, and it used to open without asking to be (a controller doing
-  nothing until a click; in fullscreen, no start prompt).
-- **Installing works when Python cannot check a download's certificate** (issue #16; *not yet confirmed*): setup
-  then downloads its tools with Windows' own downloader (each still checked against its SHA-256).
-- **Saves are flushed to disk** when the game closes a save file and when it commits, and **save backups are kept only
-  when complete** (*not yet confirmed*).
-
-**2026-11-06**
-
-- **Texture mods** (`texture-dump` branch only; issue #14): **Settings > Mods** can dump every texture the game
-  loads as a DDS file named by a hash of its data, and load edited DDS files with those names in place of the
-  game's, at any size (HD textures). See [Texture mods](docs/texture-mods.md). *Not yet confirmed in play.*
-- **Smaller render sizes for slow GPUs** (this branch; issue #4): 1280x720, 960x540 and 854x480 in **Render
-  resolution**. The 3D view is drawn at that size and the game scales it up, as its own dynamic resolution does; the
-  HUD and menus stay sharp. It only lightens the graphics card's work: a slow processor is not helped. Highway save,
-  RTX 4090, GPU time per frame compared with 1600x900: 720p -6%, 540p -20%, 480p -25%; a weaker GPU should gain
-  more, as more of its time goes on pixels. Handheld mode keeps its 1280x720 and ignores the smaller sizes. *Not
-  yet confirmed in play.*
-
-**2026-11-04**
-
-- **Controllers other than Xbox pads** (issue #10): Switch Pro Controller, DualSense, DualShock 4, 8BitDo and most
-  pads SDL knows now work, through SDL3 (setup downloads it). Buttons follow their position, as on the Switch. See
-  *Controllers* under [Playing](#playing). Switch 2 controllers are not supported yet. *Not yet confirmed with a real
-  non-Xbox controller* (tested with a virtual SDL pad: every button, trigger and stick direction arrived).
-- **Every connected Xbox-style pad is read** (PR #13, by lcd1232), not only the first one found: Steam Input's
-  virtual pad, or a pad plugged in after the start, used to be ignored until a restart.
-- **Prepare graphics on a separate thread: hangs and crashes fixed**, seen at high frame rates (with the
-  uncapped frame rate, the title screens run at 200+ fps): the list of GPU results waiting to be copied back was
-  changed by two threads at once, and a fence wait could end before its work reached the GPU. In tests with both
-  settings on, 25 of 25 runs through the title screens were clean (about a third hung or crashed before). *Not yet
-  confirmed in play.*
-- **Title screen flicker fixed** (reported in play: about every 10 s at 60 fps, nearly all the time uncapped): for
-  a frame the background movie was drawn squashed into a band between black bars. The game had rewritten the
-  vertices of its menu and movie quads by the time the GPU read them; small draws now take a copy of their
-  vertices when the port handles them. Uncapped title screen, 25 s captured per run: 1-12 squashed frames per
-  run before, none in 5 runs after, same frame rate (~186 fps); street walk unchanged (about 70 fps). Confirmed
-  in play (2026-11-06).
-- **Faster atomic memory operations**: each one the game makes checked its memory against every mapping table; the
-  last region that passed is now kept until a mapping changes. Street after the opening helicopter scene, uncapped
-  (RTX 4090 / Ryzen 7 7800X3D, 3 runs each): 67.0 -> 71.4 fps; at the street's start 55.6 -> 58.5 fps, slowest
-  2 s 41.8 -> 44.4. *Not yet confirmed in play.*
-- **Uncapped frame rate (experimental)**: **Settings > Game** in the launcher, or the in-game menu. Gameplay is no
-  longer held to 60 fps; cutscenes stay at 60 (their cuts are timed for it), and it stops at 450 fps, where the 60 fps
-  patch's game timing ends. Most places are limited by the CPU: on the street after the opening helicopter scene
-  64-66 fps instead of 60 (RTX 4090 / Ryzen 7 7800X3D). The 60 fps patch scales game speed to the measured frame
-  time up to 480 fps. Reported in play: it does not feel right above 60 fps, for about 10 fps more; being looked
-  into.
-- **In-game settings menu**: **F1**, or **Minus and Plus** together on a controller, opens it over the game, which
-  pauses as under the Switch's HOME menu. Button icons, rumble strength, the mouse settings, fullscreen, upscaling
-  and FSR 1 sharpening, 30 fps cutscenes and keeping the game running while minimized change at once; render
-  resolution, handheld mode, presentation mode and the separate graphics thread from the next start. Changes are saved for the launcher too. Navigate with the mouse, the
-  arrow keys or a controller (A selects, B goes back); Esc, F1 or Minus and Plus close it. Confirmed in play: F1
-  opens it, the game pauses, navigation works, changes apply and the launcher shows them.
-- **Xbox and PlayStation button icons**, and **automatic icons** (the new default): the game's button prompts
-  follow what you last used, keys and mouse buttons for the keyboard, the buttons of an Xbox, PlayStation or Switch
-  controller for a controller (by position: the right face button is Xbox B and PlayStation circle). The style can
-  also be fixed in the menu or the launcher. *Not yet confirmed in play.*
-- **Rumble**: controllers rumble when the game asks for it (it used to be dropped), through XInput for Xbox pads
-  and SDL3 for the others. **Settings > Controller > Rumble strength** (0 turns it off). The game asks for weak
-  rumble (made for the Switch's actuators); weak values are raised for PC pads' motors, as yuzu does. Stops when
-  the window loses focus or the game closes. Confirmed in play (rumble works; an 8BitDo controller's buttons work).
-- **Occasional stop at startup** (`host-shared-placeholder-reserve`), seen about once in 20 starts after the
-  controller change: Windows had placed one of the program's own thread stacks where the game then put one of its
-  thread stacks. The game now places its memory around such allocations. Forced in a test (a large block reserved
-  there on purpose): the game stopped without the fix and played with it.
-- **Mouse support, keyboard and mouse button icons, two bindings per action** (on main since 2026-10-25, now on
-  this branch too). Click in the game window to give it the mouse: it turns the camera, left click attacks (ZR),
-  right click calls the Legion (ZL), the wheel changes weapons. Hold Alt to get the cursor back. Sensitivity,
-  invert and the button icons are in **Settings > Mouse and keyboard**. New default keys: Shift sprints, Space
-  dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives). Keys you had changed in Controls
-  stay on their actions; a new default that would clash with one of them is left empty.
-
-**2026-10-27**
-
-- **In-game camera**: the camera never locked on to anyone, so no name label appeared and photo quests (such as
-  Lappy's) never completed. The game measures how much of a subject is visible with the GPU, and reads that count
-  a frame later without waiting; the count always read 0. Photos are also read back from the GPU now. Confirmed in
-  play (the owner found the last part of this fix).
-
-**2026-10-26**
-
-- **Frame rate with the Legion out on GPUs behind a slower link** (such as an eGPU over OCuLink): the GPU copied
-  about 47.5 MB of results back to system memory every frame, though only a few pages changed; on an RTX 5070 Ti
-  over OCuLink that took 8 of 10 ms a frame, 19 of 24 ms with the Legion out. Only the changed pages are copied now.
-  Reported in play on that PC: 42 → 53-54 fps with the Legion out (2560x1440, FSR 1).
-- **Street after the opening helicopter scene**: it was held at 33-53 fps on a fast PC (RTX 4090 / Ryzen 7 7800X3D,
-  CPU-bound) by thousands of small memory-tracking queries a second. They are now grouped: average 55.6 → 58.7 fps
-  there at 2560x1440. *Not yet confirmed in play.*
-- **Settings > Prepare graphics on a separate thread (experimental)**, off by default: the game's render thread no
-  longer translates and submits each frame itself. On the same street: average 59.9 fps, the slowest 2 s about 57.
-  *Not yet confirmed in play*; sound may run slightly later relative to the picture with it on.
-- **Brightness pumping in a dialogue after the opening street fight**: the picture brightened over a few frames
-  and snapped back. A compute shader that averages the scene's brightness read stale data (threads of a group passed
-  a barrier early); the measured average is now steady in every frame. *Not yet confirmed in play.*
-
-**2026-10-24**
-
-- **Flickering light in the opening helicopter cutscene**: the whole picture jumped between two brightnesses. The
-  game asks for depth clamping, which was ignored, so an effect card it places right in front of the camera was
-  cut away in some frames and drawn in others. Depth clamping is now on. On a test save, that stretch of the
-  cutscene went from 150-200 brightness jumps per 500 frames to 1-2 (camera cuts). The cutscene now stays at the
-  darker of the two brightnesses. *Not yet confirmed in play.*
-- **Setup after picking the wrong file**: once a wrong base game or update had been picked, every retry failed with
-  the same "belongs to program" message. Setup now extracts again for any other file, and says which file to pick.
-- **Ultrawide render sizes** (this branch; issue #4): 2560x1080 and 3440x1440 (21:9), 3840x1080 and 5120x1440
-  (32:9), 5760x1080 and 7680x1440 (48:9, three screens; issue #19). See [Experimental options](#experimental-options-this-branch). *Untested on a real ultrawide monitor.*
-
-**On this branch since 2026-10-23**
-
-- **Render resolution** (issue #4): 1920x1080, 2560x1440 and 3840x2160 besides the default 1600x900.
-- **AMD FSR 1 upscaling** option.
-
-This is the experimental [`upscaling`](https://github.com/Puddz/AstralChain-PC/tree/upscaling) branch: everything in
-the main version plus the options under [Experimental options](#experimental-options-this-branch).
-
-**2026-10-23**
-
-- **Shorter wait before the game after a play session.** The game records the shader combinations it meets in
-  play; the next Play then redid all of "Preparing shaders" and "Compiling for your GPU". Now only what was added
-  since the last time is done. On the test PC, with about 15% new records, the wait went from about 3 s to under
-  1 s (the saving is larger on slower PCs). A new version still prepares everything once.
-- **Fullscreen** (issue #5): **F11** or **Alt+Enter** switches between a window and borderless fullscreen on the
-  window's monitor (the display mode is not changed). **Settings > Display > Start in fullscreen** starts in it.
-
-**2026-10-22**
-
-- **Python no longer needs to be installed** (issue #3). Setup downloads its own Python 3.14 into `tools\python`
-  (pinned, checked by SHA-256), so the version installed on your PC, if any, does not matter. An existing `.venv`
-  that works is kept.
-- **Setup from a ZIP download** stopped at "unreviewed Maxwell translator identity" (issue #2): a file check
-  depended on line endings. Fixed; confirmed by the reporter.
-- **Green flashes in the title movie** (and noise or green in the tutorial clips): video frames were sometimes
-  drawn before the decoded picture reached the GPU, for up to 8 frames. Textures written by the CPU are now
-  checked every frame. In a recorded start, the title movie had about 50 green frames before and none after.
-  *Not yet confirmed in play; the tutorial clips are untested.*
-- **Handheld mode** (Settings > Display, off by default; issue #4): the game runs as on a Switch out of its dock
-  and renders at 1280x720 instead of 1600x900 (36% fewer pixels), for GPUs that cannot hold 60 fps. The picture
-  is scaled to the window as before. *Its frame rate gain was not measured: the test PC's GPU is not the limit.*
-
-**2026-10-21**
-
-- **Keyboard controls can be changed**: **Controls** in the launcher (click a key, press the new one).
-- **Optional BC7 texture compression** (Settings, off by default), in two versions: converted on the GPU while
-  playing, or prepared once at setup. Both save about 2.5 GB of video memory; see
-  [Texture compression](#texture-compression-bc7) for what each costs. *Not yet confirmed in play.*
-- **Launcher.** `Astral Chain Launcher.exe`: install, compile shaders, play without console windows, play with
-  diagnostics and create a bug report, and settings for every option, over original key art (six backgrounds to
-  pick from with the arrows at the top right). See [Playing](#playing).
-- **Shaders compiled for your GPU before the game starts** ("Compiling for your GPU", about 10 s the first time).
-  In-game, pipelines are linked from those compiled shaders instead of being compiled whole, and the recorded
-  ones are built before their first draw. Most shader pauses in new areas are gone (see Status). *Not yet
-  confirmed.*
-- **ASTC textures are decoded on the GPU** instead of the CPU: no more 60-240 ms pauses when large textures load.
-  Checked byte for byte against the CPU decoder.
-- **Crash at the File 01 boss** (when it throws a container): the game stopped on a rumble value out of range. It
-  now ignores such values. *Not yet confirmed.*
-- **NSP base games** stopped setup at the RomFS step (issue #1). Setup now gives NSTool both the base game's and
-  the update's title keys. *Not yet confirmed by the reporter.*
-- A failed rebuild no longer loses the shader cache.
-- Crash dumps in diagnostics mode; the watchdog script now records the game's exit code.
-
-**2026-10-20**
-
-- All of the game's shaders are translated before the first launch ("Preparing shaders").
-- NVN's alpha test is emulated: defeated enemies no longer leave a dark tentacle mass. *Not yet confirmed.*
-- Cutscene cuts keep their time at 60 fps, and sound skips gaps after a stall, so sound stays with the picture.
-  *Not yet confirmed.* `AC_CUTSCENE_FPS=30` plays cutscenes at 30 fps as on the Switch.
-- Dragging the window by its title bar no longer freezes the game; closing hides the window at once.
-- Each save is also copied to a backup folder (the newest 30 are kept).
-- Textures are uploaded ahead of first use on loading screens; the pipeline cache is kept between sessions.
-- Fixed wrong textures on faces and armour, and a rare crash in the GPU write-back handler.
-
-## Requirements
+You need:
 
 - Windows 10 or 11, 64-bit.
 - A GPU with Vulkan 1.3. Developed on an NVIDIA RTX 4090; other GPUs are untested.
@@ -306,12 +86,12 @@ the main version plus the options under [Experimental options](#experimental-opt
 - About **35 GB** free during setup. About 11 GB stays afterwards.
 - An internet connection for the one-time setup. It downloads Python, Zig, glslang, NSTool and SDL3 at pinned
   versions, checked by SHA-256. No Python install is needed.
-- Your own dump:
-  - the **base game** (title ID `01007300020FA000`), as an XCI or an NSP;
-  - the **v1.0.1 update** NSP. Exactly v1.0.1 is required;
-  - your console's **`prod.keys`**.
 
-How to dump games and keys from your Switch is not covered here.
+The launcher is unsigned, so Windows SmartScreen may warn on the first start. Its source is `launcher\Launcher.cs`.
+
+**Updating:** unzip the new version over the old one, or `git pull`. The next **Play** rebuilds the game once, in
+about a minute. Saves, settings (both in the `userdata` folder), game data and the shader cache are kept. To move the
+port, move the whole folder.
 
 **Linux / Steam Deck (Proton):** not supported here, and untested by this project. mohdrahk runs the port on
 Linux through Proton and keeps a community guide with build and update scripts on their fork:
@@ -319,215 +99,30 @@ Linux through Proton and keeps a community guide with build and update scripts o
 `linux/README.md`; background in [issue #6](https://github.com/Puddz/AstralChain-PC/issues/6)). Problems on Linux
 are best raised there.
 
-## Setup
-
-1. Download this repository: **Code → Download ZIP**, or `git clone`. Put it in a folder you own, for example
-   `C:\Games\AstralChain-PC`. The path should be short, and not on a network drive.
-2. Start **`Astral Chain Launcher.exe`** in that folder and press **Install game**. Pick, when asked:
-   1. your `prod.keys`;
-   2. the base game (XCI or NSP);
-   3. the v1.0.1 update NSP.
-3. Wait. Setup extracts the game data, packs it into `game\romfs.bin`, then translates and compiles the game and
-   its shaders. The first time takes roughly **15-40 minutes**, depending on your CPU and disk. Temporary files are
-   removed at the end. The launcher shows the progress; **Cancel** stops it.
-
-The game is installed in the launcher's folder. Once it is, **Install game** is greyed out.
-
-If a step fails, fix the cause and press **Install game** again: finished steps are skipped.
-
-Without the launcher, `setup.cmd` does the same in a console window. It also takes the files directly:
-`setup.cmd --keys X:\prod.keys --base X:\AstralChain.xci --update X:\AstralChain-v1.0.1.nsp`.
-
-Windows SmartScreen may warn about the launcher because it is not signed. Its source is `launcher\Launcher.cs`;
-`python launcher\build.py` builds it again with the C# compiler that comes with Windows.
-
 ## Playing
 
-Start **`Astral Chain Launcher.exe`**:
+Start **`Astral Chain Launcher.exe`** and press **Play**.
 
 ![The launcher](docs/images/launcher.jpg)
 
-The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six backgrounds; the choice is remembered.
-
-| Button | What it does |
-| --- | --- |
-| **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
-| **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
-| **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
-| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, the title screen options, presentation mode, handheld mode (1280x720), render resolution and upscaling (see [Experimental options](#experimental-options-this-branch)), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window and in [docs/settings.md](docs/settings.md) |
-| **Controls** | The keyboard keys for every button, stick direction and the D-pad. Click a key, then press the new one; a key already in use swaps places |
-| **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
-
-`Play Astral Chain.cmd` and `Play Astral Chain (diagnostics).cmd` still work, with console windows.
-
-Default keys and mouse buttons (change them with **Controls**; every action has a main and an alternative binding):
-
-| Switch | What it does | Main | Alternative |
-| --- | --- | --- | --- |
-| ZR | Attack | Left click | C |
-| ZL | Legion (summon, send, recall; hold to steer it) | Right click | Z |
-| A / B / X / Y | Interact / dodge / item / switch Legion | J / K / I / U | B: Space |
-| L / R | Legion action / dismiss Legion | Q / E | Mouse back / forward |
-| + / - | IRIS / pause menu | Enter / Backspace | Tab / Esc |
-| Left stick | Move | W A S D | |
-| Right stick | Camera | Mouse (see below) and T F G H | |
-| Left / right stick press | Sprint or crouch / re-centre the camera | Shift / Middle click | 1 / 2 |
-| D-pad | Up and down: weapons | Arrow keys | Up and down: mouse wheel |
-
-**Mouse.** Click in the game window to give it the mouse: the cursor hides and the mouse turns the camera (and
-steers your Legion while ZL is held). Hold **Alt**, or switch to another window, to get the cursor back; click again
-to resume. Sensitivity and invert are in **Settings > Mouse and keyboard**.
-
-**Button icons.** By default the game's button prompts follow what you last used: your keys and mouse buttons (the
-main binding of each action) on the keyboard, the buttons of an Xbox, PlayStation or Switch controller on a
-controller. **Button icons** in the in-game menu or the launcher's **Settings > Mouse and keyboard** fixes one style.
-
-**In-game menu.** **F1**, or **Minus and Plus** together on a controller (Back and Start, Share and Options), opens
-the settings menu over the game; the game pauses while it is open. Esc, F1 or Minus and Plus close it. Changes that
-need a restart say so. The menu saves to the same settings file as the launcher. **Quit game** at the bottom of the
-menu closes the game, after asking first, so a controller alone is enough.
-
-**HUD layout** (upscaling and texture-dump branches, render resolutions wider than 16:9). **F2**, or **HUD layout** in
-the F1 menu, opens a window where you choose where the HUD's side panels go: for each corner, how far toward the
-screen's edge and how far up or down. F2, Esc or B close it.
-
-F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
-
-**Title screen.** The scene behind the title is a video of one of the twins on a roof, in the outfit of your newest
-save. The game shows the twin you did **not** choose (your sibling); **Settings > Display > Title screen shows the twin
-you play as** (or the in-game menu) shows yours instead, from the next time the title screen appears. Your save is not
-changed. A small **"Port by Puddz"** shows above the version number; the same Display settings turn it off.
-
-### Experimental options (this branch)
-
-All are in **Settings > Display** and off by default; they apply the next time you press **Play**.
-
-| Setting | What it does |
-| --- | --- |
-| **Render resolution** | The size the game draws at: 1600x900 (default, the Switch's docked size, with the game's own dynamic resolution), 1920x1080, 2560x1440 or 3840x2160, at a fixed size. Larger sizes need a faster GPU and more video memory. Measured on an RTX 4090 in the highway chase: about 60 fps at every size |
-| **Render resolution, small** | 1280x720, 960x540 or 854x480, for GPUs that cannot hold 60 fps at 1600x900. Only the 3D view is drawn at that size and scaled up by the game (softer picture); the HUD and menus stay at 1600x900. Handheld mode ignores them |
-| **Render resolution, ultrawide** | 2560x1080 or 3440x1440 (21:9), 3840x1080 or 5120x1440 (32:9), 5760x1080 or 7680x1440 (48:9, three screens; 7680x1440 is drawn at 6788x1272). The 3D view gets wider (nothing is stretched), the HUD keeps its 16:9 layout in the middle, and the window opens at that shape; in fullscreen on an ultrawide screen the picture fills it. Checked in screenshots of the street and the opening cutscene; cutscene movies, menus and real ultrawide monitors are untested |
-| **Upscaling** | *Smooth* (default) scales the picture to a larger window or screen; *AMD FSR 1* uses edge-aware upscaling and sharpening, crisper on 1440p and 4K screens. Works on any GPU |
-
-The resolution comes in through a code patch (`astral_chain/patches/resolution-1.0.1.pchtxt`): the game asks the
-runtime for its render size, dynamic resolution levels, render target memory and camera aspect, so the size can be
-changed at launch without a rebuild. Without the setting, the game's own values are used.
-
-### Texture mods (this branch)
-
-For modders (issue #14): **Settings > Mods** can **dump** every texture the game loads as a DDS file named by a
-hash of its data, and **replace** textures with edited DDS files of the same names, at any size (HD textures),
-without changing the game's files. The guide, with a step-by-step walkthrough, formats and troubleshooting:
-**[Texture mods](docs/texture-mods.md)**. *Not yet confirmed in play.*
-
-### Texture compression (BC7)
-
-For GPUs with 8 GB of video memory or less. Most of the game's textures are ASTC, which PC GPUs cannot read, so
-they are unpacked to 4 bytes per pixel. **Settings > Texture compression (BC7)** stores them as BC7 instead, a
-quarter of that size. Off by default. Measured on a fresh install, highway chase, 3 runs each (RTX 4090):
-
-| | Off (default) | **On: converted on the GPU** | **On: prepared at setup (best)** |
-| --- | --- | --- | --- |
-| What it does | Textures unpacked as before | Each texture is converted on the GPU as it loads | Every texture is converted once, on the CPU, and stored on disk; the game loads those |
-| Video memory (average / peak) | 7.2 / 8.7 GB | 4.7 / 5.2 GB | 4.7 / 5.1 GB |
-| Preparation | None | None | About 12 minutes, once (at the next Play) |
-| Disk space | None | None | 16 GB (`build\game\cache\bc7`) |
-| Short pauses per run | 6-8 | 11-12: about 5 more, of 60-100 ms, while an area loads | 6-7 |
-| Picture | Original | Slightly less detail on some surfaces (bumps, reflections) | Very close to the original |
-
-Picture quality measured on 300 of the game's textures (PSNR against the original, higher is better): 46 dB
-average on the GPU, 51 dB prepared at setup; the GPU's worst texture was 27 dB, setup's 34 dB.
-
-Switching to *prepared at setup* says when the preparation will run; switching away offers to delete the 16 GB.
-With less than 20 GB free, setup skips the preparation and the game converts on the GPU instead.
-
-**Controllers.** Xbox pads and compatibles work through XInput. Other controllers work through SDL3: Switch Pro
-Controller, DualSense, DualShock 4, 8BitDo and most USB or Bluetooth pads SDL knows. The buttons follow their
-*position*, as on the Switch: the right face button is A and the bottom one B, whatever their labels.
-**Swap A and B** (**Settings > Controller**, or the in-game menu) makes the bottom button A instead, as in most PC
-games; the button icons follow, and the keyboard keeps its keys. The first
-controller found is used; plug it in before or while the game runs. Controllers rumble when the game asks for it
-(**Settings > Controller > Rumble strength**, 0 turns it off). Not supported yet: the Switch 2 Pro Controller
-and Switch 2 Joy-Cons (SDL's Windows build has no driver for them). With Steam, adding the game as a non-Steam game
-with Steam Input on may work for those; that is untested. *Not yet confirmed with a real non-Xbox controller.*
-
-The game pauses while its window is minimized, as on the Switch's home menu (Settings: *Keep running while the game
-window is minimized*). In another window, the game keeps running but takes no keyboard input.
-
-- **Saves** are in `userdata\saves\` (the launcher's *Saves folder* link). Each save is also copied next to it
-  (the newest 30 are kept); still, back that folder up from time to time.
-- **Logs** of the last session are in `build\game\round-00\` (`trace.log`, `stderr.log`).
-- **Shaders.** Before the game starts the first time, setup translates all of the game's shaders ("Preparing
-  shaders", about 20 s on a 16-thread CPU), then compiles them for your GPU and driver ("Compiling for your GPU"),
-  together with the render-state combinations recorded so far. Later launches skip both unless something changed
-  (a game update or a new graphics driver); new combinations recorded in play are done alone at the next launch. A combination never seen before is linked
-  from the compiled shaders when first drawn, without a long pause. The cache is in `build\game\cache\`.
-
-### Safety
-
-The game always runs under `astral_chain\run_guarded.ps1`, from the launcher too. It closes the game on the first
-GPU driver error that Windows logs. The game also stops itself if the GPU stays busy for more than 1.2 s, before Windows would reset the driver.
-
-### Updating
-
-Download the new version over the old one, or `git pull`. The next **Play** rebuilds the game once, in about a
-minute. Your saves, game data and shader cache are kept.
-
-Your saves and settings are in the folder's `userdata` folder, and nothing else holds them. To move the port, move
-the whole folder; to start again from a fresh download, copy `userdata` into the new folder before the first
-**Play**. A moved or copied folder is built again on its next **Play**.
-
-## Known issues
-
-- Dark, shadow-like patches on scenery when fighting close to it were reported. Under investigation: a screenshot
-  helps.
-- Some short pauses remain when entering new areas: the game loading its own data, not shader compiling.
-- Defeated enemies left a large dark tentacle mass for about two seconds. Cause found: the chimera blood effect
-  dissolves through NVN's alpha test, which was not emulated. It now is (test runs of the highway chase show no
-  mass), not yet confirmed in play.
-- In-game cutscenes were reported with the sound behind the picture after camera cuts (the 60 fps mod's known limit:
-  each cut ended up to a frame early). Cut ends now keep their time: the cutscene after the highway chase lasts
-  35.192 s, as at the original 30 fps (35.193 s; 35.077 s before). Sound gaps after stalls are skipped to stay in
-  sync. Not yet confirmed fixed.
-- Rarely the game closes right at startup (`STOP host-shared-placeholder-reserve` in `trace.log`). Start it again.
-- Save-slot thumbnails are not captured (`nvnTextureReadTexels` is not implemented).
-
-Reports are welcome. The easiest way: play with **Play with diagnostics** in the launcher until the problem
-happens, then attach the zip that **Create report** makes. Otherwise include `build\game\round-00\stderr.log` and
-`trace.log` and your GPU and driver version, but no game files.
-
-## Folder layout
-
-| Path | What |
-| --- | --- |
-| `Astral Chain Launcher.exe` | The launcher (source in `launcher/`) |
-| `setup.cmd`, `Play Astral Chain.cmd` | The same steps from a console window |
-| `astral_chain/` | Translator driver, build system and Windows runtime (C) |
-| `astral_chain/patches/` | Code patches of this project (pchtxt) |
-| `third_party/` | Vendored sources: LASRecomp, Vulkan-Headers, VulkanMemoryAllocator, Dynamic-FPS patch |
-| `docs/` | How it works, troubleshooting, development notes |
-| `tools/` | *(created by setup)* Python, Zig, glslang, NSTool, SDL3 |
-| `game/` | *(created by setup)* your extracted update code, metadata and `romfs.bin` |
-| `build/` | *(created by setup)* the compiled game and its shader cache |
-| `userdata/` | *(created by setup)* saves, account profile, setup choices, launcher settings (`launcher.ini`) |
-| `reports/` | *(created by the launcher)* reports made with **Create report** |
-
-## Documentation
-
+- [Playing](docs/playing.md): the launcher, default keys, mouse, controllers, the in-game menu, resolutions and ultrawide, texture
+  compression, saves and logs
 - [Settings](docs/settings.md): what every setting does
-- [How it works](docs/how-it-works.md)
-- [Troubleshooting](docs/troubleshooting.md)
+- [What's new](docs/changelog.md)
+- [Known issues](docs/known-issues.md) and [troubleshooting](docs/troubleshooting.md)
 - [Texture mods](docs/texture-mods.md) (this branch)
-- [Development notes](docs/development.md)
+- [How it works](docs/how-it-works.md) and [development notes](docs/development.md)
 
-## Legal
+## Branches
 
-This is an unofficial fan project, not affiliated with or endorsed by Nintendo or PlatinumGames. *Astral Chain* is
-a trademark of Nintendo. No game code, assets, shaders, keys or firmware are distributed. Requests for them will be
-closed.
+| Branch | For |
+| --- | --- |
+| [`main`](https://github.com/Puddz/AstralChain-PC) | **Most players.** |
+| [`upscaling`](https://github.com/Puddz/AstralChain-PC/tree/upscaling) | `main` plus render resolutions, ultrawide and AMD FSR 1 (experimental) |
+| [`texture-dump`](https://github.com/Puddz/AstralChain-PC/tree/texture-dump) | `upscaling` plus texture dumping and replacement for modders (experimental) |
 
-The original code in this repository is under the MIT License (see `LICENSE`). Vendored third-party components keep
-their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The [release](https://github.com/Puddz/AstralChain-PC/releases/latest) holds a zip of each. Each branch is its own
+install: unzip it to its own folder.
 
 ## Credits
 
@@ -547,8 +142,25 @@ their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
   changes. The patch itself is this project's own.
 - theboy181's "21:9" mod ([switch-ptchtxt-mods](https://github.com/theboy181/switch-ptchtxt-mods)), commissioned by
   Kilgharrah: the camera aspect site used for the ultrawide sizes. The patch itself is this project's own.
+- [TotK Recomp](https://github.com/valentderah/totk-pc-recomp): the detailed frame rate panel reads the GPU's
+  load, temperature, power and clock the way its performance overlay (`runtime/perfmon.c`) does.
 - [NSTool](https://github.com/jakcron/nstool), [Zig](https://ziglang.org/),
   [glslang](https://github.com/KhronosGroup/glslang), [SDL](https://www.libsdl.org/) (zlib; its `SDL3.dll` is
   downloaded by setup, for controllers), [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers),
   [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator),
   [Capstone](https://www.capstone-engine.org/), [lz4](https://github.com/python-lz4/python-lz4).
+
+## License
+
+The project's own code is under the [MIT License](LICENSE); third-party code keeps its own license
+([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). The license grants nothing for Nintendo's game.
+
+Astral Chain PC is an independent, non-commercial fan project, not affiliated with or endorsed by Nintendo or
+PlatinumGames. *Astral Chain*, *PlatinumGames* and *Nintendo Switch* are trademarks of their respective owners. No
+game code, assets, shaders, keys or firmware are distributed.
+
+## Building from source
+
+Setup builds everything from source on your PC; there is no separate build to do. The translator, the build system
+and the Windows runtime are in `astral_chain/`, the launcher in `launcher/` (`python launcher\build.py` builds it
+with the C# compiler that comes with Windows). See [development notes](docs/development.md).

@@ -33,6 +33,9 @@ The EASU and RCAS shaders in `astral_chain/runtime/las/nvn/vulkan/shaders.c` (fr
 > TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
+The detailed frame rate panel's GPU readings (`astral_chain/runtime/las/menu.cpp`: NVML and ADL declarations and calls) follow
+[TotK Recomp](https://github.com/valentderah/totk-pc-recomp)'s `runtime/perfmon.c`.
+
 The Maxwell shader translator is LASRecomp's `runtime/nvn/maxwell/translate.c` with reviewed changes applied at
 build time by `astral_chain/shader_build.py`. The vendored file itself is unchanged.
 
