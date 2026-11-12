@@ -37,6 +37,14 @@ Known issues are listed under [Known issues](#known-issues).
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-12**
+
+- **Ultrawide: Legion wheel no longer doubled** (this branch) (issue #29; *not yet confirmed in play*): with **Ultrawide: HUD
+  at the screen's edges** on, holding Y showed a second copy of parts of the Legion wheel (the ring that follows the
+  stick, at times the cube in the middle) at the right of the screen. Those parts were taken for the HUD's side
+  panels and moved to the edge; they now stay with the wheel. Seen fixed in a replay of the report's recording at
+  3840x1080.
+
 **2026-11-11**
 
 - **Saves and settings made safer, and several stops and freezes addressed** (from a review of the code; *not yet
