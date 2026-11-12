@@ -11,7 +11,7 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 | **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
 | **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
 | **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
-| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, the title screen options, presentation mode, handheld mode (1280x720), render resolution and upscaling (see [Experimental options](#experimental-options-this-branch)), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window and in [docs/settings.md](settings.md) |
+| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, the title screen options, presentation mode, handheld mode (1280x720), render resolution and upscaling (see [Experimental options](#experimental-options)), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window and in [docs/settings.md](settings.md) |
 | **Controls** | The keyboard keys for every button, stick direction and the D-pad. Click a key, then press the new one; a key already in use swaps places |
 | **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
 
@@ -44,7 +44,7 @@ the settings menu over the game; the game pauses while it is open. Esc, F1 or Mi
 need a restart say so. The menu saves to the same settings file as the launcher. **Quit game** at the bottom of the
 menu closes the game, after asking first, so a controller alone is enough.
 
-**HUD layout** (upscaling and texture-dump branches, render resolutions wider than 16:9). **F2**, or **HUD layout** in
+**HUD layout** (render resolutions wider than 16:9). **F2**, or **HUD layout** in
 the F1 menu, opens a window where you choose where the HUD's side panels go: for each corner, how far toward the
 screen's edge and how far up or down. F2, Esc or B close it.
 
@@ -55,7 +55,7 @@ save. The game shows the twin you did **not** choose (your sibling); **Settings 
 you play as** (or the in-game menu) shows yours instead, from the next time the title screen appears. Your save is not
 changed. A small **"Port by Puddz"** shows above the version number; the same Display settings turn it off.
 
-## Experimental options (this branch)
+## Experimental options
 
 All are in **Settings > Display** and off by default; they apply the next time you press **Play**.
 

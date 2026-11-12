@@ -5,9 +5,6 @@ made by static recompilation: the game's ARM64 code is translated to C and compi
 program, and its graphics run on Vulkan. There is no emulator and no JIT
 ([how it works](docs/how-it-works.md)).
 
-> [!NOTE]
-> **This is the `upscaling` branch** (experimental): `main` plus more render resolutions, ultrawide and AMD FSR 1.
-
 > [!IMPORTANT]
 > **No game files are included.** You need your own legally obtained copy of *Astral Chain*, dumped from your own
 > console: the base game, the v1.0.1 update and your `prod.keys`. How to dump them is not covered here, and requests
@@ -101,11 +98,13 @@ it happens, then attach the zip that **Create report** makes (it holds no game f
 | Branch | For |
 | --- | --- |
 | [`main`](https://github.com/Puddz/AstralChain-PC) | **Most players.** |
-| [`upscaling`](https://github.com/Puddz/AstralChain-PC/tree/upscaling) | `main` plus render resolutions, ultrawide and AMD FSR 1 (experimental) |
-| [`texture-dump`](https://github.com/Puddz/AstralChain-PC/tree/texture-dump) | `upscaling` plus texture dumping and replacement for modders (experimental) |
+| [`texture-dump`](https://github.com/Puddz/AstralChain-PC/tree/texture-dump) | `main` plus texture dumping and replacement for modders (experimental) |
 
 The [release](https://github.com/Puddz/AstralChain-PC/releases/latest) holds a zip of each. Each branch is its own
 install: unzip it to its own folder.
+
+The `upscaling` branch was merged into `main` on 2026-11-12 (render resolutions, AMD FSR 1, ultrawide). To update an
+`upscaling` install, unzip the `main` zip over it, or `git switch main` and `git pull`: saves and settings are kept.
 
 ## Credits
 
