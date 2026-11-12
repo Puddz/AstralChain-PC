@@ -47,6 +47,21 @@ DOWNLOADS = {
     'sdl3': ('https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18-win32-x64.zip',
              '75c2c0fc74e7d1206aaedc22893a35887332f4f85f5c8b74fddc10d177985f2c', ''),
 }
+# Temporal upscaling (optional, AC_TEMPORAL=fsr or dlss: runtime/las/nvn/vulkan/temporal.c). The upscalers' own DLLs are
+# not in this repository: single files from AMD's and NVIDIA's repositories on GitHub, at a release tag, checked
+# against their SHA-256. A file the player put there (another version) is used as it is.
+UPSCALER_FILES = {
+    'fsr': ('AMD FSR (from AMD\'s FSR SDK 2.4.0 on GitHub)', TOOLS/'fsr', (
+        ('amd_fidelityfx_loader_vk.dll',
+         'https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.4.0/Kits/FidelityFX/signedbin/'
+         'amd_fidelityfx_loader_vk.dll', '38a56a01fb3565c0757d9f5c1e4e69de4b65e5f2e5769b323b200dc1f142bab9'),
+        ('amd_fidelityfx_upscaler_vk.dll',
+         'https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/v2.4.0/Kits/FidelityFX/signedbin/'
+         'amd_fidelityfx_upscaler_vk.dll', '4a7e895af6e0b615d40a84d59eb8c2b1054ad91cdd0c739567940270d51bdab7'))),
+    'dlss': ('NVIDIA DLSS (from NVIDIA\'s DLSS SDK 310.9.16 on GitHub, under NVIDIA\'s license)', TOOLS/'dlss', (
+        ('nvngx_dlss.dll', 'https://raw.githubusercontent.com/NVIDIA/DLSS/v310.9.16/lib/Windows_x86_64/rel/nvngx_dlss.dll',
+         'd00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e'),)),
+}
 ZIG = TOOLS/'zig'/'zig.exe'
 NSTOOL = TOOLS/'nstool'/'nstool.exe'
 GLSLANG = TOOLS/'glslang'/'bin'/'glslang.exe'
@@ -138,6 +153,32 @@ def fetch_tools():
         step('Building the RomFS packer')
         run([ZIG, 'cc', '-O2', '-target', 'x86_64-windows-gnu', '-I', LASRECOMP/'runtime',
              PROJECT/'astral_chain'/'runtime'/'romfs_tool.c', LASRECOMP/'runtime'/'romfs_build.c', '-o', ROMFS_TOOL])
+
+
+def fetch_upscaler():
+    """AC_TEMPORAL=fsr or dlss (the launcher's "Anti-aliasing and upscaling"): the upscaler's DLLs, once. A failed
+    download is not an error: the game then uses its own anti-aliasing and says so in its log."""
+    kind = os.environ.get('AC_TEMPORAL', '')
+    if kind not in UPSCALER_FILES:
+        return
+    title, folder, files = UPSCALER_FILES[kind]
+    missing = [f for f in files if not (folder/f[0]).is_file()]
+    if not missing:
+        return
+    step(f'Downloading {title}')
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, url, digest in missing:
+        partial = folder/(name + '.partial')
+        try:
+            download(url, partial)
+            if sha256(partial) != digest:
+                raise SetupError(f'{name}: the download does not match its pinned SHA-256 ({url})')
+            partial.replace(folder/name)
+        except (OSError, SetupError, subprocess.SubprocessError, urllib.error.URLError) as error:
+            partial.unlink(missing_ok=True)
+            print(f'  {name} could not be downloaded ({error}).\n  The game will use its own anti-aliasing. You can put '
+                  f'the file in {folder} yourself.', flush=True)
+            return
 
 
 def run(command, **kwargs):
@@ -433,6 +474,7 @@ def main():
             if not build_is_current():
                 fetch_tools()
                 build_game()
+            fetch_upscaler()
             if args.force_shaders:
                 from . import shader_cache
                 shader_cache.forget(GAME_BUILD)

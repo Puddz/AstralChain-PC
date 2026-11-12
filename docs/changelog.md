@@ -4,6 +4,14 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-12**
 
+- **NVIDIA DLSS / DLAA and AMD FSR 3.1 / 4** (this branch, `dlss-fsr`; issue #31; experimental, *not yet confirmed
+  in play*): **Settings > Display > Anti-aliasing and upscaling**, with a quality from Native (anti-aliasing only)
+  to Ultra performance. The 3D scene is drawn smaller and rebuilt at the render resolution; the HUD stays at the
+  render resolution. See [DLSS and FSR](playing.md#dlss-and-fsr-this-branch). Tested here on an RTX 4090 in replays:
+  DLSS 310.9.16 and FSR 3.1.6 at 1600x900 to 3840x2160 and at 32:9. FSR 4 could not be tested (no Radeon GPU here).
+  On that GPU the frame rate did not change at 4K (the game is limited by the CPU there, and its 3D scene is cheap
+  to draw): the gain is the picture, mostly with Native or Quality.
+
 - **Render resolutions, AMD FSR 1 and ultrawide are now in the main version:** the `upscaling` branch was merged
   into `main`. Everything it added is off unless you choose it (the default is still 1600x900): render resolutions
   from 854x480 to 4K, AMD FSR 1, 21:9 to 48:9 with the HUD at the screen's edges and the HUD layout page (**F2**).

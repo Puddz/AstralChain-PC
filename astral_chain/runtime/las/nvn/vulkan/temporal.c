@@ -3,7 +3,7 @@
 //
 // The game draws its 3D scene at a "level" size (1440x810 under its 1600x900 picture; dynamic resolution) and its
 // last scene pass, filtersmaablend, scales that into the display-size picture the HUD is then drawn on. With
-// AC_UPSCALER=fsr that pass is replaced (exec.c draw_): the tonemapped scene, its depth and the game's own velocity
+// AC_TEMPORAL=fsr that pass is replaced (exec.c draw_): the tonemapped scene, its depth and the game's own velocity
 // map go to the upscaler, whose output lands in the display-size picture. The level size is the display size divided
 // by the quality mode's ratio (host_runtime.c.in, svc #0xB3), and the scene's geometry is drawn with a sub-pixel
 // offset that changes every frame (the viewport is moved, exec.c), which is what lets the upscaler rebuild detail.
@@ -15,18 +15,18 @@
 //    for the others, the pixel's depth taken back through this frame's view-projection and forward through the last
 //    one (the camera's motion). NDC y points up, pixel y down.
 //
-// FSR (AC_UPSCALER=fsr): the DLLs (tools\fsr, AC_FSR_DIR) are amd_fidelityfx_loader_vk.dll and
+// FSR (AC_TEMPORAL=fsr): the DLLs (tools\fsr, AC_FSR_DIR) are amd_fidelityfx_loader_vk.dll and
 // amd_fidelityfx_upscaler_vk.dll, from AMD's FSR SDK (signedbin). Without them, or if the context cannot be made,
 // the game's own pass runs as before.
 //
-// DLSS (AC_UPSCALER=dlss; NVIDIA RTX GPUs): NGX is the driver's _nvngx.dll (found through the registry, as NVIDIA's
+// DLSS (AC_TEMPORAL=dlss; NVIDIA RTX GPUs): NGX is the driver's _nvngx.dll (found through the registry, as NVIDIA's
 // SDK library finds it), called directly: the SDK's library is built for MSVC and cannot be linked here, and its
 // headers may not be put in an open repository, so the few declarations needed are written out below. The functions
 // are the DLL's exports; NVSDK_NGX_Parameter is a C++ object whose methods are called through its (MSVC) vtable:
 // Set(void*) 0, Set(int) 3, Set(unsigned) 4, Set(double) 5, Set(float) 6, Set(ull) 7, Get(void**) 8, Get(int*) 11,
 // Get(unsigned*) 12. The DLSS model is nvngx_dlss.dll in tools\dlss (AC_DLSS_DIR), or the one NVIDIA's app keeps
 // up to date on the PC. The device needs VK_NVX_binary_import, VK_NVX_image_view_handle, VK_KHR_push_descriptor and
-// buffer device addresses (device.c enables them when AC_UPSCALER=dlss).
+// buffer device addresses (device.c enables them when AC_TEMPORAL=dlss).
 #include "vk.h"
 #include "api/include/vk/ffx_api_vk.h"
 #include "upscalers/include/ffx_upscale.h"
@@ -66,15 +66,20 @@ static struct {
     uint64_t last_ns;
     uint64_t ok_frames;
     TexBackend depth, mv, out;
+    TexBackend check_prev, check_out;  // (AC_TEMPORAL_CHECK: the last frame's colour, the error picture)
+    float check_jx, check_jy;
+    VkPipeline check;
+    VkPipelineLayout check_layout;
+    VkDescriptorSetLayout check_set;
     VkPipeline prep;
     VkPipelineLayout prep_layout;
     VkDescriptorSetLayout prep_set;
 } tu = {.mode = -1};
 
-// AC_UPSCALER=fsr: AMD FSR (4 where the GPU and driver have it, else 3.1); =dlss: NVIDIA DLSS.
+// AC_TEMPORAL=fsr: AMD FSR (4 where the GPU and driver have it, else 3.1); =dlss: NVIDIA DLSS.
 int vk_tu_mode(void) {
     if (tu.mode < 0) {
-        const char *u = getenv("AC_UPSCALER");
+        const char *u = getenv("AC_TEMPORAL");
         tu.mode = u && !strcmp(u, "fsr") ? 1 : u && !strcmp(u, "dlss") ? 2 : 0;
     }
     return tu.state == 2 ? 0 : tu.mode;
@@ -163,6 +168,90 @@ static const char *PREP_GLSL =
 "  }\n"
 "  imageStore(mv_o, p, vec4(mv, 0.0, 0.0));\n"
 "}\n";
+
+// AC_TEMPORAL_CHECK=1 (testing the motion vectors): instead of the upscaled picture, how well the last frame, moved by
+// the motion vectors, matches this one. Red: the difference with the vectors, green: without them (the same pixel of
+// the last frame), blue: 1 where a model's own velocity was used. Good vectors: red far below green where things move.
+static const char *CHECK_GLSL =
+"#version 450\n"
+"layout(local_size_x = 8, local_size_y = 8) in;\n"
+"layout(set = 0, binding = 0) uniform sampler2D cur_t;\n"
+"layout(set = 0, binding = 1) uniform sampler2D prev_t;\n"
+"layout(set = 0, binding = 2) uniform sampler2D mv_t;\n"
+"layout(set = 0, binding = 3) uniform sampler2D vel_t;\n"
+"layout(set = 0, binding = 4, rgba8) uniform writeonly image2D out_o;\n"
+"layout(push_constant) uniform PC { vec4 a; vec4 b; } pc;\n"  // a: render size, output size; b.xy: jitter before - now, b.z: vel bound
+"void main() {\n"
+"  ivec2 o = ivec2(gl_GlobalInvocationID.xy);\n"
+"  if (any(greaterThanEqual(o, ivec2(pc.a.zw)))) return;\n"
+"  ivec2 p = ivec2((vec2(o) + 0.5) * pc.a.xy / pc.a.zw);\n"
+"  vec3 c = texelFetch(cur_t, p, 0).rgb;\n"
+"  vec2 mv = texelFetch(mv_t, p, 0).rg;\n"
+"  vec3 w = textureLod(prev_t, (vec2(p) + 0.5 + mv + pc.b.xy) / pc.a.xy, 0.0).rgb;\n"
+"  float model = pc.b.z > 0.5 && texelFetch(vel_t, p, 0).a < 0.5 ? 1.0 : 0.0;\n"
+// (b.w, testing the models' vectors: green is then not "without" but with them changed: 2 x flipped, 3 y flipped,
+// 4 halved, 5 doubled)
+"  vec2 alt = pc.b.w == 2.0 ? vec2(-mv.x, mv.y) : pc.b.w == 3.0 ? vec2(mv.x, -mv.y) : pc.b.w == 4.0 ? mv * 0.5 : pc.b.w == 5.0 ? mv * 2.0 : vec2(0.0);\n"
+"  if (model < 0.5) alt = vec2(0.0);\n"
+"  vec3 s = textureLod(prev_t, (vec2(p) + 0.5 + alt + pc.b.xy) / pc.a.xy, 0.0).rgb;\n"
+"  imageStore(out_o, o, vec4(dot(abs(c - w), vec3(1.0)), dot(abs(c - s), vec3(1.0)), model, 1.0));\n"
+"}\n";
+
+static bool tu_check(VkCommandBuffer cb, TexBackend *color, TexBackend *mv, TexBackend *vel, TexBackend *out) {
+    uint32_t rw = color->width, rh = color->height;
+    if (!tu.check) {
+        VkDescriptorSetLayoutBinding b[5];
+        for (uint32_t i = 0; i < 5; i++)
+            b[i] = (VkDescriptorSetLayoutBinding){i, i < 4 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+                                                  VK_SHADER_STAGE_COMPUTE_BIT, NULL};
+        VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 5, .pBindings = b};
+        VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &tu.check_set));
+        VkPushConstantRange r = {VK_SHADER_STAGE_COMPUTE_BIT, 0, 32};
+        VkPipelineLayoutCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
+                                         .pSetLayouts = &tu.check_set, .pushConstantRangeCount = 1, .pPushConstantRanges = &r};
+        VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &pi, NULL, &tu.check_layout));
+        VkShaderModule m = vk_compile_glsl(CHECK_GLSL, STAGE_COMPUTE, "temporal-check");
+        if (!m) return false;
+        VkComputePipelineCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+                                          .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                                                    .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = m, .pName = "main"},
+                                          .layout = tu.check_layout};
+        VkResult res = vkCreateComputePipelines(g_vk.dev, g_vk.pcache, 1, &ci, NULL, &tu.check);
+        vkDestroyShaderModule(g_vk.dev, m, NULL);
+        if (res != VK_SUCCESS) return false;
+    }
+    bool first = !tu.check_prev.image || tu.check_prev.width != rw || tu.check_prev.height != rh;
+    TexBackend *prev = tu_image(&tu.check_prev, VK_FORMAT_B10G11R11_UFLOAT_PACK32, rw, rh);
+    VkImageCopy c = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     .extent = {rw, rh, 1}};
+    vk_full_barrier(cb);
+    if (!first) {
+        VkDescriptorSet ds = vk_alloc_set(tu.check_set);
+        VkDescriptorImageInfo ii[5] = {
+            {vk_default_sampler(false), tu_view(color, VK_IMAGE_ASPECT_COLOR_BIT), VK_IMAGE_LAYOUT_GENERAL},
+            {vk_default_sampler(true), tu_view(prev, VK_IMAGE_ASPECT_COLOR_BIT), VK_IMAGE_LAYOUT_GENERAL},
+            {vk_default_sampler(false), tu_view(mv, VK_IMAGE_ASPECT_COLOR_BIT), VK_IMAGE_LAYOUT_GENERAL},
+            {vk_default_sampler(false), tu_view(vel ? vel : mv, VK_IMAGE_ASPECT_COLOR_BIT), VK_IMAGE_LAYOUT_GENERAL},
+            {VK_NULL_HANDLE, tu_view(out, VK_IMAGE_ASPECT_COLOR_BIT), VK_IMAGE_LAYOUT_GENERAL}};
+        VkWriteDescriptorSet w[5];
+        for (uint32_t i = 0; i < 5; i++)
+            w[i] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = i,
+                                          .descriptorCount = 1,
+                                          .descriptorType = i < 4 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                          .pImageInfo = &ii[i]};
+        vkUpdateDescriptorSets(g_vk.dev, 5, w, 0, NULL);
+        float pc[8] = {(float)rw, (float)rh, (float)out->width, (float)out->height, tu.check_jx - tu.jx, tu.check_jy - tu.jy, vel ? 1.0f : 0.0f,
+                       (float)atof(getenv("AC_TEMPORAL_CHECK"))};
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tu.check);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, tu.check_layout, 0, 1, &ds, 0, NULL);
+        vkCmdPushConstants(cb, tu.check_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, pc);
+        vkCmdDispatch(cb, (out->width + 7) / 8, (out->height + 7) / 8, 1);
+        vk_full_barrier(cb);
+    }
+    vkCmdCopyImage(cb, color->image, VK_IMAGE_LAYOUT_GENERAL, prev->image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+    tu.check_jx = tu.jx; tu.check_jy = tu.jy;
+    return !first;
+}
 
 static bool tu_prep_ready(void) {
     if (tu.prep) return true;
@@ -426,7 +515,7 @@ void vk_tu_frame(void) {
     tu.jx = halton(i, 2) - 0.5f;
     tu.jy = halton(i, 3) - 0.5f;
     static int off = -1;
-    if (off < 0) off = getenv("AC_UPSCALE_NO_JITTER") != NULL;
+    if (off < 0) off = getenv("AC_TEMPORAL_NO_JITTER") != NULL;
     if (off) tu.jx = tu.jy = 0;
 }
 
@@ -443,7 +532,7 @@ float vk_tu_lod_bias(void) {
     static float bias = 1;
     if (bias > 0) {
         bias = 0;
-        const char *q = getenv("AC_UPSCALE_QUALITY"), *e = getenv("AC_UPSCALE_LOD_BIAS");
+        const char *q = getenv("AC_TEMPORAL_QUALITY"), *e = getenv("AC_TEMPORAL_LOD_BIAS");
         if (vk_tu_mode()) {
             float ratio = !q ? 1.5f : !strcmp(q, "native") ? 1.0f : !strcmp(q, "balanced") ? 1.7f : !strcmp(q, "performance") ? 2.0f :
                           !strcmp(q, "ultra") ? 3.0f : 1.5f;
@@ -508,7 +597,7 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
                                           .pImageInfo = &ii[i]};
         vkUpdateDescriptorSets(g_vk.dev, 4, w, 0, NULL);
         static float dbg = -1;
-        if (dbg < 0) { const char *e = getenv("AC_UPSCALE_MV"); dbg = e ? (float)atof(e) : 0; }  // (testing: 1 models only, 2 camera only)
+        if (dbg < 0) { const char *e = getenv("AC_TEMPORAL_MV"); dbg = e ? (float)atof(e) : 0; }  // (testing: 1 models only, 2 camera only)
         float pc[24] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         if (cam && cam->have) memcpy(pc, cam->reproject, 16 * sizeof(float));
         pc[16] = (float)rw; pc[17] = (float)rh; pc[18] = tu.jx; pc[19] = tu.jy;
@@ -526,9 +615,9 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     if (dt > 100) dt = 100;
 
     static float jsx = 0, jsy;
-    if (jsx == 0) {  // (AC_UPSCALE_JITTER=<x sign>,<y sign>: testing)
+    if (jsx == 0) {  // (AC_TEMPORAL_JITTER=<x sign>,<y sign>: testing)
         jsx = 1; jsy = 1;
-        const char *e = getenv("AC_UPSCALE_JITTER");
+        const char *e = getenv("AC_TEMPORAL_JITTER");
         if (e) sscanf(e, "%f,%f", &jsx, &jsy);
     }
     if (mode == 2) {
@@ -585,8 +674,9 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     dd.motionVectorScale.y = 1;
     dd.renderSize.width = rw; dd.renderSize.height = rh;
     dd.upscaleSize.width = ow; dd.upscaleSize.height = oh;
-    extern volatile float ac_upscale_sharpness;
-    float sharp = ac_upscale_sharpness;
+    extern volatile float ac_temporal_sharpness;  // (live_settings.h: the in-game menu changes it)
+    if (ac_temporal_sharpness < 0) { const char *e = getenv("AC_TEMPORAL_SHARPNESS"); ac_temporal_sharpness = e ? (float)atof(e) : 0; }
+    float sharp = ac_temporal_sharpness;
     dd.enableSharpening = sharp > 0.001f;
     dd.sharpness = sharp > 1 ? 1 : sharp < 0 ? 0 : sharp;
     dd.frameTimeDelta = dt;
@@ -605,6 +695,11 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
         return false;
     }
 copy_out:
+    {
+        static int check = -1;
+        if (check < 0) check = getenv("AC_TEMPORAL_CHECK") != NULL;
+        if (check) tu_check(cb, color, mv, vel, out);
+    }
     vk_full_barrier(cb);
     VkImageCopy c = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                      .extent = {ow, oh, 1}};

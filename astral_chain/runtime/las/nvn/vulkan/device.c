@@ -160,7 +160,7 @@ static void create_device(void) {
     const char *ext[20];
     uint32_t n_ext = 0;
     ext[n_ext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
-    // Astral Chain, temporal upscaling (temporal.c; only when AC_UPSCALER asks for it): DLSS's device extensions, and
+    // Astral Chain, temporal upscaling (temporal.c; only when AC_TEMPORAL asks for it): DLSS's device extensions, and
     // for both upscalers 16-bit floats in shaders and buffer device addresses where the GPU has them.
     extern int vk_tu_mode(void);
     int upscaler = vk_tu_mode();

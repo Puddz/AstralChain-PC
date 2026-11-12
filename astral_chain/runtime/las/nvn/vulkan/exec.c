@@ -4206,7 +4206,7 @@ static uint16_t half_bits(float f) {  // (round to nearest)
     }
     return (uint16_t)((sign | ((uint32_t)e << 10) | (m >> 13)) + ((m >> 12) & 1));
 }
-// ---- temporal upscaling (temporal.c; AC_UPSCALER=fsr). The game's passes are known by their fragment shaders
+// ---- temporal upscaling (temporal.c; AC_TEMPORAL=fsr or dlss). The game's passes are known by their fragment shaders
 // (g_cur_fs_hash): the tonemap pass names the scene's colour and depth, and filtersmaablend - the pass that scales the
 // scene into the display-size picture - is where the upscaler runs instead. The SMAA passes before it are not needed
 // then.
@@ -4233,7 +4233,8 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
 #define TU_FS_TONEMAP 0xa30fe6294629120full     // filtershadertonemap
 #define TU_FS_SMAA_EDGE 0x2abcda74b0341d56ull   // filtersmaaedge
 #define TU_FS_SMAA_BLEND 0x844ba4e1a9511b62ull  // filtersmaablend
-typedef struct { __typeof__(st) s; CmdRec r; bool indexed; } TuDup;
+// (the program object too: the game points one object at other shaders as its command list goes on)
+typedef struct { __typeof__(st) s; NvnProgram prog; CmdRec r; bool indexed; } TuDup;
 static struct {
     NvnTexture *scene, *depth;
     uint64_t scene_frame, cam_frame, objvel_frame;
@@ -4246,6 +4247,7 @@ static struct {
     TuDup *dup;
     int ndup, cap_dup;
     bool in_dup;
+    int dup_drawn;
 } tuh;
 
 // The scene camera, once a frame, from the first scene draw whose vertex shader reads cbuf 3.
@@ -4311,10 +4313,10 @@ static void tu_camera_step(TuCamera *cam) {
         float dist = sqrtf(dx * dx + dy * dy + dz * dz);
         cam->cut = dot < 0.9f || dist > 5.0f;
         static int log_ = -1;
-        if (log_ < 0) { const char *e = getenv("AC_UPSCALE_LOG"); log_ = e ? atoi(e) : 0; }
+        if (log_ < 0) { const char *e = getenv("AC_TEMPORAL_LOG"); log_ = e ? atoi(e) : 0; }
         if (log_ && (cam->cut || pf % 120 == 0 || log_ > 1))
             LOG("[tu] frame %llu near %.3f fov %.3f eye %.2f %.2f %.2f moved %.3f turn %.5f, %d model draws%s\n", (unsigned long long)pf,
-                tuh.near_z, tuh.fov_y, tuh.eye[0], tuh.eye[1], tuh.eye[2], dist, dot, tuh.objvel_frame == pf ? 1 : 0, cam->cut ? " CUT" : "");
+                tuh.near_z, tuh.fov_y, tuh.eye[0], tuh.eye[1], tuh.eye[2], dist, dot, tuh.objvel_frame == pf ? tuh.dup_drawn : 0, cam->cut ? " CUT" : "");
     } else {
         cam->cut = true;  // (no camera now or before: nothing to reproject with)
     }
@@ -4355,6 +4357,7 @@ static void tu_dup_flush(void) {
         tuh.in_dup = true;
         for (int i = 0; i < tuh.ndup; i++) {
             st = tuh.dup[i].s;
+            st.program = &tuh.dup[i].prog;
             st.rt.color[0] = &tuh.objvel;
             st.rt.has_cview[0] = 0;
             st.rt.ncolor = 1;
@@ -4364,6 +4367,7 @@ static void tu_dup_flush(void) {
         tuh.in_dup = false;
         vk_end_pass();
         tuh.objvel_frame = renderer_present_count() + 1;
+        tuh.dup_drawn = tuh.ndup;
     }
     st = *keep;
     free(keep);
@@ -4384,6 +4388,7 @@ static bool tu_draw(Prog *pr, CmdRec *r, bool indexed) {
             }
             TuDup *d = &tuh.dup[tuh.ndup++];
             d->s = st;
+            d->prog = *st.program;
             memcpy(&d->r, r, sizeof d->r);
             d->indexed = indexed;
         }
@@ -5514,7 +5519,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     // (0 sharpest, 2 softest; default 0.2, AMD's). Read every frame: the in-game menu changes them (live_settings.h).
     extern volatile int ac_upscaler;
     extern volatile float ac_fsr_sharpness;
-    if (ac_upscaler < 0) { const char *u = getenv("AC_UPSCALER"); ac_upscaler = u && !strcmp(u, "fsr1"); }  // ("fsr": temporal.c)
+    if (ac_upscaler < 0) { const char *u = getenv("AC_UPSCALER"); ac_upscaler = u && !strcmp(u, "fsr1"); }
     if (ac_fsr_sharpness < 0) {
         const char *sh = getenv("AC_FSR_SHARPNESS");
         float s = sh ? (float)atof(sh) : 0.2f;

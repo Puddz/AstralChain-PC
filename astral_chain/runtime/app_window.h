@@ -129,6 +129,7 @@ void ac_setting_apply(const char *key,const char *value) {
  else if(!strcmp(key,"ignore_focus")) ac_ignore_focus=on;
  else if(!strcmp(key,"upscaler")) ac_upscaler=value && !strcmp(value,"fsr1");
  else if(!strcmp(key,"fsr_sharpness")) {float s=(float)atof(value);if(s>=0 && s<=2) ac_fsr_sharpness=s;}
+ else if(!strcmp(key,"temporal_sharpness")) {float s=(float)atof(value);if(s>=0 && s<=1) ac_temporal_sharpness=s;}
  else if(!strcmp(key,"uncapped")) ac_uncapped=on;
  else if(!strcmp(key,"port_credit")) ac_title_credit=on;
  else if(!strcmp(key,"fps_counter")) {int m=value ? atoi(value) : 0;ac_fps_counter=m>=0 && m<=2 ? m : 0;}

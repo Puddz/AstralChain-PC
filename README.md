@@ -5,6 +5,10 @@ made by static recompilation: the game's ARM64 code is translated to C and compi
 program, and its graphics run on Vulkan. There is no emulator and no JIT
 ([how it works](docs/how-it-works.md)).
 
+> [!NOTE]
+> **This is the `dlss-fsr` branch** (experimental): `main` plus NVIDIA DLSS / DLAA and AMD FSR 3.1 / 4
+> ([how to use it](docs/playing.md#dlss-and-fsr-this-branch)).
+
 > [!IMPORTANT]
 > **No game files are included.** You need your own legally obtained copy of *Astral Chain*, dumped from your own
 > console: the base game, the v1.0.1 update and your `prod.keys`. How to dump them is not covered here, and requests
@@ -99,6 +103,7 @@ it happens, then attach the zip that **Create report** makes (it holds no game f
 | --- | --- |
 | [`main`](https://github.com/Puddz/AstralChain-PC) | **Most players.** |
 | [`texture-dump`](https://github.com/Puddz/AstralChain-PC/tree/texture-dump) | `main` plus texture dumping and replacement for modders (experimental) |
+| [`dlss-fsr`](https://github.com/Puddz/AstralChain-PC/tree/dlss-fsr) | `main` plus NVIDIA DLSS / DLAA and AMD FSR 3.1 / 4 (experimental, [how to use it](https://github.com/Puddz/AstralChain-PC/blob/dlss-fsr/docs/playing.md#dlss-and-fsr-this-branch)) |
 
 The [release](https://github.com/Puddz/AstralChain-PC/releases/latest) holds a zip of each. Each branch is its own
 install: unzip it to its own folder.

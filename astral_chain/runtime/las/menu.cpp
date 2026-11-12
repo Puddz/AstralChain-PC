@@ -91,6 +91,16 @@ std::vector<Opt> opts = {
     {"upscaler", "Display", "Upscaling (experimental)", "Only when the window is larger than the picture.",
      CHOICE, "off", "off|Smooth (default);fsr1|AMD FSR 1", 0, 0, true},
     {"fsr_sharpness", "Display", "FSR 1 sharpening", nullptr, CHOICE, "0.2", "0|Strong;0.2|Normal (default);0.5|Light;1|Very light", 0, 0, true},
+    {"temporal", "Display", "Anti-aliasing and upscaling (experimental)",
+     "The game's own: SMAA. DLSS (NVIDIA RTX) and FSR draw the 3D scene smaller (the quality below) and rebuild it at the "
+     "render resolution from several frames; the HUD stays at the render resolution. FSR 4 on Radeon GPUs that have it, "
+     "FSR 3.1 on any GPU. Their files are downloaded by the launcher at the next Play.",
+     CHOICE, "off", "off|The game's own (default);dlss|NVIDIA DLSS;fsr|AMD FSR 3.1 / 4", 0, 0, false},
+    {"temporal_quality", "Display", "DLSS / FSR quality",
+     "The size the 3D scene is drawn at, as a share of the render resolution. Native: full size, anti-aliasing only (DLAA).",
+     CHOICE, "quality", "native|Native (100%, anti-aliasing only);quality|Quality (67%, default);balanced|Balanced (59%);"
+     "performance|Performance (50%);ultra|Ultra performance (33%)", 0, 0, false},
+    {"temporal_sharpness", "Display", "FSR 3.1 / 4 sharpening", nullptr, CHOICE, "0", "0|Off (default);0.3|Light;0.6|Normal;1|Strong", 0, 0, true},
     {"hud_edges", "Display", "Ultrawide: HUD at the screen's edges (experimental)",
      "With a render resolution wider than 16:9, the HUD's side panels (health, minimap, objectives, tutorials) move to "
      "the edges of the screen. Markers over characters stay where they are. HUD layout (F2): how far each corner's "
@@ -138,6 +148,9 @@ void read_session() {
         else if (k == "resolution") { std::string e = env("AC_RESOLUTION"); if (!e.empty()) v = e; }
         else if (k == "upscaler") v = env("AC_UPSCALER") == "fsr1" ? "fsr1" : "off";
         else if (k == "fsr_sharpness") { std::string e = env("AC_FSR_SHARPNESS"); if (!e.empty()) v = e; }
+        else if (k == "temporal") { std::string e = env("AC_TEMPORAL"); v = e == "dlss" || e == "fsr" ? e : "off"; }
+        else if (k == "temporal_quality") { std::string e = env("AC_TEMPORAL_QUALITY"); if (!e.empty()) v = e; }
+        else if (k == "temporal_sharpness") { std::string e = env("AC_TEMPORAL_SHARPNESS"); if (!e.empty()) v = e; }
         else if (k == "present") { std::string e = env("LARECOMP_VK_PRESENT"); if (!e.empty()) v = e; }
         else if (k == "uncapped") v = env("AC_UNCAPPED") == "1" ? "1" : "0";
         else if (k == "cutscene_fps_30") v = env("AC_CUTSCENE_FPS") == "30" ? "1" : "0";

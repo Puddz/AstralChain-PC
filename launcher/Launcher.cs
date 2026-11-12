@@ -152,6 +152,29 @@ namespace AstralChainLauncher
                 "How much FSR 1 sharpens after upscaling. Only used with AMD FSR 1.", OptKind.Choice, "0.2",
                 OptTarget.Game, v => v == "0.2" ? "" : "AC_FSR_SHARPNESS=" + v);
             sharpen.Choices = new[] { "0|Strong", "0.2|Normal (default)", "0.5|Light", "1|Very light" };
+            var temporal = Add("temporal", "Display", "Anti-aliasing and upscaling (experimental)",
+                "The game's own: SMAA, with the 3D scene at the render resolution (default).\n" +
+                "NVIDIA DLSS and AMD FSR draw the 3D scene smaller (the quality below) and rebuild it at the render " +
+                "resolution from several frames, with their own anti-aliasing; the HUD and menus stay at the render " +
+                "resolution. So: pick your screen's size as the render resolution, then a quality.\n" +
+                "DLSS needs an NVIDIA RTX GPU. FSR runs on any GPU as FSR 3.1, and as FSR 4 on the Radeon GPUs and " +
+                "drivers that have it.\n" +
+                "Their files are not part of this download: the next Play gets them from NVIDIA's (59 MB, under " +
+                "NVIDIA's license) or AMD's (36 MB) own pages on GitHub. If they cannot be used, the game's own " +
+                "anti-aliasing is used. Applies the next time you press Play.",
+                OptKind.Choice, "off", OptTarget.Game, v => v == "dlss" || v == "fsr" ? "AC_TEMPORAL=" + v : "");
+            temporal.Choices = new[] { "off|The game's own (default)", "dlss|NVIDIA DLSS", "fsr|AMD FSR 3.1 / 4" };
+            var temporalQuality = Add("temporal_quality", "Display", "DLSS / FSR quality",
+                "The size the 3D scene is drawn at, as a share of the render resolution: smaller is faster and less " +
+                "sharp. Native draws it at full size and only replaces the anti-aliasing (DLAA with DLSS). Only used " +
+                "with DLSS or FSR above. Applies the next time you press Play.",
+                OptKind.Choice, "quality", OptTarget.Game, v => v == "quality" ? "" : "AC_TEMPORAL_QUALITY=" + v);
+            temporalQuality.Choices = new[] { "native|Native (100%, anti-aliasing only)", "quality|Quality (67%, default)",
+                "balanced|Balanced (59%)", "performance|Performance (50%)", "ultra|Ultra performance (33%)" };
+            var temporalSharpen = Add("temporal_sharpness", "Display", "FSR 3.1 / 4 sharpening",
+                "FSR's own sharpening of its result. DLSS has none. Also in the in-game menu (F1), where it changes at once.",
+                OptKind.Choice, "0", OptTarget.Game, v => v == "0" ? "" : "AC_TEMPORAL_SHARPNESS=" + v);
+            temporalSharpen.Choices = new[] { "0|Off (default)", "0.3|Light", "0.6|Normal", "1|Strong" };
             Add("hud_edges", "Display", "Ultrawide: HUD at the screen's edges (experimental)",
                 "With a render resolution wider than 16:9 (21:9, 32:9, 48:9), the HUD's side panels (health, Legion, " +
                 "minimap, objectives, tutorials) move to the left and right edges of the screen instead of staying in " +
@@ -817,6 +840,9 @@ namespace AstralChainLauncher
             if (settings.Get("gpl") == "0") env["LARECOMP_GPL"] = "0";
             // BC7 prepared at setup: the next setup run (Play, Compile shaders) encodes the textures once
             if (settings.Get("bc7") == "setup") env["AC_BC7_PRECOMPUTE"] = "1";
+            // DLSS / FSR: the next setup run downloads the upscaler's files if they are not there yet
+            string temporal = settings.Get("temporal");
+            if (temporal == "dlss" || temporal == "fsr") env["AC_TEMPORAL"] = temporal;
             return env;
         }
 

@@ -70,6 +70,24 @@ The resolution comes in through a code patch (`astral_chain/patches/resolution-1
 runtime for its render size, dynamic resolution levels, render target memory and camera aspect, so the size can be
 changed at launch without a rebuild. Without the setting, the game's own values are used.
 
+## DLSS and FSR (this branch)
+
+**Settings > Display > Anti-aliasing and upscaling** replaces the game's anti-aliasing (SMAA) with **NVIDIA DLSS**
+or **AMD FSR 3.1 / 4**. Set **Render resolution** to your screen's size, then pick a **DLSS / FSR quality**: the 3D
+scene is drawn at that share of the render resolution and rebuilt at full size, and the HUD, menus and subtitles are
+drawn at full size on top. *Native* draws the scene at full size and only replaces the anti-aliasing (DLAA).
+
+- DLSS needs an NVIDIA RTX GPU and a current driver. FSR 3.1 runs on any GPU; FSR 4 is used on the Radeon GPUs and
+  drivers that have it.
+- The upscalers' files are not in this download. The next Play gets them from NVIDIA's and AMD's own repositories on
+  GitHub (`tools\dlss\nvngx_dlss.dll`, under NVIDIA's license; `tools\fsr\amd_fidelityfx_*.dll`). You can also put
+  another version of `nvngx_dlss.dll` there yourself.
+- If the upscaler cannot be used (no RTX GPU, an old driver, a missing file), the game uses its own anti-aliasing and
+  `build\game\round-00\stderr.log` has a line starting with `[dlss]` or `[fsr]` that says why.
+- Known limits: with FSR 3.1, fast-moving characters can smear at their edges; DLSS holds up better. In some cutscene
+  close-ups the characters' motion is not tracked exactly. This game's 3D scene is cheap to draw, so the lower
+  qualities may not raise the frame rate: where the CPU is the limit they change nothing.
+
 ## Texture compression (BC7)
 
 For GPUs with 8 GB of video memory or less. Most of the game's textures are ASTC, which PC GPUs cannot read, so
