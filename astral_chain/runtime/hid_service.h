@@ -451,7 +451,7 @@ static void hid_publish(uint64_t now,int focused) {
   const uint64_t both=3ull<<10;
   uint64_t pm=pad.buttons&both;
   static int combo;static uint64_t alone_at,last_pm,pulse_bits,pulse_until;
-  if(pm==both && !combo) {combo=1;alone_at=0;menu_set_open(!ac_menu_open);}
+  if(pm==both && !combo) {combo=1;alone_at=0;if(!ac_menu_open) InterlockedExchange(&ac_menu_page,0);menu_set_open(!ac_menu_open);}
   if(!pm) {
    if(last_pm && !combo && alone_at && now-alone_at<1920000) {pulse_bits=last_pm;pulse_until=now+960000;}
    combo=0;alone_at=0;
@@ -498,6 +498,10 @@ static void hid_publish(uint64_t now,int focused) {
   if(scripted&(1ull<<18)) sample.lx=32767;
   if(scripted&(1ull<<17)) sample.ly=32767;
   if(scripted&(1ull<<19)) sample.ly=-32767;
+  if(scripted&(1ull<<20)) sample.rx=-32767;  /* right stick (camera) */
+  if(scripted&(1ull<<22)) sample.rx=32767;
+  if(scripted&(1ull<<21)) sample.ry=32767;
+  if(scripted&(1ull<<23)) sample.ry=-32767;
   input_replay_sample(now,&sample);  /* (AC_INPUT_REPLAY, AC_INPUT_RECORD) */
   input_record_sample(now,&sample);
  }

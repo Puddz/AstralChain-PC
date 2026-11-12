@@ -511,7 +511,10 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
         cbs[n++] = (VkCommandBufferSubmitInfo){.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = s->upload};
     }
     vk_cmd();  // (an empty main buffer still carries the semaphores)
+    // (profiled frame: the last draw's row ended at the next submission's start, GPU idle and all)
+    gp_mark(s->main, "(write-backs to guest memory)");
     gmem_wb_record(s->main, submit_seq + 1);
+    gp_mark(s->main, "(submission end; until the next submission starts)");
     if (s->ts) vkCmdWriteTimestamp2(s->main, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, prof_qp, (uint32_t)cur_sub * 2 + 1);
     VK_CHECK(vkEndCommandBuffer(s->main));
     cbs[n++] = (VkCommandBufferSubmitInfo){.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = s->main};
@@ -1286,11 +1289,16 @@ static void pass_size(int *w, int *h) {
     *h = (int)lroundf(*h * pass_sy);
 }
 
+// (AC_HUD_EDGES and the F2 HUD layout: the HUD element drawn now moves by this, in the target's pixels; a narrower
+// scissor moves with it)
+static float hud_shift_px, hud_shift_py;
 static VkRect2D scissor_rect(void) {
     int w, h;
     pass_size(&w, &h);
     if (!w) return (VkRect2D){{0, 0}, {pass_w, pass_h}};
     int x = st.scissor[0][0], y = st.scissor[0][1], sw = st.scissor[0][2], sh = st.scissor[0][3];
+    if (hud_shift_px != 0 && st.rt.ncolor && st.rt.color[0] && sw < 16384 && !(x <= 0 && x + sw >= (int)st.rt.color[0]->width)) x += (int)lroundf(hud_shift_px);
+    if (hud_shift_py != 0 && st.rt.ncolor && st.rt.color[0] && sh < 16384 && !(y <= 0 && y + sh >= (int)st.rt.color[0]->height)) y += (int)lroundf(hud_shift_py);
     if (vp_sx != 1 || vp_sy != 1 || vp_ox != 0 || vp_oy != 0) {
         double x0 = floor(x * (double)vp_sx + vp_ox), y0 = floor(y * (double)vp_sy + vp_oy);
         double x1 = ceil(((double)x + sw) * vp_sx + vp_ox), y1 = ceil(((double)y + sh) * vp_sy + vp_oy);
@@ -2989,9 +2997,9 @@ static void wb_release(VkBuffer buf, VmaAllocation mem, WbBlock *blk) {  // (cal
     if (!blk) { vmaDestroyBuffer(g_vk.vma, buf, mem); return; }
     if (--blk->refs == 0) { vmaDestroyBuffer(g_vk.vma, blk->buf, blk->mem); free(blk); }
 }
+static pthread_mutex_t lazy_lock;
 static GmemWb wb_pending[64], wb_flight[256];
 static int wb_npend, wb_nflight;
-static pthread_mutex_t lazy_lock;  // (defined below; guards wb_flight and the lazy write-back tables)
 static void gmem_wb_note(uint64_t addr, uint64_t size) {
     if (!gmem_alloc || !size || addr < HEAP_BASE || addr - HEAP_BASE + size > gmem_size) return;
     for (int i = 0; i < wb_npend; i++)
@@ -3239,10 +3247,7 @@ static void gmem_wb_record(VkCommandBuffer cb, uint64_t seq) {
         w->seq = seq;
         VkBufferCopy cp = {w->addr - HEAP_BASE, 0, w->size};
         vkCmdCopyBuffer(cb, gmem_buf, w->buf, 1, &cp);
-        // (under lazy_lock: with AC_ASYNC_SUBMIT this runs on the submission thread while a guest thread's fence wait
-        // compacts the list in gmem_writeback_apply; unlocked, entries were lost or doubled and a doubled one freed
-        // twice: crashes in VMA and the driver, and hangs, at 200+ fps, 2026-11-05)
-        pthread_mutex_lock(&lazy_lock);
+        pthread_mutex_lock(&lazy_lock);  // (fence polls on guest threads apply wb_flight)
         if (wb_nflight == 256) FATAL("heap mirror: too many GPU write-backs in flight\n");
         wb_flight[wb_nflight++] = *w;
         pthread_mutex_unlock(&lazy_lock);
@@ -3272,7 +3277,7 @@ static Lazy lazy_tab[LAZY_MAX], lazy_free[LAZY_MAX + 256];
 static int lazy_nfree;
 static struct { uint64_t addr, size; } lazy_hot[LAZY_HOT_MAX];  // ranges the CPU reads: eager write-back
 static int lazy_nhot;
-static pthread_mutex_t lazy_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t lazy_lock = PTHREAD_MUTEX_INITIALIZER;  // (declared with the write-back staging above)
 static __thread int lazy_held;  // this thread holds lazy_lock (a fault while it copies is resolved in place)
 extern int nvn_page_protect(uint64_t addr, uint64_t size, int noaccess);
 extern void (*nvn_lazy_flush_hook)(uint64_t addr, uint64_t size);
@@ -3447,21 +3452,10 @@ static void gmem_writeback_apply(uint64_t done) {
 
 static VkDescriptorBufferInfo gmem_info(void) {
     static int off = -1;
-    // Astral Chain: the device-local mirror by default. The host-pointer import made the NVIDIA driver log
-    // bursts of GPU faults (nvlddmkm 153) and the machine bug-checked (0x119, 2026-10-19). AC_VK_HEAP_IMPORT=1 imports
-    // the heap instead (as the TotK port does): on an integrated GPU the mirror is a second copy of the same system
-    // memory (2.8 GB). Once imported, the heap's write tracking stops (nvn_hle.h written_pages): on Linux each tracking
-    // query protects the written pages again, and on an imported (pinned) range the driver (Mesa ANV on Xe) pinned them
-    // again - most of the render thread's time in the kernel, 8-17 fps on an Arc B390. Without tracking, the texture
-    // checks hash contents and the vertices are read in place: in a busy scene on that Arc B390 (~1000 draws a frame)
-    // 30-35 fps against 48-57 with the mirror (2026-11-02), so the mirror stays the default. A failed import falls back
-    // to the mirror.
+    // Astral Chain: the device-local mirror by default. The host-pointer import (AC_VK_HEAP_IMPORT=1) made the
+    // NVIDIA driver log bursts of GPU faults (nvlddmkm 153) and the machine bug-checked (0x119, 2026-10-19).
     static int import = -1;
-    if (import < 0) {
-        const char *e = getenv("AC_VK_HEAP_IMPORT");
-        import = g_vk.host_import && e && atoi(e) != 0;
-        LOG("[vk] guest heap for shader global memory: %s\n", import ? "imported (no copy)" : "mirrored in device memory");
-    }
+    if (import < 0) import = getenv("AC_VK_HEAP_IMPORT") && g_vk.host_import;
     if (off < 0) off = getenv("LARECOMP_VK_NO_GMEM") != NULL;
     uint64_t want = (kernel_heap_size() + 0xFFFF) & ~0xFFFFull;
     if (want > HEAP_MAX) want = HEAP_MAX;
@@ -3483,10 +3477,6 @@ static VkDescriptorBufferInfo gmem_info(void) {
 // inside them use that copy, and a shader that stores gets the ranges copied back to the heap right after it (the
 // game alternates its buffer sets per frame: the CPU isn't writing them meanwhile). Accesses outside the table use
 // the heap as before. LARECOMP_VK_GMEM_FAST=0: no copy (empty table: everything goes to the heap, the old behaviour).
-// Integrated GPUs (Intel, AMD APUs, the Steam Deck) share system memory, so the heap is no farther than the copy: there
-// the copies are off by default (LARECOMP_VK_GMEM_FAST=1 turns them on). On an Intel Arc B390 (Mesa ANV) recording the
-// two copies cost ~15 ms of CPU each, and the highway chase's effects, six such dispatches a frame, ran at 5-6 fps
-// (46-56 fps without them).
 #define GFAST_SIZE (32ull << 20)
 static VkBuffer gfast_buf;
 static VmaAllocation gfast_mem;
@@ -3507,11 +3497,7 @@ static VkDescriptorBufferInfo gfast_info(void) {
 
 static void gfast_prepare(VkCommandBuffer cb) {
     static int on = -1;
-    if (on < 0) {
-        const char *e = getenv("LARECOMP_VK_GMEM_FAST");
-        on = e ? atoi(e) != 0 : g_vk.props.deviceType != VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
-        LOG("[vk] compute global memory copies %s\n", on ? "on" : e ? "off (LARECOMP_VK_GMEM_FAST=0)" : "off (integrated GPU: shared memory)");
-    }
+    if (on < 0) { const char *e = getenv("LARECOMP_VK_GMEM_FAST"); on = !e || atoi(e) != 0; }
     memset(gmap_tab, 0, sizeof gmap_tab);
     gfast_n = 0;
     gmem_info();  // (the heap import, made on first use)
@@ -3755,7 +3741,6 @@ static bool vcache_lookup(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceS
         }
     }
     if (!vc_on || !gmem_buf || size > VC_MAX_RANGE) return false;
-    if (!gmem_alloc) return false;  // (imported heap: no write tracking then, the GPU reads the vertices in place)
     uint64_t lo = (addr - HEAP_BASE) & ~(VC_PAGE - 1), hi = (addr - HEAP_BASE + size + VC_PAGE - 1) & ~(VC_PAGE - 1);
     if (hi > gmem_size) return false;
     uint64_t pend = vk_pending_seq();
@@ -4327,6 +4312,11 @@ static void draw_(CmdRec *r, bool indexed) {
         static int each = -1;
         if (each < 0) each = getenv("LARECOMP_DEBUG_EACH") != NULL;
         if (g_debug_frame && each && in_pass) { LOG("[draw]   (state before this draw: pass image %d)\n", debug_pass_no); vk_end_pass(); }
+        // LARECOMP_GPUPROF_DRAWS=1 (profiled frame): the same, so a draw's timestamps bracket its own work (inside one
+        // pass the GPU overlaps draws, and all of a pass's time landed on its last draw)
+        static int per_draw = -1;
+        if (per_draw < 0) per_draw = getenv("LARECOMP_GPUPROF_DRAWS") != NULL;
+        if (g_gpuprof_frame && per_draw && in_pass) vk_end_pass();
     }
     begin_pass();
     VkCommandBuffer cb = vk_cmd();
@@ -4563,21 +4553,111 @@ static void draw_(CmdRec *r, bool indexed) {
             vp_oy = (ph - st.rt.color[0]->height * u) * 0.5f;
         }
     }
+    // Wider than 16:9 (AC_RESOLUTION 21:9, 32:9, 48:9; issue #22): the HUD is drawn into its own 1280x720 layer and
+    // placed in a centred 16:9 box, but some UI (subtitles outside cutscenes, the opening credits) is drawn straight
+    // into the wide picture with the game's 1280x720 2D projection, which stretched it to the full width. Those draws
+    // go in the centred 16:9 box too. The UI shaders' (uibaseshader & co.) cbuf 3 = binding 0, rows 8-9 = the projection
+    // (x: 2/1280 ... -1, y: -2/720 ... 1); cbuf 4 = binding 1, row 0 = the element's x. A quad covering the whole
+    // 1280 width (a fade or a backdrop) keeps the full width, except a video (uiyuvshader / uiyuvashader: the title
+    // screen's background and logo, Bink movies), which is 16:9 footage and gets the box (black at the sides).
+    bool ui_box = false;
+    int hud_side = 0, hud_corner = 0;  // (AC_HUD_EDGES: -1 to the left edge, 1 to the right; corner 0-3: top left,
+                                       // bottom left, top right, bottom right)
+    uint64_t ui_vs = st.rt.ncolor && st.rt.color[0] ? stage_hash(st.program, 0) : 0;
+    bool ui_tiling = ui_vs == 0x833ab16b25a072acull;  // (uitilingshader: dot patterns, the menus' dotted lines)
+    if (st.rt.ncolor && st.rt.color[0] && (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 &&
+        (ui_vs == 0xa09bf88abb4a04a7ull || ui_tiling) && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 48 * 4) {
+        const float *p = (const float *)(uintptr_t)st.ubuf[0][0].addr;
+        ui_box = fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
+        uint64_t fsh = stage_hash(st.program, 1);
+        bool video = fsh == 0xf33b4e637319bed0ull || fsh == 0xef0a83385ad50ec7ull;
+        if (ui_box && !video && r->x[2] <= 6 && k.stride[0] >= 16 && st.vbuf[0].addr && st.vbuf[0].size >= 4 * k.stride[0] &&
+            st.ubuf[0][1].addr && st.ubuf[0][1].size >= 16) {
+            const float *m = (const float *)(uintptr_t)st.ubuf[0][1].addr;
+            float lo = 1e30f, hi = -1e30f;
+            for (int i = 0; i < 4; i++) {
+                const float *v = (const float *)(uintptr_t)(st.vbuf[0].addr + (uint64_t)i * k.stride[0]);
+                float x = m[0] * v[0] + m[1] * v[1] + m[2] * v[2] + m[3] * v[3];
+                lo = fminf(lo, x); hi = fmaxf(hi, x);
+            }
+            if (lo <= 0.5f && hi >= 1279.5f) ui_box = false;
+        }
+        // HUD at the screen's edges (AC_HUD_EDGES=1, the F1 menu; issue #27). The gameplay HUD (uibaseshader, and
+        // uitilingshader for the dot patterns behind its panels) is drawn with a 3D
+        // projection (cbuf 3 rows 8-11, w = z + 2040) at its 16:9 layout in the middle of the wide picture; cbuf 4 = the
+        // element's world matrix (rows 0-2), its translation (column 3) the element's place in the 1280x720 layout.
+        // The side panels are turned toward the middle (a yaw: row 2 column 0 against row 0 column 0, the ratio about
+        // +0.4..0.9 on the left, -0.4..-0.9 on the right, the same for mirrored parts), while markers over characters
+        // and targets, centred text and pop-ups face the screen (0..0.13). A turned element on its own side of the
+        // layout moves out by the width of the empty band beside the 16:9 area; everything else stays. The menu
+        // (Police Gear, minus) and IRIS's file panel are turned too, less (the menu -0.325 throughout, IRIS -0.400; the
+        // HUD's right side -0.418 and more), and stay where they are. IRIS's profile panel (a person scanned) turns
+        // as the HUD's tutorial box does (-0.58), but also leans back (row 2 column 1 against row 0 column 0, the same
+        // for its mirrored parts: -0.19 to -0.27 while it comes in and after; the tutorial box -0.12, the item panel
+        // -0.26 but turned -0.73): it stays. So does the flicker it comes in with (strips scaled and flipped every frame,
+        // so neither ratio holds; their third column is the panel's pitched one, row 1 column 2 about 0.2-0.26, and they
+        // sit above y 490 in the layout: the HUD's only pitched part, the item panel, is below).
+        // The F2 HUD layout (las/menu.cpp) moves each corner's panels on from there: across, a share of that band
+        // (100% the edge, 0 the 16:9 place), and up or down; a panel's corner is its side and its height in the
+        // layout (above or below y 360: the HUD's panels keep to the corners, their parts within 300 of them).
+        // The Legion wheel (Y held; issue #29) is at the player, and its parts are turned every way: the ring that
+        // follows the stick lies on its side (rolled a quarter turn, so the yaw ratio above is its tilt over nearly
+        // nothing), the cube's faces spin about a slanted axis, a spinner leans forward. A panel's parts are upright
+        // instead: their x axis level (its y part under 0.09 of its length, the cube's faces 0.41 and more), their
+        // y axis up or down (0.92 and more of its length), and leaning back or not at all (the normal's y part 0 to
+        // 0.38 for one facing the screen; the spinner -0.41). Parts of no height are left as they were.
+        if (!ui_box && st.ubuf[0][1].addr && st.ubuf[0][1].size >= 48 && p[46] != 0 && p[44] == 0 && p[45] == 0 &&
+            renderer_texture_presented(st.rt.color[0])) {
+            const float *m = (const float *)(uintptr_t)st.ubuf[0][1].addr;
+            if (fabsf(m[0]) > 0.05f) {
+                float yaw = m[8] / m[0], tx = m[3];
+                if (yaw > 0.25f && tx < 640) hud_side = -1;
+                else if (yaw < -0.41f && tx > 640 && !(yaw > -0.60f && m[9] / m[0] < -0.15f) && !(m[6] > 0.15f && m[7] < 490))
+                    hud_side = 1;
+                if (hud_side) {
+                    float xl = sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]), yl = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
+                    float nx = m[4] * m[9] - m[8] * m[5], ny = m[8] * m[1] - m[0] * m[9], nz = m[0] * m[5] - m[4] * m[1];
+                    float nl = sqrtf(nx * nx + ny * ny + nz * nz);
+                    if (yl > 1e-4f && (fabsf(m[4]) >= 0.2f * xl || fabsf(m[5]) < 0.85f * yl || (nz >= 0 ? ny : -ny) < -0.1f * nl))
+                        hud_side = 0;
+                }
+                if (hud_side) {
+                    extern volatile long ac_hud_seen;  // (live_settings.h: the menu's hint that F2 places the HUD)
+                    if (!ac_hud_seen) ac_hud_seen = 1;
+                    extern int ac_hud_edges_on(void);
+                    if (ac_hud_edges_on()) hud_corner = (hud_side > 0 ? 2 : 0) + (m[7] >= 360 ? 1 : 0);
+                    else hud_side = 0;
+                }
+            }
+        }
+    }
     {   // camera-attached effects sized for 16:9 are widened with the view (runtime/hle/widescreen.c)
         extern float widescreen_effect_stretch(uint64_t fs_hash);
         float k = widescreen_effect_stretch(g_cur_fs_hash);
         float vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx;
         if (k > 1.0f) { vx -= vw * (k - 1) / 2; vw *= k; }
-        set_viewport(vx, vp[1] * vp_sy + vp_oy, vw, vp[3] * vp_sy, zn, zf);
+        if (ui_box) { float bw = vp[3] * vp_sy * 16.0f / 9.0f; vx += (vw - bw) / 2; vw = bw; }
+        hud_shift_px = hud_shift_py = 0;
+        float vy = vp[1] * vp_sy + vp_oy;
+        if (hud_side) {
+            extern volatile int ac_hud_layout[4][2];  // (live_settings.h: per corner, across % and down in 1/720ths)
+            int across = ac_hud_layout[hud_corner][0], down = ac_hud_layout[hud_corner][1];
+            hud_shift_px = hud_side * ((float)st.rt.color[0]->width - st.rt.color[0]->height * 16.0f / 9.0f) / 2 * across / 100.0f;
+            hud_shift_py = down * (float)st.rt.color[0]->height / 720.0f;
+            vx += hud_shift_px * vp_sx;
+            vy += hud_shift_py * vp_sy;
+        }
+        set_viewport(vx, vy, vw, vp[3] * vp_sy, zn, zf);
         if (g_debug_frame) {
             VkRect2D sr = scissor_rect();
             LOG("[draw]   vp %.2f %.2f %.2f %.2f (stretch %.3f, fs hash %016llx) scissor %d %d %u %u | guest sc %d %d %d %d | pass %ux%u s %.4f %.4f\n",
-                vx, vp[1] * vp_sy + vp_oy, vw, vp[3] * vp_sy, k, (unsigned long long)g_cur_fs_hash, sr.offset.x, sr.offset.y,
+                vx, vy, vw, vp[3] * vp_sy, k, (unsigned long long)g_cur_fs_hash, sr.offset.x, sr.offset.y,
                 sr.extent.width, sr.extent.height, st.scissor[0][0], st.scissor[0][1], st.scissor[0][2], st.scissor[0][3], pass_w, pass_h,
                 vp_sx, vp_sy);
         }
     }
     apply_scissor();
+    hud_shift_px = hud_shift_py = 0;
     float rs0[4] = {vp_sx, vp_sy, vp_ox, vp_oy};
     uint64_t prof_t1_ = prof ? SDL_GetTicksNS() : 0;
     VkDescriptorSet fset = stage_set(pr, pr->set_layout[1], 1, 1, pr->fi, rs0, tint, 0, 0, 0, fii);
@@ -5200,7 +5280,21 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     uint32_t ow = (uint32_t)lround(ow_d), oh = (uint32_t)lround(oh_d);
     if (ow > 16384) ow = 16384;
     if (oh > 16384) oh = 16384;
+    // Astral Chain: AC_UPSCALER=fsr1 (launcher: Upscaling) turns FSR 1 on; AC_FSR_SHARPNESS: RCAS strength in stops
+    // (0 sharpest, 2 softest; default 0.2, AMD's). Read every frame: the in-game menu changes them (live_settings.h).
+    extern volatile int ac_upscaler;
+    extern volatile float ac_fsr_sharpness;
+    if (ac_upscaler < 0) { const char *u = getenv("AC_UPSCALER"); ac_upscaler = u && !strcmp(u, "fsr1"); }
+    if (ac_fsr_sharpness < 0) {
+        const char *sh = getenv("AC_FSR_SHARPNESS");
+        float s = sh ? (float)atof(sh) : 0.2f;
+        ac_fsr_sharpness = s >= 0 && s <= 2 ? s : 0.2f;
+    }
+    g_settings.upscaler = ac_upscaler ? UPSCALE_FSR1 : UPSCALE_BILINEAR;
+    float sharpness = ac_fsr_sharpness;
     bool fsr = g_settings.upscaler == UPSCALE_FSR1 && (ow > b->width + 1 || oh > b->height + 1);  // (an upscale only)
+    static int fsr_logged = -1;
+    if (fsr != fsr_logged) { fsr_logged = fsr; LOG("[vk] FSR 1 %s (%ux%u to %ux%u)\n", fsr ? "on" : "off", b->width, b->height, ow, oh); }
     if (!smaa && !fsr) return v;
     extern void vk_frame_suspend(void);
     extern void vk_frame_resume(void);
@@ -5224,7 +5318,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
         float pe[8] = {iw / ow, ih / oh, 0.5f * iw / ow - 0.5f, 0.5f * ih / oh - 0.5f, iw, ih};
         VkImageView ei[3] = {v};
         post_pass(cb, "easu.frag", ei, 1, e, pe, false);
-        float pr[8] = {exp2f(-0.2f), 0, 0, 0, (float)ow, (float)oh};  // (sharpness 0.2 stops: AMD's default)
+        float pr[8] = {exp2f(-sharpness), 0, 0, 0, (float)ow, (float)oh};
         VkImageView ri_[3] = {post_view(e)};
         post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
         v = post_view(r);
@@ -5313,6 +5407,141 @@ void renderer_save_texture_tex(TexBackend *b, const char *path) {
     vk_save_png(path, out.ptr, w, h);
     vkDestroyImageView(g_vk.dev, tv, NULL);
     vmaDestroyImage(g_vk.vma, img, mem);
+}
+
+// LARECOMP_CAPTURE=<first frame>,<count>: the game image of <count> consecutive frames from <first> on, for flicker that
+// depends on timing. Each frame is drawn (scaled: LARECOMP_CAPTURE_SCALE=<n>, default 2 = half size each way) into one of
+// CAP_RING host buffers on the GPU without waiting for it; a background thread writes each one as frames/cap_N.ppm
+// (uncompressed RGB) once the GPU has finished it, so the game keeps its speed for the whole capture. When the ring is
+// full (the writer behind) the frame waits for its slot.
+#define CAP_RING 32
+static struct {
+    VkBuffer buf[CAP_RING]; VmaAllocation mem[CAP_RING]; uint8_t *ptr[CAP_RING];
+    uint64_t seq[CAP_RING], frame[CAP_RING];
+    volatile int full[CAP_RING];  // 1: copy recorded (seq set), not written yet
+    uint32_t w, h; long total, written; int stop;
+    pthread_mutex_t lock; pthread_cond_t cond;
+} cap;
+static void *cap_writer(void *arg) {
+    (void)arg;
+    uint8_t *row = NULL;
+    for (long k = 0;; k++) {
+        int s = (int)(k % CAP_RING);
+        pthread_mutex_lock(&cap.lock);
+        while (!cap.full[s] && !(cap.stop && k >= cap.total)) pthread_cond_wait(&cap.cond, &cap.lock);
+        int done = !cap.full[s];
+        pthread_mutex_unlock(&cap.lock);
+        if (done) break;
+        while (vk_completed_seq() < cap.seq[s]) SDL_Delay(1);  // (until the GPU has finished this frame)
+        vmaInvalidateAllocation(g_vk.vma, cap.mem[s], 0, VK_WHOLE_SIZE);
+        char path[64];
+        snprintf(path, sizeof path, "frames/cap_%05llu.ppm", (unsigned long long)cap.frame[s]);
+        FILE *f = fopen(path, "wb");
+        if (f) {
+            if (!row) row = malloc((size_t)cap.w * 3);
+            fprintf(f, "P6\n%u %u\n255\n", cap.w, cap.h);
+            for (uint32_t y = 0; y < cap.h; y++) {
+                const uint8_t *src = cap.ptr[s] + (uint64_t)y * cap.w * 4;
+                for (uint32_t x = 0; x < cap.w; x++) { row[x * 3] = src[x * 4]; row[x * 3 + 1] = src[x * 4 + 1]; row[x * 3 + 2] = src[x * 4 + 2]; }
+                fwrite(row, 1, (size_t)cap.w * 3, f);
+            }
+            fclose(f);
+        }
+        pthread_mutex_lock(&cap.lock);
+        cap.full[s] = 0; cap.written++;
+        pthread_cond_broadcast(&cap.cond);
+        pthread_mutex_unlock(&cap.lock);
+    }
+    free(row);
+    LOG("[capture] wrote %ld frames\n", cap.written);
+    return NULL;
+}
+void renderer_capture_tex(TexBackend *b, uint64_t frame) {
+    static long first = -2, count, n;
+    static VkImage img;
+    static VmaAllocation imem;
+    static VkImageView tv;
+    if (first == -2) {
+        const char *e = getenv("LARECOMP_CAPTURE");
+        first = -1;
+        if (e && (sscanf(e, "%ld,%ld", &first, &count) != 2 || count <= 0)) first = -1;
+    }
+    if (first < 0 || (long)frame < first || n >= count) return;
+    if (!b || !b->image || (b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) return;
+    extern const float *vk_shot_crop(void);
+    const float *crop = vk_shot_crop();
+    vk_end_pass();
+    VkCommandBuffer cb = vk_cmd();
+    if (!tv) {
+        const char *se = getenv("LARECOMP_CAPTURE_SCALE");
+        int scale = se && atoi(se) > 0 ? atoi(se) : 2;
+        cap.w = (uint32_t)(b->width * crop[2]) / scale; cap.h = (uint32_t)(b->height * crop[3]) / scale;
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
+                                .extent = {cap.w, cap.h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = (uint64_t)cap.w * cap.h * 4,
+                                 .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo bai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                       .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+        VmaAllocationInfo info;
+        bool ok = cap.w && cap.h && vmaCreateImage(g_vk.vma, &ci, &ai, &img, &imem, NULL) == VK_SUCCESS;
+        for (int i = 0; ok && i < CAP_RING; i++) {
+            ok = vmaCreateBuffer(g_vk.vma, &bi, &bai, &cap.buf[i], &cap.mem[i], &info) == VK_SUCCESS;
+            if (ok) cap.ptr[i] = info.pMappedData;
+        }
+        if (!ok) { LOG("[capture] %ux%u: no memory for the frames\n", cap.w, cap.h); first = -1; return; }
+        VkImageViewCreateInfo vci = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = img, .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                     .format = VK_FORMAT_R8G8B8A8_UNORM, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        VK_CHECK(vkCreateImageView(g_vk.dev, &vci, NULL, &tv));
+        vk_image_init_layout(cb, img, VK_IMAGE_ASPECT_COLOR_BIT);
+        mkdir("frames", 0755);
+        pthread_mutex_init(&cap.lock, NULL); pthread_cond_init(&cap.cond, NULL);
+        cap.total = count;
+        pthread_t th; pthread_create(&th, NULL, cap_writer, NULL); pthread_detach(th);
+        LOG("[capture] %ld frames of %ux%u from frame %ld, written as they finish\n", count, cap.w, cap.h, first);
+    }
+    int s = (int)(n % CAP_RING);
+    pthread_mutex_lock(&cap.lock);
+    while (cap.full[s]) {  // (the writer is behind: this frame waits for its slot)
+        pthread_mutex_unlock(&cap.lock);
+        renderer_submit();
+        pthread_mutex_lock(&cap.lock);
+        if (cap.full[s]) pthread_cond_wait(&cap.cond, &cap.lock);
+    }
+    pthread_mutex_unlock(&cap.lock);
+    cb = vk_cmd();
+    vk_full_barrier(cb);
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = tv, .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {cap.w, cap.h}}, .layerCount = 1,
+                          .colorAttachmentCount = 1, .pColorAttachments = &ca};
+    vkCmdBeginRendering(cb, &ri);
+    VkDescriptorSet ds = vk_alloc_set(present_set_layout);
+    VkDescriptorImageInfo ii = {vk_default_sampler(true), raw_view(b), VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet wr = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0, .descriptorCount = 1,
+                               .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii};
+    vkUpdateDescriptorSets(g_vk.dev, 1, &wr, 0, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_pipeline(VK_FORMAT_R8G8B8A8_UNORM));
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_layout, 0, 1, &ds, 0, NULL);
+    VkViewport vp = {0, 0, (float)cap.w, (float)cap.h, 0, 1};
+    VkRect2D sc = {{0, 0}, {cap.w, cap.h}};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    vkCmdSetScissor(cb, 0, 1, &sc);
+    float pv[8] = {renderer_origin_lower_left() ? 1.0f : 0.0f, 0, 0, 0, crop[0], crop[1], crop[2], crop[3]};
+    vkCmdPushConstants(cb, present_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 32, pv);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    vkCmdEndRendering(cb);
+    vk_full_barrier(cb);
+    VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {cap.w, cap.h, 1}};
+    vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_GENERAL, cap.buf[s], 1, &c);
+    ss_forget();
+    pthread_mutex_lock(&cap.lock);
+    cap.seq[s] = vk_pending_seq(); cap.frame[s] = frame; cap.full[s] = 1;
+    n++;
+    if (n >= count) cap.stop = 1;
+    pthread_cond_broadcast(&cap.cond);
+    pthread_mutex_unlock(&cap.lock);
 }
 
 // ================================================================== executor (renderer.m exec_list)

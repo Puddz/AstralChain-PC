@@ -101,7 +101,40 @@ static uint64_t heap_base=0x7200000000ull;
 static int heap_gpu_pinned;
 #define HEAP_BASE heap_base
 #define HEAP_LIMIT 0x100000000ull
-#define MEMORY_BUDGET (3ull*1024*1024*1024)
+/* AC_RESOLUTION=<width>x<height> (svc #0xB3, astral_chain/patches/resolution-1.0.1.pchtxt): the docked render size.
+ * The game's render targets come from one fixed pool (310 MB at 1600x900). It holds 1920x1080 (and the 1062p mod's
+ * 1888x1062) but not 2400x1350, so the targets take at most ~157 bytes per pixel: a larger size gets 160 bytes more
+ * per extra pixel, and the guest memory budget grows by the same. The heap has to stay within the 4 GB the renderer
+ * mirrors for shader global memory (HEAP_MAX; past it shaders read zeros): at most 8.6 million pixels (3840x2160 and
+ * a little more), larger sizes are scaled down to that. Smaller sizes (down to 640x360, for slow GPUs) keep the
+ * 310 MB pool and the 1600x900 targets (svc #0xB3). Handheld mode (AC_HANDHELD=1) draws at its own 1280x720, so a
+ * size below that is ignored there. */
+static int res_w=-1,res_h,res_fixed;  /* res_fixed: AC_RESOLUTION given (no dynamic resolution) */
+static uint64_t res_pool;
+static void res_config(void) {
+ if(res_w>=0) return;
+ char v[32];DWORD n=GetEnvironmentVariableA("AC_RESOLUTION",v,sizeof(v));int w=0,h=0;
+ res_w=1600;res_h=900;res_pool=0x13600000ull;
+ if(n && n<sizeof(v) && sscanf(v,"%dx%d",&w,&h)==2 && w>=640 && w<=7680 && h>=360 && h<=4320) {
+  res_w=w&~1;res_h=h&~1;res_fixed=1;
+  char hh[4];DWORD hn=GetEnvironmentVariableA("AC_HANDHELD",hh,sizeof(hh));
+  if(hn==1 && hh[0]=='1' && (res_w<1280 || res_h<720)) {
+   printf("[app] render resolution %dx%d ignored: handheld mode renders at 1280x720\n",res_w,res_h);fflush(stdout);
+   res_w=1600;res_h=900;res_fixed=0;return;
+  }
+  if((uint64_t)res_w*res_h>8640000ull) {
+   double k=sqrt(8640000.0/((double)res_w*res_h));res_w=(int)(res_w*k)&~1;res_h=(int)(res_h*k)&~1;
+  }
+  uint64_t pixels=(uint64_t)res_w*res_h;
+  if(pixels>1440000ull) res_pool=(0x13600000ull+(pixels-1440000ull)*160+0xfffff)&~0xfffffull;
+  printf("[app] render resolution %dx%d (AC_RESOLUTION), render target pool %llu MB\n",res_w,res_h,
+         (unsigned long long)(res_pool>>20));fflush(stdout);
+ }
+}
+/* Wider than 16:9 (21:9, 32:9, 48:9): by more than 1%, so 854x480 (16:9 rounded to whole pixels) is not. */
+static int res_wide(int64_t w,int64_t h) {return w*900>h*1616;}
+static uint64_t memory_budget(void) {res_config();return 3ull*1024*1024*1024+(res_pool-0x13600000ull);}
+#define MEMORY_BUDGET memory_budget()
 static uint64_t heap_size;
 static int heap_reserved;
 enum { SESSION_SM=1, SESSION_LM, SESSION_LOGGER, SESSION_APM,
@@ -668,6 +701,48 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    pending[slot].track=0;cut_ends++;cut_carried+=rest;
   }
   return;
+ }
+ if(imm==0xB3) {
+  /* svc #0xB3 (astral_chain/patches/resolution-1.0.1.pchtxt): the docked render resolution (res_config). The patched
+   * site (by its address in main, loaded at 0x7000010000) says which register gets what. Without AC_RESOLUTION: the
+   * game's own 1600x900 and dynamic resolution levels 1440x810 and 1280x810; with it, that size at every level. */
+  res_config();
+  int custom=res_fixed;
+  int32_t w=res_w,h=res_h,l1w=custom?w:1440,l1h=custom?h:810,l2w=custom?w:1280;
+  uint64_t at=pc-0x7000010000ull;
+  /* The display size and the render targets are at least the game's 1600x900: the game also makes 1280x720 (handheld
+   * size) textures in their memory. A smaller size (for slow GPUs) is only the level size: the 3D view is drawn at it
+   * and scaled up by the game, as its dynamic resolution levels are. */
+  int32_t tw=w<1600?1600:w,th=w<1600?900:h;
+  int docked=(uint32_t)c->x[0]==(uint32_t)tw;  /* (level sites: w0 = the render target's width) */
+  #define SETW(r,value) (c->x[r]=(uint32_t)(value))
+  switch(at) {
+   case 0x4328C0:SETW(8,tw);return;
+   case 0x4328C8:SETW(8,th);return;
+   case 0x40D5E4:case 0x40FB04:SETW(9,tw);return;
+   case 0x40D5F0:case 0x40FB14:SETW(9,th);return;
+   case 0x40F184:SETW(1,docked?w:(uint32_t)c->x[19]);SETW(2,docked?h:(uint32_t)c->x[20]);return;
+   case 0x40F1A4:SETW(20,630);SETW(22,l1h);SETW(1,docked?l1w:1024);SETW(2,docked?l1h:630);return;
+   case 0x40F1D0:SETW(1,docked?l2w:800);SETW(2,docked?l1h:630);return;
+   case 0x40E0B0:SETW(8,res_pool);return;  /* the render target pool's size */
+   case 0x9A30BC:{  /* a camera's aspect (was fdiv s1,s3,s1: width / height, the game passes 1280 / 720) */
+    float fw,fh;uint32_t bw=(uint32_t)c->v[3],bh=(uint32_t)c->v[1];memcpy(&fw,&bw,4);memcpy(&fh,&bh,4);
+    float a=fw/fh;
+    /* AC_RESOLUTION wider than 16:9 (21:9, 32:9, 48:9): 16:9 cameras take its aspect (the view widens, its height stays) */
+    if(custom && fw*9.0f==fh*16.0f && res_wide(w,h)) a=(float)w/(float)h;
+    uint32_t ba;memcpy(&ba,&a,4);c->v[1]=ba;return;
+   }
+   case 0x9A30C4:{  /* the camera's screen rectangle (was str xzr,[x8,#0x260]: x = y = 0; w1, w2 = width, height) */
+    int32_t cw=(int32_t)c->x[1],ch=(int32_t)c->x[2],rx=0,ry=0;
+    /* (the same cameras as the aspect site: 16:9 ones while AC_RESOLUTION is wider) */
+    if(custom && ch>0 && (int64_t)cw*9==(int64_t)ch*16 && res_wide(w,h)) {
+     int32_t ww=(int32_t)((int64_t)ch*w/h);rx=(cw-ww)/2;SETW(1,ww);
+    }
+    memcpy((void*)(uintptr_t)(c->x[8]+0x260),&rx,4);memcpy((void*)(uintptr_t)(c->x[8]+0x264),&ry,4);return;
+   }
+  }
+  #undef SETW
+  boundary("svc-b3-site",c,pc);
  }
  app_pump();
  if(++syscalls>SYSCALL_LIMIT) boundary("svc-budget",c,pc);

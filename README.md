@@ -5,6 +5,9 @@ made by static recompilation: the game's ARM64 code is translated to C and compi
 program, and its graphics run on Vulkan. There is no emulator and no JIT
 ([how it works](docs/how-it-works.md)).
 
+> [!NOTE]
+> **This is the `upscaling` branch** (experimental): `main` plus more render resolutions, ultrawide and AMD FSR 1.
+
 > [!IMPORTANT]
 > **No game files are included.** You need your own legally obtained copy of *Astral Chain*, dumped from your own
 > console: the base game, the v1.0.1 update and your `prod.keys`. How to dump them is not covered here, and requests
@@ -29,6 +32,9 @@ program, and its graphics run on Vulkan. There is no emulator and no JIT
 - A launcher that installs, updates and starts the game, with every setting explained
 - In-game settings menu (**F1**, or Minus and Plus on a controller) and a frame rate panel, from a plain counter to
   frame time graph, 1% lows, GPU and CPU load
+- Render resolutions from 854x480 to 4K, at a fixed size, and **AMD FSR 1** scaling to the window or screen
+- Ultrawide, 21:9 to 48:9: a wider 3D view with nothing stretched; markers, subtitles, menus and movies keep their
+  shape; the HUD's side panels can sit at the screen's edges, each corner placed with **F2**
 - Keyboard and mouse with remapping and mouse camera; Xbox controllers, and Switch Pro, DualSense, DualShock 4 and
   8BitDo pads through SDL3; rumble; button prompts for keyboard, Xbox, PlayStation or Switch, following what you use
 - Shaders compiled for your GPU before the game starts, not during play
@@ -80,7 +86,7 @@ Start **`Astral Chain Launcher.exe`** and press **Play**.
 
 ![The launcher](docs/images/launcher.jpg)
 
-- [Playing](docs/playing.md): the launcher, default keys, mouse, controllers, the in-game menu, texture
+- [Playing](docs/playing.md): the launcher, default keys, mouse, controllers, the in-game menu, resolutions and ultrawide, texture
   compression, saves and logs
 - [Settings](docs/settings.md): what every setting does
 - [What's new](docs/changelog.md)
@@ -114,6 +120,11 @@ install: unzip it to its own folder.
 - [AC-Recomp](https://github.com/swaymun/AC-Recomp): the macOS recompilation, whose setup flow inspired this one.
 - [AMD FidelityFX Super Resolution 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (MIT): the EASU and RCAS
   shaders of the FSR 1 path (through LASRecomp), used by the experimental upscaling option.
+- KeatonTheBot's "1062p (no dynamic res)" mod ([Kenji-NX/switch-pchtxt-mods](https://github.com/Kenji-NX/switch-pchtxt-mods)):
+  the code sites for the render size, dynamic resolution levels and render target memory that the resolution patch
+  changes. The patch itself is this project's own.
+- theboy181's "21:9" mod ([switch-ptchtxt-mods](https://github.com/theboy181/switch-ptchtxt-mods)), commissioned by
+  Kilgharrah: the camera aspect site used for the ultrawide sizes. The patch itself is this project's own.
 - [TotK Recomp](https://github.com/valentderah/totk-pc-recomp): the detailed frame rate panel reads the GPU's
   load, temperature, power and clock the way its performance overlay (`runtime/perfmon.c`) does.
 - [NSTool](https://github.com/jakcron/nstool), [Zig](https://ziglang.org/),

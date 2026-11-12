@@ -691,10 +691,14 @@ void backend_present(NvnTexture *t) {
         float pv[8] = {renderer_origin_lower_left() ? 1.0f : 0.0f, 0, 0, 0, uv[0], uv[1], uv[2], uv[3]};
         vk_present_draw(cb, b, (float)vx, (float)vy, (float)vw, (float)vh, pv);
         // Astral Chain: the in-game settings menu over the picture (menu.cpp; nothing while it is closed).
-        // (test) AC_MENU_AT=<frame>: open it at that frame.
+        // (test) AC_MENU_AT=<frame>: open it at that frame (AC_MENU_PAGE=1: on the HUD layout).
         static long menu_at = -1;
         if (menu_at < 0) menu_at = getenv("AC_MENU_AT") ? atol(getenv("AC_MENU_AT")) : 0;
-        if (menu_at && (long)total_frames + 1 == menu_at) { extern volatile long ac_menu_open; ac_menu_open = 1; }
+        if (menu_at && (long)total_frames + 1 == menu_at) {
+            extern volatile long ac_menu_open, ac_menu_page;
+            ac_menu_page = getenv("AC_MENU_PAGE") ? atol(getenv("AC_MENU_PAGE")) : 0;
+            ac_menu_open = 1;
+        }
         extern void menu_render(void *cmd, uint32_t w, uint32_t h);
         menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
         extern void vk_perf_frame_end(void);
@@ -772,6 +776,14 @@ void backend_present(NvnTexture *t) {
             if (at == (long)total_frames) { g_gpuprof_frame = true; break; }
             if (*p == ',') p++; else break;
         }
+        // Astral Chain: LARECOMP_GPUPROF_EVERY=<frames> profiles a frame every that many frames (players' reports:
+        // where the GPU time goes in whatever they play; each profiled frame stalls briefly).
+        static long every = -1;
+        if (every < 0) { const char *v = getenv("LARECOMP_GPUPROF_EVERY"); every = v ? atol(v) : 0; if (every < 0) every = 0; }
+        if (every && !was_profiled && !g_gpuprof_frame && total_frames && total_frames % (uint64_t)every == 0) {
+            g_gpuprof_frame = true;
+            LOG("[gpuprof] frame %llu (LARECOMP_GPUPROF_EVERY)\n", (unsigned long long)total_frames);
+        }
         // Astral Chain: LARECOMP_GPUPROF_AUTO=1 profiles the frame after a slow one (> 250 ms present to present), up
         // to 12 per session. Off by default: a profiled frame took ~850 ms, counted as slow and profiled the next one,
         // ~10 s of near-freeze after a single slow frame in play. A profiled frame never triggers another.
@@ -813,6 +825,10 @@ void backend_present(NvnTexture *t) {
         renderer_save_texture_tex(b, path);
         // a series (SCREENSHOT_FROM) runs on until LARECOMP_WINDOW_SHOT exits
         if (getenv("LARECOMP_EXIT_AFTER_SHOT") && !shot_from) { fflush(stderr); _exit(0); }
+    }
+    {
+        extern void renderer_capture_tex(TexBackend *b, uint64_t frame);
+        renderer_capture_tex(b, total_frames);  // LARECOMP_CAPTURE (exec.c)
     }
     double now = SDL_GetTicks() / 1000.0;
     static double fps_iv = -1, prev_present, max_gap;

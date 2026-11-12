@@ -6,9 +6,16 @@
    plus `rtld` and `sdk`, which are byte-identical to the base game's. Its RomFS is a patch over the base game's.
    NSTool applies it (`--basenca`), and `romfs_tool.c` packs the merged tree into one read-only image,
    `game/romfs.bin`. The game reads that image at run time.
-2. **Patches.** Two pchtxt patches are applied to `main` before translation:
+2. **Patches.** Three pchtxt patches are applied to `main` before translation:
    - Dynamic-FPS: the measured frame time drives the game step, and the frame cap is 60;
-   - `cutscene-catchup`: cutscenes may take larger steps after a stall, so they stay in sync with their audio.
+   - `cutscene-catchup`: cutscenes may take larger steps after a stall, so they stay in sync with their audio;
+   - `resolution`: the docked render size, the dynamic resolution levels and the size of the render targets' memory
+     pool come from the runtime (svc #0xB3), so `AC_RESOLUTION` can change them at launch. Without it they are the
+     game's own values. A size wider than 16:9 (21:9, 32:9, 48:9) also sets the 3D cameras' aspect, so the view widens;
+     the HUD keeps its 16:9 layout in the middle. Those cameras' screen rectangle (which places markers on characters
+     and targets) widens with the view, centred on the HUD. UI drawn straight into the picture with the game's
+     1280x720 2D projection (menus, subtitles outside cutscenes, the opening credits) is placed in the same centred
+     16:9 box by the renderer (`exec.c`); full-width fades and backdrops keep the whole width.
 3. **Translation** (`native_trace.py`, with LASRecomp's `lifter.py`). Every instruction of the executable segments
    is lifted from ARM64 to C, page by page. A page function `page_XXXX(Cpu *c)` dispatches on the guest PC. The
    play build uses three options:

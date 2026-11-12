@@ -127,12 +127,15 @@ void ac_setting_apply(const char *key,const char *value) {
  else if(!strcmp(key,"mouse_invert")) {mouse_config();mouse_invert=on;}
  else if(!strcmp(key,"cutscene_fps_30")) ac_cutscene_30=on;
  else if(!strcmp(key,"ignore_focus")) ac_ignore_focus=on;
+ else if(!strcmp(key,"upscaler")) ac_upscaler=value && !strcmp(value,"fsr1");
+ else if(!strcmp(key,"fsr_sharpness")) {float s=(float)atof(value);if(s>=0 && s<=2) ac_fsr_sharpness=s;}
  else if(!strcmp(key,"uncapped")) ac_uncapped=on;
  else if(!strcmp(key,"port_credit")) ac_title_credit=on;
  else if(!strcmp(key,"fps_counter")) {int m=value ? atoi(value) : 0;ac_fps_counter=m>=0 && m<=2 ? m : 0;}
  else if(!strcmp(key,"fps_corner")) ac_fps_corner=value && !strcmp(value,"tr") ? 1 : value && !strcmp(value,"bl") ? 2 : value && !strcmp(value,"br") ? 3 : 0;
  else if(!strcmp(key,"title_own_twin")) ac_title_own_twin=on;
  else if(!strcmp(key,"swap_ab")) ac_swap_ab=on;
+ else if(!strcmp(key,"hud_edges")) ac_hud_edges=on;
  else if(!strcmp(key,"fullscreen")) {if(app_window) PostMessageW(app_window,WM_AC_FULLSCREEN,on,0);}
  else return;
  printf("[menu] %s=%s\n",key,value ? value : "");fflush(stdout);
@@ -192,10 +195,16 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
  }
  if((message==WM_KEYDOWN || message==WM_KEYUP || message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) && wparam<256) {
   hid_keys_load();
-  /* F1 opens and closes the in-game menu (unless F1 is a game key); Esc closes it. While it is open, keys go to it. */
+  /* F1 opens and closes the in-game menu's settings, F2 its HUD layout (unless they are game keys); either one over
+   * the other page goes to it. Esc closes the menu. While it is open, keys go to it. */
   int down=message==WM_KEYDOWN || message==WM_SYSKEYDOWN,repeat=(lparam&(1<<30))!=0;
-  if((wparam==VK_F1 && !hid_key_mapped[VK_F1]) || (ac_menu_open && !ac_menu_modal && wparam==VK_ESCAPE)) {
-   if(down && !repeat) menu_set_open(wparam==VK_F1 ? !ac_menu_open : 0);
+  int fkey=(wparam==VK_F1 && !hid_key_mapped[VK_F1]) || (wparam==VK_F2 && !hid_key_mapped[VK_F2]);
+  if(fkey || (ac_menu_open && !ac_menu_modal && wparam==VK_ESCAPE)) {
+   if(down && !repeat) {
+    LONG page=wparam==VK_F2;
+    if(!fkey || (ac_menu_open && ac_menu_page==page)) menu_set_open(0);
+    else {InterlockedExchange(&ac_menu_page,page);menu_set_open(1);}
+   }
    return 0;
   }
   if(ac_menu_open && wparam!=VK_F11 && !(wparam==VK_RETURN && (lparam&(1<<29)))) {

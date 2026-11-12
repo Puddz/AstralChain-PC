@@ -9,6 +9,10 @@
 // Settings: what the session started with comes from the environment the launcher passed; a change is applied at
 // once where the runtime can (ac_setting_apply), else at the next start, and saved to userdata\launcher.ini, the
 // launcher's own file (AC_SETTINGS_FILE overrides the path; tests use it).
+//
+// F2 opens its second page, the HUD layout: with a render resolution wider than 16:9, where each corner's HUD panels
+// go (live_settings.h ac_hud_layout, las/nvn/vulkan/exec.c). Kept in the same file as hud_layout; the first time the
+// HUD shows that wide in a session, a line says F2 is there, until the page has been opened once (hud_layout_seen).
 #include <windows.h>
 #include <psapi.h>
 #include <pdh.h>
@@ -28,7 +32,9 @@ extern "C" {
 #include "nvn/vulkan/vk.h"
 
 // The runtime's (live_settings.h, app_window.h)
-extern volatile long ac_menu_open, ac_menu_close_request, ac_menu_quit_request, ac_menu_modal;
+extern volatile long ac_menu_open, ac_menu_close_request, ac_menu_quit_request, ac_menu_modal, ac_menu_page;
+extern volatile int ac_hud_layout[4][2];                 // (live_settings.h: the F2 HUD layout)
+extern volatile long ac_hud_seen;
 struct AcMenuEvent { int kind, a, b; };
 extern AcMenuEvent ac_menu_events[256];
 extern volatile long ac_menu_head, ac_menu_tail;
@@ -78,6 +84,17 @@ std::vector<Opt> opts = {
     {"mouse_sens", "Controls", "Mouse camera sensitivity (%)", nullptr, NUMBER, "100", nullptr, 10, 500, true},
     {"mouse_invert", "Controls", "Invert mouse up and down", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"fullscreen", "Display", "Fullscreen", "Also F11 or Alt+Enter. The game starts the way you leave it.", CHECK, "0", nullptr, 0, 0, true},
+    {"resolution", "Display", "Render resolution (experimental)",
+     "1600x900 is the Switch's (with its dynamic resolution). The smaller sizes are for slow GPUs; 21:9 and 32:9 for ultrawide screens, 48:9 for three screens side by side.",
+     CHOICE, "1600x900", "854x480|854x480 (480p);960x540|960x540 (540p);1280x720|1280x720 (720p);1600x900|1600x900 (default);1920x1080|1920x1080;2560x1440|2560x1440;3840x2160|3840x2160;"
+     "2560x1080|2560x1080 (21:9);3440x1440|3440x1440 (21:9);3840x1080|3840x1080 (32:9);5120x1440|5120x1440 (32:9);5760x1080|5760x1080 (48:9);7680x1440|7680x1440 (48:9, drawn at 6788x1272)", 0, 0, false},
+    {"upscaler", "Display", "Upscaling (experimental)", "Only when the window is larger than the picture.",
+     CHOICE, "off", "off|Smooth (default);fsr1|AMD FSR 1", 0, 0, true},
+    {"fsr_sharpness", "Display", "FSR 1 sharpening", nullptr, CHOICE, "0.2", "0|Strong;0.2|Normal (default);0.5|Light;1|Very light", 0, 0, true},
+    {"hud_edges", "Display", "Ultrawide: HUD at the screen's edges (experimental)",
+     "With a render resolution wider than 16:9, the HUD's side panels (health, minimap, objectives, tutorials) move to "
+     "the edges of the screen. Markers over characters stay where they are. HUD layout (F2): how far each corner's "
+     "panels move, and up or down.", CHECK, "0", nullptr, 0, 0, true},
     {"fps_counter", "Display", "Show the frame rate",
      "Frame rate: frames per second and the average frame time. Detailed: also a frame time graph, "
      "the slowest frames, GPU and CPU load, memory, the GPU's temperature and power where its driver gives them, and the "
@@ -112,11 +129,15 @@ void read_session() {
         if (k == "prompts") { std::string e = env("AC_PROMPTS"); if (!e.empty()) v = e == "0" ? "switch" : e; }
         else if (k == "rumble") { std::string e = env("AC_RUMBLE"); if (!e.empty()) v = e; }
         else if (k == "swap_ab") v = env("AC_SWAP_AB") == "1" ? "1" : "0";
+        else if (k == "hud_edges") v = env("AC_HUD_EDGES") == "1" ? "1" : "0";
         else if (k == "mouse_look") v = env("AC_MOUSE_LOOK") == "0" ? "0" : "1";
         else if (k == "mouse_sens") { std::string e = env("AC_MOUSE_SENS"); if (!e.empty()) v = e; }
         else if (k == "mouse_invert") v = env("AC_MOUSE_INVERT") == "1" ? "1" : "0";
         else if (k == "fullscreen") v = ac_fullscreen_state() ? "1" : "0";
         else if (k == "handheld") v = env("AC_HANDHELD") == "1" ? "1" : "0";
+        else if (k == "resolution") { std::string e = env("AC_RESOLUTION"); if (!e.empty()) v = e; }
+        else if (k == "upscaler") v = env("AC_UPSCALER") == "fsr1" ? "fsr1" : "off";
+        else if (k == "fsr_sharpness") { std::string e = env("AC_FSR_SHARPNESS"); if (!e.empty()) v = e; }
         else if (k == "present") { std::string e = env("LARECOMP_VK_PRESENT"); if (!e.empty()) v = e; }
         else if (k == "uncapped") v = env("AC_UNCAPPED") == "1" ? "1" : "0";
         else if (k == "cutscene_fps_30") v = env("AC_CUTSCENE_FPS") == "30" ? "1" : "0";
@@ -203,6 +224,18 @@ bool save(const char *key, const std::string &value) {
     }
     DeleteFileW(tmp.c_str());
     return false;
+}
+
+// A key's value in the launcher's file ("" when it has none).
+std::string load(const char *key) {
+    std::wstring path = settings_path();
+    std::string prefix = std::string(key) + "=", v;
+    if (path.empty()) return v;
+    std::vector<std::string> lines;
+    if (read_lines(path, lines) > 0)
+        for (const std::string &l : lines)
+            if (l.compare(0, prefix.size(), prefix) == 0) v = l.substr(prefix.size());
+    return v;
 }
 
 ImGuiContext *ctx;
@@ -334,6 +367,8 @@ void combo(Opt &o) {
     }
 }
 
+bool picture_wide();
+
 void draw(float scale) {
     ImGuiIO &io = ImGui::GetIO();
     // (B leaves a list or a slider first: only with nothing open since the last frame does it close the menu)
@@ -346,6 +381,11 @@ void draw(float scale) {
     ImGui::Begin("Astral Chain PC: settings", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_NoSavedSettings);
     ImGui::TextDisabled("F1 or Minus + Plus: back to the game. The game does not get your input while this is open.");
+    if (picture_wide()) {  // (the HUD layout's button is further down, under Display)
+        ImGui::TextDisabled("Wide screen: the HUD's place is in");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("HUD layout (F2)")) InterlockedExchange(&ac_menu_page, 1);
+    }
     const char *group = nullptr;
     float label_w = ImGui::GetContentRegionAvail().x * 0.5f;
     for (Opt &o : opts) {
@@ -363,6 +403,10 @@ void draw(float scale) {
             if (ImGui::SliderInt("##v", &v, o.lo, o.hi, "%d", ImGuiSliderFlags_AlwaysClamp)) set(o, std::to_string(v), false);
             if (ImGui::IsItemDeactivatedAfterEdit()) saved_ok = save(o.key, o.value);
         } else combo(o);
+        if (!strcmp(o.key, "hud_edges")) {
+            ImGui::SetCursorPosX(label_w);
+            if (ImGui::Button("HUD layout (F2)...")) InterlockedExchange(&ac_menu_page, 1);
+        }
         if (o.help || !o.live) {
             ImGui::PushTextWrapPos(0);
             if (!o.live) ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "Applies at the next start.");
@@ -408,6 +452,174 @@ void draw(float scale) {
 // The picture keeps 16:9 inside the window (device.c), so the place is worked out in that rectangle.
 const char *const credit_text = "Port by Puddz";
 ULONGLONG credit_since;  // when the title was first seen this time (fade-in)
+
+
+// ---- the HUD layout (F2)
+const char *const corner_names[4] = {"Top left", "Bottom left", "Top right", "Bottom right"};
+const int corner_default[4][2] = {{100, 0}, {100, 0}, {100, 0}, {100, 0}};
+bool layout_loaded, hint_done, hint_marked;
+ULONGLONG hint_since;
+
+std::string layout_text() {
+    std::string t;
+    for (int c = 0; c < 4; c++)
+        t += (c ? ";" : "") + std::to_string(ac_hud_layout[c][0]) + "," + std::to_string(ac_hud_layout[c][1]);
+    return t;
+}
+
+// "across,down;..." (or "/" between them) for the four corners (across 0-100, down -200..200); a part missing or out of range keeps its default
+void parse_layout(const std::string &t) {
+    const char *q = t.c_str();
+    for (int c = 0; c < 4 && *q; c++) {
+        char *e;
+        long a = strtol(q, &e, 10);
+        if (e == q || *e != ',') break;
+        q = e + 1;
+        long d = strtol(q, &e, 10);
+        if (e == q) break;
+        q = *e == ';' || *e == '/' ? e + 1 : e;
+        if (a >= 0 && a <= 100 && d >= -200 && d <= 200) { ac_hud_layout[c][0] = (int)a; ac_hud_layout[c][1] = (int)d; }
+    }
+}
+
+// Before the first frame, from the menu's first call (AC_HUD_LAYOUT first: tests; else the launcher's file).
+void load_layout() {
+    layout_loaded = true;
+    std::string t = env("AC_HUD_LAYOUT");
+    if (t.empty()) t = load("hud_layout");
+    if (!t.empty()) parse_layout(t);
+    hint_done = env("AC_HUD_HINT") == "0" || load("hud_layout_seen") == "1";
+}
+
+bool picture_wide() {
+    int ww, wh, iw, ih;
+    vk_perf_sizes(&ww, &wh, &iw, &ih);
+    return iw > 0 && ih > 0 && (long long)iw * 9 * 100 > (long long)ih * 16 * 101;
+}
+
+Opt *find_opt(const char *key) {
+    for (Opt &o : opts) if (!strcmp(o.key, key)) return &o;
+    return nullptr;
+}
+
+void draw_hud(float scale) {
+    ImGuiIO &io = ImGui::GetIO();
+    bool busy = ImGui::IsAnyItemActive() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
+    if (!hint_marked) { hint_marked = hint_done = true; saved_ok = save("hud_layout_seen", "1"); }
+    float w = 980 * scale;
+    if (w > io.DisplaySize.x * 0.92f) w = io.DisplaySize.x * 0.92f;
+    // (in the middle: the panels it moves are at the corners, and stay in view)
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(w, 0), ImGuiCond_Always);
+    if (!was_open) ImGui::SetNextWindowFocus();
+    ImGui::Begin("Astral Chain PC: HUD layout", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("F2 or B: back to the game. F1: the other settings. The game is drawn behind this, so each change shows at once.");
+    if (!picture_wide())
+        ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "The render resolution is not wider than 16:9, so the HUD fits as it is: this "
+                           "applies with a wider one (21:9, 32:9, 48:9: Render resolution, F1).");
+    ImGui::PopTextWrapPos();
+    Opt *edges = find_opt("hud_edges");
+    bool on = edges && edges->value == "1";
+    if (ImGui::Checkbox("Move the HUD's side panels toward the screen's edges", &on) && edges) set(*edges, on ? "1" : "0");
+    ImGui::Spacing();
+    ImGui::BeginDisabled(!on);
+    bool done = false;
+    float label_w = ImGui::GetContentRegionAvail().x * 0.3f;
+    // All four at once: across only (the corners' own heights stay)
+    int all = ac_hud_layout[0][0];
+    bool same = true;
+    for (int c = 1; c < 4; c++) same = same && ac_hud_layout[c][0] == all;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("All corners, across");
+    ImGui::SameLine(label_w);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderInt("##all", &all, 0, 100, same ? "%d%%" : "(differ)", ImGuiSliderFlags_AlwaysClamp))
+        for (int c = 0; c < 4; c++) ac_hud_layout[c][0] = all;
+    done |= ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("Across: 100%% is the screen's edge, 0%% the HUD's place on a 16:9 screen. Up and down: in 1/720ths of the "
+                        "screen's height, minus is up.");
+    ImGui::PopTextWrapPos();
+    if (ImGui::BeginTable("##corners", 3)) {
+        ImGui::TableSetupColumn("##n", ImGuiTableColumnFlags_WidthFixed, label_w - ImGui::GetStyle().CellPadding.x * 2);
+        ImGui::TableSetupColumn("Across", ImGuiTableColumnFlags_WidthStretch, 1);
+        ImGui::TableSetupColumn("Up and down", ImGuiTableColumnFlags_WidthStretch, 1);
+        ImGui::TableHeadersRow();
+        for (int c = 0; c < 4; c++) {
+            ImGui::PushID(c);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(corner_names[c]);
+            ImGui::TableNextColumn();
+            int a = ac_hud_layout[c][0], d = ac_hud_layout[c][1];
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::SliderInt("##a", &a, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) ac_hud_layout[c][0] = a;
+            done |= ImGui::IsItemDeactivatedAfterEdit();
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::SliderInt("##d", &d, -200, 200, "%d", ImGuiSliderFlags_AlwaysClamp)) ac_hud_layout[c][1] = d;
+            done |= ImGui::IsItemDeactivatedAfterEdit();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (ImGui::Button("Reset")) {
+        for (int c = 0; c < 4; c++) { ac_hud_layout[c][0] = corner_default[c][0]; ac_hud_layout[c][1] = corner_default[c][1]; }
+        done = true;
+    }
+    ImGui::EndDisabled();
+    if (Opt *o = find_opt("fps_corner")) {  // (issue #30; also on the settings page)
+        ImGui::Spacing();
+        ImGui::PushID(o->key);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Frame rate: corner");
+        ImGui::SameLine(label_w);
+        ImGui::SetNextItemWidth(-1);
+        combo(*o);
+        ImGui::PopID();
+        Opt *shown = find_opt("fps_counter");
+        if (shown && shown->value == "0") ImGui::TextDisabled("The frame rate is not shown now: Show the frame rate, in Settings (F1).");
+    }
+    if (done) {
+        saved_ok = save("hud_layout", layout_text());
+        printf("[menu] hud_layout=%s\n", layout_text().c_str());
+        fflush(stdout);
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+    if (!saved_ok) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "Could not save to userdata\\launcher.ini: changes last until you close the game.");
+    if (ImGui::Button("Back to the game")) InterlockedExchange(&ac_menu_close_request, 1);
+    ImGui::SameLine();
+    if (ImGui::Button("Settings (F1)")) InterlockedExchange(&ac_menu_page, 0);
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) && !busy) InterlockedExchange(&ac_menu_close_request, 1);
+    ImGui::End();
+}
+
+// The hint, once a session (15 s from the first time the HUD is drawn wider than 16:9), until F2 has been opened once.
+bool hint_due(ULONGLONG now) {
+    if (hint_done || !ac_hud_seen) return false;
+    if (!hint_since) hint_since = now;
+    if (now - hint_since > 15000) { hint_done = true; return false; }
+    return true;
+}
+
+void draw_hint(float w, float h, ULONGLONG now) {
+    static const char text[] = "Wide screen: F2 (or the menu, Minus + Plus) moves the HUD toward the screen's edges";
+    float size = h * 0.026f;
+    ImFont *f = font ? font : ImGui::GetFont();
+    ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0, text);
+    ImVec2 pos((w - ts.x) / 2, h * 0.055f);
+    float t = (float)(now - hint_since), a = t < 400 ? t / 400 : t > 14000 ? (15000 - t) / 1000 : 1;
+    if (a < 0) a = 0;
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    float pad = size * 0.45f;
+    dl->AddRectFilled(ImVec2(pos.x - pad * 1.6f, pos.y - pad), ImVec2(pos.x + ts.x + pad * 1.6f, pos.y + ts.y + pad),
+                      ImGui::GetColorU32(ImVec4(0.055f, 0.067f, 0.11f, 0.8f * a)), size * 0.3f);
+    dl->AddText(f, size, pos, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.95f * a)), text);
+}
 
 bool credit_due(ULONGLONG now) {
     if (ac_title_credit < 0) ac_title_credit = env("AC_TITLE_CREDIT") != "0";
@@ -929,10 +1141,12 @@ void draw_fps(float w, float h) {
 }  // namespace
 
 extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
+    if (!layout_loaded) load_layout();
     bool open = ac_menu_open != 0;
     ULONGLONG tick = GetTickCount64();
     bool credit = credit_due(tick);
     bool fps = fps_due();
+    bool hint = !open && hint_due(tick);
     if (!open) {
         if (was_open || ac_menu_head != ac_menu_tail) {  // (closed: drop what came in, let go of keys)
             InterlockedExchange(&ac_menu_tail, ac_menu_head);
@@ -941,7 +1155,7 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
             quit_asked = false;
             InterlockedExchange(&ac_menu_modal, 0);
         }
-        if ((!credit && !fps) || failed) return;
+        if ((!credit && !fps && !hint) || failed) return;
         if (!inited) {
             if (!init()) { failed = true; return; }
             inited = true;
@@ -954,6 +1168,7 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
         ImGui::NewFrame();
         if (credit) draw_credit((float)w, (float)h, tick);
         if (fps) draw_fps((float)w, (float)h);
+        if (hint) draw_hint((float)w, (float)h, tick);
         ImGui::Render();
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);
         return;
@@ -983,7 +1198,11 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     if (styled != scale) { ImGui::GetStyle() = base_style; ImGui::GetStyle().ScaleAllSizes(scale); styled = scale; }
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
-    draw(scale);
+    static long page_shown = -1;
+    long page = ac_menu_page;
+    if (page != page_shown) { was_open = false; page_shown = page; }  // (the other page: its window gets the focus)
+    if (page == 1) { quit_asked = false; InterlockedExchange(&ac_menu_modal, 0); draw_hud(scale); }
+    else draw(scale);
     if (fps) draw_fps((float)w, (float)h);
     was_open = true;
     ImGui::Render();

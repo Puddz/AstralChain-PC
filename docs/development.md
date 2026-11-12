@@ -11,6 +11,7 @@
   --control game\control.nacp --romfs game\romfs.bin --nvn-hle --nvn-backend vulkan `
   --optimize --lean --direct-calls --jumps `
   --patch third_party\AstralChain-Dynamic-FPS\1.0.1.pchtxt --patch astral_chain\patches\cutscene-catchup-1.0.1.pchtxt `
+  --patch astral_chain\patches\resolution-1.0.1.pchtxt `
   --build-only
 powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 300 -Env "AC_PARALLEL=1"
 ```
@@ -50,6 +51,10 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
   - `LARECOMP_SCREENSHOT_EVERY=<frames>` saves `frame_N.png` in the run folder.
   - Add `LARECOMP_SCREENSHOT_FROM=<frame>` to save into `frames\` instead.
   - `LARECOMP_SHOT_AT=<frame>,...` captures specific frames.
+  - `LARECOMP_CAPTURE=<first frame>,<count>` saves every frame of a stretch as `frames/cap_N.ppm` without slowing
+    the game (for flicker that depends on timing): copied on the GPU into a ring of 32 buffers and written by a
+    background thread, at half size (`LARECOMP_CAPTURE_SCALE=<n>`: 1/n each way, default 2; about 2.7 MB a frame at
+    2560x1440). Delete the frames once measured.
 - **Pass dumps.** `LARECOMP_DEBUG_FRAME=<frame>` writes every render pass of that frame to `build\pass_NNN.png`
   (create `build\` in the run folder first) and logs each draw with its shader hashes.
   - `LARECOMP_DEBUG_EACH=1` ends the pass before every draw, so each draw's result is its own image; the log says
@@ -66,7 +71,10 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | --- | --- |
 | `LARECOMP_VK_PROF=1` | Per-2-s CPU/GPU breakdown, texture upload and tracking counters, vertex cache stats |
 | `LARECOMP_GPUPROF_AT=<frame>` / `LARECOMP_GPUPROF_DRAWS=1` | GPU time per pass, or per draw, of a frame |
+| `LARECOMP_GPUPROF_EVERY=<frames>` | Also profile one frame every that many frames (`[gpuprof] frame N` header; each profiled frame stalls briefly): for players' reports |
 | `LARECOMP_GPUPROF_AUTO=1` | Also profile the frame after each frame slower than 250 ms (up to 12; profiling makes a frame slow) |
+| `AC_RESOLUTION=<w>x<h>` | (launcher: *Render resolution*) docked render size, up to 8.6 million pixels (3840x2160), no dynamic resolution; wider than 16:9 (e.g. 2560x1080, 3840x1080) widens the 3D cameras' aspect and the window; the render target pool grows by 160 bytes per extra pixel (`resolution-1.0.1.pchtxt`, svc #0xB3 in host_runtime.c.in) |
+| `AC_UPSCALER=fsr1` | (launcher: *Upscaling*; the in-game menu changes it and `AC_FSR_SHARPNESS` while playing) AMD FSR 1 (EASU upscale, RCAS sharpen; exec.c `post_process`) when the picture is shown larger than it is rendered; `AC_FSR_SHARPNESS=<stops>` (0 strongest - 2, default 0.2) |
 | `AC_FULLSCREEN=1` | (launcher: *Start in fullscreen*) Borderless fullscreen on the window's monitor from the start (`app_window.h` `app_set_fullscreen`, also F11 / Alt+Enter) |
 | `AC_HANDHELD=1` | (launcher: *Handheld mode*) The game is told it runs handheld (operation mode 0, normal performance mode; `app_window.h`): it renders 1280x720 into its 1600x900 window textures and crops to it (`nvnWindowSetCrop`, honoured by the present in `device.c`) |
 | `AC_CUTSCENE_FPS=30` | Cutscenes as in the unmodified game: its fixed-step timer path at 30 FPS (default: 60 FPS, measured step) |
@@ -91,9 +99,6 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_BC7_PRECOMPUTE=1` | (setup; launcher: *prepared at setup*) `setup_game` encodes every ASTC texture to BC7 into `build\game\cache\bc7` (`bc7_cache.py`, once) |
 | `LARECOMP_BC7_CACHE=0` | Ignore the precomputed BC7 textures (GPU conversion only) |
 | `LARECOMP_BC7_LOG=1` | One `[bc7key]` line per ASTC texture upload: hash, layout, precomputed hit or miss |
-| `AC_KEYS=A:74,B:75,...` | (launcher **Controls**) Main bindings as Windows virtual-key codes: `A B X Y LSTICK RSTICK L R ZL ZR PLUS MINUS DLEFT DUP DRIGHT DDOWN LLEFT LUP LRIGHT LDOWN RLEFT RUP RRIGHT RDOWN`; unlisted ones keep their default, 0 for none. Mouse buttons are 1 2 4 5 6 (left, right, middle, back, forward), the wheel 14 / 15 (up / down). Defaults and parser: `runtime/las/input_bindings.h` (kept in step with `ControlsForm`) |
-| `AC_KEYS2=...` | The alternative bindings, same format |
-| `AC_MOUSE_LOOK=0` | (launcher: *Mouse moves the camera* off) The mouse keeps its buttons but does not drive the right stick (`mouse.h`: raw input, speed to stick tilt, 20% minimum against the game's dead zone) |
 | `AC_SDL3=<path>` | (`run_guarded.ps1`: `tools\sdl3\SDL3.dll`) SDL3, loaded at run time for controllers other than Xbox pads (`hid_service.h` `sdl_pad_thread`: its own thread, the first non-Xbox gamepad, positional mapping). Empty: XInput only |
 | `AC_SDL_TEST=t0-t1:b,...` | (test) A virtual SDL gamepad holding SDL button `b` (0-14: south east west north back guide start lstick rstick lshoulder rshoulder up down left right; 100+n / 110+n: axis n at its minimum / maximum) from `t0` to `t1` s after SDL starts; counts without window focus |
 | `AC_LOG_PAD=1` | (test) Log the controller state the game gets (`[pad] buttons=... left x,y right x,y`) whenever it changes |
@@ -101,6 +106,9 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `AC_LOG_RUMBLE=1` | (test) Log the motor values when they change; with `AC_SDL_TEST`, also what the virtual pad receives (`[rumble] SDL virtual pad: ...`) |
 | `AC_TEST_HOST_RESERVE=<addr>:<size>` | (test, hex) Reserve host memory inside the guest's address space at startup, as a thread stack Windows placed there; the game must map around it (`host_runtime.c.in` `host_clip`) |
 | `AC_HOST_CLIP=0` | (test) Guest memory queries ignore host allocations again (with `AC_TEST_HOST_RESERVE` over the stack region: the game stops at `host-shared-placeholder-reserve`) |
+| `AC_KEYS=A:74,B:75,...` | (launcher **Controls**) Main bindings as Windows virtual-key codes: `A B X Y LSTICK RSTICK L R ZL ZR PLUS MINUS DLEFT DUP DRIGHT DDOWN LLEFT LUP LRIGHT LDOWN RLEFT RUP RRIGHT RDOWN`; unlisted ones keep their default, 0 for none. Mouse buttons are 1 2 4 5 6 (left, right, middle, back, forward), the wheel 14 / 15 (up / down). Defaults and parser: `runtime/las/input_bindings.h` (kept in step with `ControlsForm`) |
+| `AC_KEYS2=...` | The alternative bindings, same format |
+| `AC_MOUSE_LOOK=0` | (launcher: *Mouse moves the camera* off) The mouse keeps its buttons but does not drive the right stick (`mouse.h`: raw input, speed to stick tilt, 20% minimum against the game's dead zone) |
 | `AC_MOUSE_SENS=<percent>` / `AC_MOUSE_INVERT=1` | Mouse camera sensitivity (100: full tilt at 1500 counts/s) and inverted up/down |
 | `AC_PAIR_CACHE=0` | (test) Exclusive loads/stores check their memory with `query()` every time, instead of the per-thread cache of the last validated region (`exclusive_pair.h`, cleared by `mapping_generation`) |
 | `AC_UNCAPPED=1` | (launcher and in-game menu: *Uncapped frame rate*) No 60 Hz pacing in gameplay (`nvn_hle.h` `nvn_present_pace`); cutscenes (svc #0xB1) stay at 60; at most 450 FPS (the Dynamic-FPS step floor is 1/16 of a 30 FPS frame). `AC_PRESENT_INTERVAL=0` removes all pacing (tests) |

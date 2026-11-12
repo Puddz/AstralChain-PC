@@ -11,7 +11,7 @@ The arrows at the top right (**BACKGROUND ‹ 1 / 6 ›**) switch between six ba
 | **Play** | Starts the game, without console windows. After an update of this project it first rebuilds the game (about a minute) and its shaders |
 | **Play with diagnostics** | The same, plus a log of where the time of each slow frame went and a crash dump if the game crashes. Afterwards it offers to create a report |
 | **Compile shaders** | Prepares every shader for your GPU now. It says *(Already compiled)* when nothing changed, and *(Needs recompiling)* after an update of the game build, new recorded shader combinations, or a settings change that affects them. Play does this too when needed |
-| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, the title screen options, presentation mode, handheld mode (1280x720), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window and in [docs/settings.md](settings.md) |
+| **Settings** | Cutscene frame rate, pausing while minimized, save backups, sound resync, fullscreen, the title screen options, presentation mode, handheld mode (1280x720), render resolution and upscaling (see [Experimental options](#experimental-options-this-branch)), texture compression (BC7, see below), shader options and troubleshooting switches. Each one is explained in the window and in [docs/settings.md](settings.md) |
 | **Controls** | The keyboard keys for every button, stick direction and the D-pad. Click a key, then press the new one; a key already in use swaps places |
 | **Create report** | Packs the last session's logs, the crash dump if there is one, and your Windows, CPU and GPU versions into `reports\`, for a bug report. No game files; your Windows user name is removed from the logs' paths |
 
@@ -44,12 +44,31 @@ the settings menu over the game; the game pauses while it is open. Esc, F1 or Mi
 need a restart say so. The menu saves to the same settings file as the launcher. **Quit game** at the bottom of the
 menu closes the game, after asking first, so a controller alone is enough.
 
+**HUD layout** (upscaling and texture-dump branches, render resolutions wider than 16:9). **F2**, or **HUD layout** in
+the F1 menu, opens a window where you choose where the HUD's side panels go: for each corner, how far toward the
+screen's edge and how far up or down. F2, Esc or B close it.
+
 F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
 
 **Title screen.** The scene behind the title is a video of one of the twins on a roof, in the outfit of your newest
 save. The game shows the twin you did **not** choose (your sibling); **Settings > Display > Title screen shows the twin
 you play as** (or the in-game menu) shows yours instead, from the next time the title screen appears. Your save is not
 changed. A small **"Port by Puddz"** shows above the version number; the same Display settings turn it off.
+
+## Experimental options (this branch)
+
+All are in **Settings > Display** and off by default; they apply the next time you press **Play**.
+
+| Setting | What it does |
+| --- | --- |
+| **Render resolution** | The size the game draws at: 1600x900 (default, the Switch's docked size, with the game's own dynamic resolution), 1920x1080, 2560x1440 or 3840x2160, at a fixed size. Larger sizes need a faster GPU and more video memory. Measured on an RTX 4090 in the highway chase: about 60 fps at every size |
+| **Render resolution, small** | 1280x720, 960x540 or 854x480, for GPUs that cannot hold 60 fps at 1600x900. Only the 3D view is drawn at that size and scaled up by the game (softer picture); the HUD and menus stay at 1600x900. Handheld mode ignores them |
+| **Render resolution, ultrawide** | 2560x1080 or 3440x1440 (21:9), 3840x1080 or 5120x1440 (32:9), 5760x1080 or 7680x1440 (48:9, three screens; 7680x1440 is drawn at 6788x1272). The 3D view gets wider (nothing is stretched), the HUD keeps its 16:9 layout in the middle, and the window opens at that shape; in fullscreen on an ultrawide screen the picture fills it. Checked in screenshots of the street and the opening cutscene; cutscene movies, menus and real ultrawide monitors are untested |
+| **Upscaling** | *Smooth* (default) scales the picture to a larger window or screen; *AMD FSR 1* uses edge-aware upscaling and sharpening, crisper on 1440p and 4K screens. Works on any GPU |
+
+The resolution comes in through a code patch (`astral_chain/patches/resolution-1.0.1.pchtxt`): the game asks the
+runtime for its render size, dynamic resolution levels, render target memory and camera aspect, so the size can be
+changed at launch without a rebuild. Without the setting, the game's own values are used.
 
 ## Texture compression (BC7)
 

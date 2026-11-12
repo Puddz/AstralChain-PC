@@ -5,8 +5,13 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 **2026-11-12**
 
 - **Frame rate display: choose its corner** (issue #30; *not yet confirmed in play*): **Settings > Display > Frame
-  rate: corner** in the launcher, and in the in-game menu (**F1**): top left (as before), top right, bottom left or
-  bottom right, for the plain counter and the detailed panel. It moves at once.
+  rate: corner** in the launcher, and in the in-game menu (**F1**, and on the HUD layout page, **F2**): top left (as before), top
+  right, bottom left or bottom right, for the plain counter and the detailed panel. It moves at once.
+- **Ultrawide: Legion wheel no longer doubled** (this branch) (issue #29; confirmed in play): with **Ultrawide: HUD
+  at the screen's edges** on, holding Y showed a second copy of parts of the Legion wheel (the ring that follows the
+  stick, at times the cube in the middle) at the right of the screen. Those parts were taken for the HUD's side
+  panels and moved to the edge; they now stay with the wheel. Seen fixed in a replay of the report's recording at
+  3840x1080.
 
 **2026-11-11**
 
@@ -44,6 +49,19 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   result, so the picture was blurry. The game now uses the screen's real pixels. In a window it opens at 1600x900
   real pixels, so with scaling the window looks smaller than before.
 - **Launcher background** no longer tiles when Windows enlarges the launcher after it opens (PR #24, by red-Geck0).
+- **Ultrawide: HUD at the screen's edges** (this branch; issue #27; experimental, *not yet confirmed in play*):
+  **Settings > Display**, or the in-game menu (changes at once). With a render resolution wider than 16:9, the HUD's
+  side panels (health, minimap, objectives, tutorials) move to the left and right edges instead of staying in the
+  middle 16:9 area; markers over characters, subtitles and menus stay where they are. Off by default.
+- **HUD layout (F2)** (this branch; issue #27; *not yet confirmed in play*): in the game, **F2** (or the button under
+  the option in the F1 menu) opens a window to place the HUD on a screen wider than 16:9: for each corner's panels
+  (top left, bottom left, top right, bottom right) how far they move toward the edge (0-100%) and up or down, with
+  the game drawn behind it so each change shows at once. Saved with the other settings. The first time the HUD shows
+  on a wide screen, a line at the top says F2 is there (until you have opened it once).
+- **Ultrawide fixes** (this branch; confirmed in play on a 32:9 recording): the light blocks above (issue #20); markers
+  on characters and targets stay on them instead of drifting toward the middle (issue #21); menus, subtitles, the
+  opening credits, the title screen and videos are shown in a centred 16:9 area instead of stretched, while
+  full-screen fades and backdrops still cover the whole width (issue #22).
 
 **2026-11-10**
 
@@ -77,6 +95,15 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 - **Saves are flushed to disk** when the game closes a save file and when it commits, and **save backups are kept only
   when complete** (*not yet confirmed*).
 
+**2026-11-06**
+
+- **Smaller render sizes for slow GPUs** (this branch; issue #4): 1280x720, 960x540 and 854x480 in **Render
+  resolution**. The 3D view is drawn at that size and the game scales it up, as its own dynamic resolution does; the
+  HUD and menus stay sharp. It only lightens the graphics card's work: a slow processor is not helped. Highway save,
+  RTX 4090, GPU time per frame compared with 1600x900: 720p -6%, 540p -20%, 480p -25%; a weaker GPU should gain
+  more, as more of its time goes on pixels. Handheld mode keeps its 1280x720 and ignores the smaller sizes. *Not
+  yet confirmed in play.*
+
 **2026-11-04**
 
 - **Controllers other than Xbox pads** (issue #10): Switch Pro Controller, DualSense, DualShock 4, 8BitDo and most
@@ -107,9 +134,9 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   time up to 480 fps. Reported in play: it does not feel right above 60 fps, for about 10 fps more; being looked
   into.
 - **In-game settings menu**: **F1**, or **Minus and Plus** together on a controller, opens it over the game, which
-  pauses as under the Switch's HOME menu. Button icons, rumble strength, the mouse settings, fullscreen, 30 fps
-  cutscenes and keeping the game running while minimized change at once; handheld mode, presentation mode and the
-  separate graphics thread from the next start. Changes are saved for the launcher too. Navigate with the mouse, the
+  pauses as under the Switch's HOME menu. Button icons, rumble strength, the mouse settings, fullscreen, upscaling
+  and FSR 1 sharpening, 30 fps cutscenes and keeping the game running while minimized change at once; render
+  resolution, handheld mode, presentation mode and the separate graphics thread from the next start. Changes are saved for the launcher too. Navigate with the mouse, the
   arrow keys or a controller (A selects, B goes back); Esc, F1 or Minus and Plus close it. Confirmed in play: F1
   opens it, the game pauses, navigation works, changes apply and the launcher shows them.
 - **Xbox and PlayStation button icons**, and **automatic icons** (the new default): the game's button prompts
@@ -120,14 +147,16 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   and SDL3 for the others. **Settings > Controller > Rumble strength** (0 turns it off). The game asks for weak
   rumble (made for the Switch's actuators); weak values are raised for PC pads' motors, as yuzu does. Stops when
   the window loses focus or the game closes. Confirmed in play (rumble works; an 8BitDo controller's buttons work).
-- **Integrated GPUs** (PR #13, by lcd1232): on Intel and AMD integrated graphics, a memory copy meant for graphics
-  cards with their own memory is now off; on an Intel Arc laptop (Linux) the highway chase's effects went from 5-6
-  fps to 46-56. `LARECOMP_VK_GMEM_FAST=1` turns it back on. *Not yet tested on a Windows integrated GPU.* Discrete
-  GPUs are unchanged.
 - **Occasional stop at startup** (`host-shared-placeholder-reserve`), seen about once in 20 starts after the
   controller change: Windows had placed one of the program's own thread stacks where the game then put one of its
   thread stacks. The game now places its memory around such allocations. Forced in a test (a large block reserved
   there on purpose): the game stopped without the fix and played with it.
+- **Mouse support, keyboard and mouse button icons, two bindings per action** (on main since 2026-10-25, now on
+  this branch too). Click in the game window to give it the mouse: it turns the camera, left click attacks (ZR),
+  right click calls the Legion (ZL), the wheel changes weapons. Hold Alt to get the cursor back. Sensitivity,
+  invert and the button icons are in **Settings > Mouse and keyboard**. New default keys: Shift sprints, Space
+  dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives). Keys you had changed in Controls
+  stay on their actions; a new default that would clash with one of them is left empty.
 
 **2026-10-27**
 
@@ -138,6 +167,10 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-10-26**
 
+- **Frame rate with the Legion out on GPUs behind a slower link** (such as an eGPU over OCuLink): the GPU copied
+  about 47.5 MB of results back to system memory every frame, though only a few pages changed; on an RTX 5070 Ti
+  over OCuLink that took 8 of 10 ms a frame, 19 of 24 ms with the Legion out. Only the changed pages are copied now.
+  Reported in play on that PC: 42 → 53-54 fps with the Legion out (2560x1440, FSR 1).
 - **Street after the opening helicopter scene**: it was held at 33-53 fps on a fast PC (RTX 4090 / Ryzen 7 7800X3D,
   CPU-bound) by thousands of small memory-tracking queries a second. They are now grouped: average 55.6 → 58.7 fps
   there at 2560x1440. *Not yet confirmed in play.*
@@ -148,17 +181,6 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   and snapped back. A compute shader that averages the scene's brightness read stale data (threads of a group passed
   a barrier early); the measured average is now steady in every frame. *Not yet confirmed in play.*
 
-**2026-10-25**
-
-- **Mouse support.** Click in the game window to give it the mouse: it turns the camera, left click attacks (ZR),
-  right click calls the Legion (ZL), the wheel changes weapons. Hold Alt to get the cursor back. Sensitivity and
-  invert in **Settings > Mouse and keyboard**.
-- **Keyboard and mouse button icons in the game.** The button prompts show the keys and mouse buttons you set instead
-  of the Switch buttons (**Settings > Mouse and keyboard > Button icons** to keep the Switch ones).
-- **Controls**: two bindings per action (main and alternative), mouse buttons and wheel included. New defaults:
-  Shift sprints, Space dodges, Tab is IRIS, Esc the pause menu (the old keys stay as alternatives). Keys you had
-  changed in Controls stay on their actions; a new default that would clash with one of them is left empty.
-
 **2026-10-24**
 
 - **Flickering light in the opening helicopter cutscene**: the whole picture jumped between two brightnesses. The
@@ -168,9 +190,16 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   darker of the two brightnesses. *Not yet confirmed in play.*
 - **Setup after picking the wrong file**: once a wrong base game or update had been picked, every retry failed with
   the same "belongs to program" message. Setup now extracts again for any other file, and says which file to pick.
-- **Experimental features on a separate branch**: [`upscaling`](https://github.com/Puddz/AstralChain-PC/tree/upscaling)
-  has an AMD FSR 1 upscaling option, render resolutions from 1920x1080 to 3840x2160, and ultrawide sizes (21:9 and
-  32:9). They are not part of this version yet; see that branch's README.
+- **Ultrawide render sizes** (this branch; issue #4): 2560x1080 and 3440x1440 (21:9), 3840x1080 and 5120x1440
+  (32:9), 5760x1080 and 7680x1440 (48:9, three screens; issue #19). See [Experimental options](playing.md#experimental-options-this-branch). *Untested on a real ultrawide monitor.*
+
+**On this branch since 2026-10-23**
+
+- **Render resolution** (issue #4): 1920x1080, 2560x1440 and 3840x2160 besides the default 1600x900.
+- **AMD FSR 1 upscaling** option.
+
+This is the experimental [`upscaling`](https://github.com/Puddz/AstralChain-PC/tree/upscaling) branch: everything in
+the main version plus the options under [Experimental options](playing.md#experimental-options-this-branch).
 
 **2026-10-23**
 

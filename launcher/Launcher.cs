@@ -127,6 +127,38 @@ namespace AstralChainLauncher
                 "the game when the desktop is busy. Immediate: tearing, lowest latency.", OptKind.Choice, "mailbox",
                 OptTarget.Game, v => v == "mailbox" ? "" : "LARECOMP_VK_PRESENT=" + v);
             present.Choices = new[] { "mailbox|Mailbox (default)", "fifo|Vsync (FIFO)", "immediate|Immediate" };
+            var resolution = Add("resolution", "Display", "Render resolution (experimental)",
+                "The size the game draws its picture at. 1600x900 is the Switch's docked resolution (default, with " +
+                "the game's own dynamic resolution). Smaller sizes (down to 854x480) are for slow GPUs: the game " +
+                "draws its 3D view at that size and scales it up (a softer picture; the HUD stays sharp), so the " +
+                "graphics card has less to do " +
+                "(a slow processor is not helped). Larger sizes are sharper and need a faster GPU; 3840x2160 is " +
+                "the largest. The 21:9 and 32:9 sizes are for ultrawide screens, 48:9 for three screens side by side: the 3D view gets wider and the HUD " +
+                "stays 16:9 in the middle (untested on a real ultrawide monitor). Handheld mode keeps 1280x720 and ignores the sizes below it. " +
+                "Applies the next time you press Play.", OptKind.Choice,
+                "1600x900", OptTarget.Game, v => v == "1600x900" ? "" : "AC_RESOLUTION=" + v);
+            resolution.Choices = new[] { "854x480|854x480 (480p)", "960x540|960x540 (540p)", "1280x720|1280x720 (720p)",
+                "1600x900|1600x900 (default)", "1920x1080|1920x1080", "2560x1440|2560x1440",
+                "3840x2160|3840x2160", "2560x1080|2560x1080 (21:9)", "3440x1440|3440x1440 (21:9)",
+                "3840x1080|3840x1080 (32:9)", "5120x1440|5120x1440 (32:9)",
+                "5760x1080|5760x1080 (48:9)", "7680x1440|7680x1440 (48:9, drawn at 6788x1272)" };
+            var upscaler = Add("upscaler", "Display", "Upscaling (experimental)",
+                "How the picture is enlarged to a bigger window or screen. Smooth: plain scaling (default). " +
+                "AMD FSR 1: edge-aware upscaling and sharpening, crisper on 1440p and 4K screens; works on any GPU. " +
+                "It has no effect when the window is not larger than the picture.", OptKind.Choice, "off",
+                OptTarget.Game, v => v == "fsr1" ? "AC_UPSCALER=fsr1" : "");
+            upscaler.Choices = new[] { "off|Smooth (default)", "fsr1|AMD FSR 1" };
+            var sharpen = Add("fsr_sharpness", "Display", "FSR 1 sharpening",
+                "How much FSR 1 sharpens after upscaling. Only used with AMD FSR 1.", OptKind.Choice, "0.2",
+                OptTarget.Game, v => v == "0.2" ? "" : "AC_FSR_SHARPNESS=" + v);
+            sharpen.Choices = new[] { "0|Strong", "0.2|Normal (default)", "0.5|Light", "1|Very light" };
+            Add("hud_edges", "Display", "Ultrawide: HUD at the screen's edges (experimental)",
+                "With a render resolution wider than 16:9 (21:9, 32:9, 48:9), the HUD's side panels (health, Legion, " +
+                "minimap, objectives, tutorials) move to the left and right edges of the screen instead of staying in " +
+                "the middle 16:9 area. Markers over characters and targets, subtitles and menus stay where they are. " +
+                "Also in the game's menu (F1), where it changes at once. In the game, F2 opens the HUD layout: how far " +
+                "each corner's panels move toward the edge, and up or down.",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_HUD_EDGES=1"));
             Add("handheld", "Display", "Handheld mode: render at 1280x720",
                 "The game runs as on a Switch out of its dock: it renders at 1280x720 instead of 1600x900, for GPUs " +
                 "that cannot hold 60 fps. The picture is scaled to the window as before. Applies the next time you press Play.",

@@ -10,6 +10,7 @@ volatile LONG ac_menu_open;                    /* 1 while the menu is up */
 volatile LONG ac_menu_close_request;           /* the menu asks to close (its button, B): app_pump closes it */
 volatile LONG ac_menu_quit_request;            /* Quit game, confirmed: app_pump closes the window, as Alt+F4 does */
 volatile LONG ac_menu_modal;                   /* 1 while the menu asks whether to quit: Esc answers it, not the menu */
+volatile LONG ac_menu_page;                    /* what the menu shows: 0 the settings (F1), 1 the HUD layout (F2) */
 typedef struct { int kind,a,b; } AcMenuEvent;  /* kind 1 mouse move (x, y), 2 button (0 left 1 right 2 middle, down),
                                                 * 3 wheel (notches * 120, horizontal), 4 key (virtual key, down),
                                                 * 5 character (UTF-16 unit) */
@@ -21,6 +22,8 @@ volatile int ac_prompt_device;    /* last used (auto icons): 0 keyboard/mouse, 1
 volatile int ac_mouse_look=-1;    /* AC_MOUSE_LOOK (button prompts show a mouse for the camera) */
 volatile int ac_cutscene_30=-1;   /* AC_CUTSCENE_FPS=30, from the next cutscene on */
 volatile int ac_ignore_focus=-1;  /* AC_IGNORE_FOCUS=1 */
+volatile int ac_upscaler=-1;      /* AC_UPSCALER=fsr1 (las/nvn/vulkan/exec.c post_process) */
+volatile float ac_fsr_sharpness=-1;  /* AC_FSR_SHARPNESS */
 volatile int ac_uncapped=-1;      /* AC_UNCAPPED=1: no 60 FPS pacing in gameplay (nvn_hle.h nvn_present_pace) */
 volatile int ac_in_cutscene;      /* (svc #0xB1: the game reports its cutscene mode each frame) */
 volatile LONG ac_game_steps;      /* (svc #0xB1 calls: game frames, for input recordings, input_record.h) */
@@ -28,6 +31,17 @@ volatile int ac_fps_counter=-1;  /* AC_FPS_COUNTER=1: frames per second in the c
 volatile int ac_fps_corner=-1;   /* AC_FPS_CORNER=tl, tr, bl, br: the corner it is drawn in (0-3; issue #30) */
 volatile int ac_title_credit=-1;  /* "Port by Puddz" on the title screen (las/menu.cpp); AC_TITLE_CREDIT=0: off */
 volatile int ac_title_own_twin=-1;  /* AC_TITLE_OWN_TWIN=1: the title shows the player's twin (svc #0xB4) */
+volatile int ac_hud_edges=-1;    /* AC_HUD_EDGES=1: wider than 16:9, the HUD's side panels at the screen's edges (exec.c) */
+int ac_hud_edges_on(void) {
+ if(ac_hud_edges<0) {char v[4];DWORD n=GetEnvironmentVariableA("AC_HUD_EDGES",v,sizeof(v));ac_hud_edges=n==1 && v[0]=='1';}
+ return ac_hud_edges;
+}
+/* The HUD layout (F2, las/menu.cpp; userdata\launcher.ini hud_layout, or AC_HUD_LAYOUT; the menu reads it before
+ * the first frame): with AC_HUD_EDGES, for each corner's panels (top left, bottom left, top right, bottom right) how far
+ * they move toward the screen's edge (0-100% of the band beside the 16:9 area) and down (in 1/720ths of the height;
+ * negative: up). (las/nvn/vulkan/exec.c) */
+volatile int ac_hud_layout[4][2]={{100,0},{100,0},{100,0},{100,0}};
+volatile long ac_hud_seen;       /* the gameplay HUD was drawn wider than 16:9 (exec.c): the menu says once that F2 places it */
 volatile int ac_swap_ab=-1;      /* AC_SWAP_AB=1: the controllers' A and B swapped (hid_service.h, las/button_prompts.c) */
 
 /* Swap A and B: the bottom face button (Xbox A, PlayStation cross) is the Switch's A, which confirms and talks, and the
