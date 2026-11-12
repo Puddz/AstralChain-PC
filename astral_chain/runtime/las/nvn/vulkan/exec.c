@@ -4206,6 +4206,228 @@ static uint16_t half_bits(float f) {  // (round to nearest)
     }
     return (uint16_t)((sign | ((uint32_t)e << 10) | (m >> 13)) + ((m >> 12) & 1));
 }
+// ---- temporal upscaling (temporal.c; AC_UPSCALER=fsr). The game's passes are known by their fragment shaders
+// (g_cur_fs_hash): the tonemap pass names the scene's colour and depth, and filtersmaablend - the pass that scales the
+// scene into the display-size picture - is where the upscaler runs instead. The SMAA passes before it are not needed
+// then.
+//
+// Motion vectors. The game has a velocity map for its motion blur, but it does not do: 8 bits, and its camera part is
+// a blur strength (weighted by distance), not a motion. So:
+//  - the camera's motion is computed from the depth and the view-projection of this frame and the last one (a model
+//    shader's cbuf 3 = binding 0: rows 0-3 view, 4-7 projection, 8-11 view-projection, 12-15 inverse view);
+//  - the models' own motion (modelshadervelocitymap: rg = (ndc now - ndc before - 0.001) * 10 + 0.5, from the bones
+//    and matrices of both frames) is drawn a second time, into a float target of ours whose alpha tells the pixels it
+//    covered (the shader writes alpha 0 over our 1). The second draws run after the game's, as one pass.
+typedef struct {
+    float near_z, fov_y;
+    float reproject[16];  // this frame's clip space -> the last frame's (row-major)
+    bool cut;             // the camera jumped: drop the history
+    bool have;            // reproject is valid
+    bool minus_one;       // clip z is -1..1 (depth = z / 2 + 0.5), else 0..1
+} TuCamera;
+int vk_tu_mode(void);
+bool vk_tu_running(void);
+bool vk_tu_jitter(uint32_t w, uint32_t h, float *jx, float *jy);
+bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, TexBackend *objvel, TexBackend *dst, const TuCamera *cam);
+#define TU_FS_VELOCITY 0x86d60691915c3e23ull    // modelshadervelocitymap
+#define TU_FS_TONEMAP 0xa30fe6294629120full     // filtershadertonemap
+#define TU_FS_SMAA_EDGE 0x2abcda74b0341d56ull   // filtersmaaedge
+#define TU_FS_SMAA_BLEND 0x844ba4e1a9511b62ull  // filtersmaablend
+typedef struct { __typeof__(st) s; CmdRec r; bool indexed; } TuDup;
+static struct {
+    NvnTexture *scene, *depth;
+    uint64_t scene_frame, cam_frame, objvel_frame;
+    double vp[16], last_vp[16];  // the view-projection seen this frame / at the last upscale
+    bool have_vp, have_last;
+    float fwd[3], eye[3], last_fwd[3], last_eye[3];
+    float near_z, fov_y;
+    NvnTexture *skip_target;  // filtersmaaweight: the draw after a skipped filtersmaaedge, into the same target
+    NvnTexture objvel;        // our float velocity target (the models' second draws)
+    TuDup *dup;
+    int ndup, cap_dup;
+    bool in_dup;
+} tuh;
+
+// The scene camera, once a frame, from the first scene draw whose vertex shader reads cbuf 3.
+static void tu_camera(void) {
+    uint64_t pf = renderer_present_count() + 1;
+    if (tuh.cam_frame == pf || !st.ubuf[0][0].addr || st.ubuf[0][0].size < 64 * 4) return;
+    const float *c = (const float *)(uintptr_t)st.ubuf[0][0].addr;
+    const float *pr_ = c + 16, *vp = c + 32, *iv = c + 48;
+    // a perspective view-projection: its w row is the view direction
+    float n2 = vp[12] * vp[12] + vp[13] * vp[13] + vp[14] * vp[14];
+    if (!(n2 > 1e-6f) || !isfinite(n2) || pr_[15] != 0 || !(pr_[5] > 0)) return;
+    for (int i = 0; i < 16; i++) tuh.vp[i] = vp[i];
+    float inv = 1.0f / sqrtf(n2);
+    tuh.fwd[0] = vp[12] * inv; tuh.fwd[1] = vp[13] * inv; tuh.fwd[2] = vp[14] * inv;
+    tuh.eye[0] = iv[3]; tuh.eye[1] = iv[7]; tuh.eye[2] = iv[11];
+    // (projection rows: y = (0, f, 0, 0); z = (0, 0, a, b), w = (0, 0, -1, 0): depth 0..1 = 1 - near / distance when
+    // a = -1, the game's infinite far plane)
+    tuh.fov_y = 2 * atanf(1 / pr_[5]);
+    float a = pr_[10], b = pr_[11];
+    float zn = nvn_depth_mode() == 0 ? b / (a - 1) : b / a;
+    tuh.near_z = zn > 0 && isfinite(zn) ? zn : 0.1f;
+    tuh.have_vp = true;
+    tuh.cam_frame = pf;
+}
+
+static bool tu_invert(const double *m, double *o) {
+    double a[4][8];
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 8; j++) a[i][j] = j < 4 ? m[i * 4 + j] : (j - 4 == i);
+    for (int c = 0; c < 4; c++) {
+        int best = c;
+        for (int r = c + 1; r < 4; r++) if (fabs(a[r][c]) > fabs(a[best][c])) best = r;
+        if (fabs(a[best][c]) < 1e-12) return false;
+        if (best != c) for (int j = 0; j < 8; j++) { double t = a[c][j]; a[c][j] = a[best][j]; a[best][j] = t; }
+        double d = 1 / a[c][c];
+        for (int j = 0; j < 8; j++) a[c][j] *= d;
+        for (int r = 0; r < 4; r++) {
+            if (r == c) continue;
+            double f = a[r][c];
+            if (f != 0) for (int j = 0; j < 8; j++) a[r][j] -= f * a[c][j];
+        }
+    }
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) o[i * 4 + j] = a[i][j + 4];
+    return true;
+}
+
+// At the upscale: this frame's clip space -> the last upscaled frame's, and whether the camera jumped.
+static void tu_camera_step(TuCamera *cam) {
+    uint64_t pf = renderer_present_count() + 1;
+    memset(cam, 0, sizeof *cam);
+    cam->near_z = tuh.near_z; cam->fov_y = tuh.fov_y;
+    cam->minus_one = nvn_depth_mode() == 0;
+    bool now = tuh.have_vp && tuh.cam_frame == pf;
+    double inv[16];
+    if (now && tuh.have_last && tu_invert(tuh.vp, inv)) {
+        for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+            double v = 0;
+            for (int k = 0; k < 4; k++) v += tuh.last_vp[i * 4 + k] * inv[k * 4 + j];
+            cam->reproject[i * 4 + j] = (float)v;
+        }
+        cam->have = true;
+        float dot = tuh.fwd[0] * tuh.last_fwd[0] + tuh.fwd[1] * tuh.last_fwd[1] + tuh.fwd[2] * tuh.last_fwd[2];
+        float dx = tuh.eye[0] - tuh.last_eye[0], dy = tuh.eye[1] - tuh.last_eye[1], dz = tuh.eye[2] - tuh.last_eye[2];
+        float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+        cam->cut = dot < 0.9f || dist > 5.0f;
+        static int log_ = -1;
+        if (log_ < 0) { const char *e = getenv("AC_UPSCALE_LOG"); log_ = e ? atoi(e) : 0; }
+        if (log_ && (cam->cut || pf % 120 == 0 || log_ > 1))
+            LOG("[tu] frame %llu near %.3f fov %.3f eye %.2f %.2f %.2f moved %.3f turn %.5f, %d model draws%s\n", (unsigned long long)pf,
+                tuh.near_z, tuh.fov_y, tuh.eye[0], tuh.eye[1], tuh.eye[2], dist, dot, tuh.objvel_frame == pf ? 1 : 0, cam->cut ? " CUT" : "");
+    } else {
+        cam->cut = true;  // (no camera now or before: nothing to reproject with)
+    }
+    if (now) {
+        memcpy(tuh.last_vp, tuh.vp, sizeof tuh.vp);
+        memcpy(tuh.last_fwd, tuh.fwd, sizeof tuh.fwd);
+        memcpy(tuh.last_eye, tuh.eye, sizeof tuh.eye);
+    }
+    tuh.have_last = now;
+}
+
+static void draw_(CmdRec *r, bool indexed);
+
+// The models' velocity draws again, into our float target (alpha 1 where no model is).
+static void tu_dup_flush(void) {
+    if (!tuh.ndup || tuh.in_dup) return;
+    NvnTexture *like = tuh.dup[0].s.rt.color[0];
+    if (!like) { tuh.ndup = 0; return; }
+    if (tuh.objvel.width != like->width || tuh.objvel.height != like->height || !tuh.objvel.backend) {
+        // (a size change leaves the old image to the texture list's teardown)
+        tuh.objvel = *like;
+        tuh.objvel.format = 0x29;  // RGBA16F
+        tuh.objvel.flags &= ~8u;   // (not one of the game's own targets: no per-frame clear, no scaling)
+        tuh.objvel.addr = 0; tuh.objvel.pool = NULL; tuh.objvel.pool_offset = 0; tuh.objvel.backend = NULL;
+        strlcpy(tuh.objvel.label, "tu-objvel", sizeof tuh.objvel.label);
+    }
+    __typeof__(st) *keep = malloc(sizeof st);
+    *keep = st;
+    uint64_t keep_hash = g_cur_fs_hash;
+    vk_end_pass();
+    TexBackend *b = vk_tex(&tuh.objvel, true);
+    if (b && b->image) {
+        VkCommandBuffer cb = vk_cmd();
+        vk_full_barrier(cb);
+        VkClearColorValue cv = {.float32 = {0, 0, 0, 1}};
+        VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, &cv, 1, &range);
+        tuh.in_dup = true;
+        for (int i = 0; i < tuh.ndup; i++) {
+            st = tuh.dup[i].s;
+            st.rt.color[0] = &tuh.objvel;
+            st.rt.has_cview[0] = 0;
+            st.rt.ncolor = 1;
+            st.rt_dirty = i == 0;
+            draw_(&tuh.dup[i].r, tuh.dup[i].indexed);
+        }
+        tuh.in_dup = false;
+        vk_end_pass();
+        tuh.objvel_frame = renderer_present_count() + 1;
+    }
+    st = *keep;
+    free(keep);
+    st.rt_dirty = true;
+    g_cur_fs_hash = keep_hash;
+    tuh.ndup = 0;
+}
+
+// True: the draw is done (replaced by the upscaler, or not needed).
+static bool tu_draw(Prog *pr, CmdRec *r, bool indexed) {
+    if (tuh.in_dup) return false;
+    uint64_t pf = renderer_present_count() + 1, h = g_cur_fs_hash;
+    if (h == TU_FS_VELOCITY) {
+        if (vk_tu_running() && st.rt.ncolor && st.rt.color[0] && tuh.ndup < 4096) {
+            if (tuh.ndup == tuh.cap_dup) {
+                tuh.cap_dup = tuh.cap_dup ? tuh.cap_dup * 2 : 256;
+                tuh.dup = realloc(tuh.dup, (size_t)tuh.cap_dup * sizeof *tuh.dup);
+            }
+            TuDup *d = &tuh.dup[tuh.ndup++];
+            d->s = st;
+            memcpy(&d->r, r, sizeof d->r);
+            d->indexed = indexed;
+        }
+        return false;
+    }
+    if (tuh.ndup) tu_dup_flush();  // (the game's velocity draws are over)
+    if (tuh.skip_target) {
+        bool same = st.rt.ncolor && st.rt.color[0] == tuh.skip_target && h != TU_FS_SMAA_BLEND && h != TU_FS_SMAA_EDGE;
+        tuh.skip_target = NULL;
+        if (same) return true;
+    }
+    if (h == TU_FS_TONEMAP) {
+        if (st.rt.ncolor && st.rt.color[0] && st.rt.depth) { tuh.scene = st.rt.color[0]; tuh.depth = st.rt.depth; tuh.scene_frame = pf; }
+        return false;
+    }
+    if (h == TU_FS_SMAA_EDGE) {
+        if (!vk_tu_running() || tuh.scene_frame != pf) return false;
+        tuh.skip_target = st.rt.ncolor ? st.rt.color[0] : NULL;
+        return true;
+    }
+    if (h != TU_FS_SMAA_BLEND || tuh.scene_frame != pf || !st.rt.ncolor || !st.rt.color[0]) return false;
+    NvnTexture *dt = st.rt.color[0];
+    bool reads_scene = false;
+    for (int i = 0; i < pr->fi->ntex && i < 8; i++)
+        if (shader_texture_object(1, &pr->fi->tex[i]) == tuh.scene) reads_scene = true;
+    if (!reads_scene) return false;
+    vk_end_pass();
+    renderer_mark_gpu_owned(dt);
+    if (!vk_view(dt, &st.rt.cview[0], st.rt.has_cview[0], true, TEXTYPE_2D)) return false;
+    TuCamera cam;
+    tu_camera_step(&cam);
+    TexBackend *color = tuh.scene->backend, *depth = tuh.depth->backend, *dst = dt->backend;
+    TexBackend *objvel = tuh.objvel_frame == pf ? tuh.objvel.backend : NULL;
+    st.rt_dirty = true;
+    if (!vk_tu_upscale(vk_cmd(), color, depth, objvel, dst, &cam)) return false;
+    // (the picture now holds this frame's scene: the pass the HUD's draws begin must not clear it)
+    renderer_texture_level_fresh(dt);
+    renderer_texture_frame_fresh(dt);
+    renderer_texture_first_write(dt);
+    snap_reason = "upscale";
+    snapshots_invalidate(dt);
+    return true;
+}
+
 static void draw_(CmdRec *r, bool indexed) {
     if (prof) prof_tp_ = SDL_GetTicksNS();
     if (!st.program) { SKIPPED(); return; }
@@ -4271,6 +4493,7 @@ static void draw_(CmdRec *r, bool indexed) {
         extern void widescreen_scene_ubo(const float *u, uint64_t size);  // (the camera's view-projection)
         if (st.ubuf[0][5].addr) widescreen_scene_ubo((const float *)(uintptr_t)st.ubuf[0][5].addr, st.ubuf[0][5].size);
     }
+    if (vk_tu_mode() && tu_draw(pr, r, indexed)) return;
     if (g_debug_frame) debug_draw(pr, r, indexed);
     {   // LARECOMP_WATCH_FS=<fragment stage hash>: log that shader's draws (blend, constants) in every frame
         static uint64_t watch = 1;
@@ -4646,6 +4869,13 @@ static void draw_(CmdRec *r, bool indexed) {
             hud_shift_py = down * (float)st.rt.color[0]->height / 720.0f;
             vx += hud_shift_px * vp_sx;
             vy += hud_shift_py * vp_sy;
+        }
+        if (st.ds[0] && st.rt.depth && vk_tu_mode()) {  // (temporal upscaling: the scene's geometry, a sub-pixel off)
+            float jx, jy;
+            if (vk_tu_jitter(st.rt.depth->width, st.rt.depth->height, &jx, &jy)) {
+                vx += jx; vy += jy;
+                if ((pr->vi->cbuf_mask >> 3) & 1) tu_camera();
+            }
         }
         set_viewport(vx, vy, vw, vp[3] * vp_sy, zn, zf);
         if (g_debug_frame) {
@@ -5284,7 +5514,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
     // (0 sharpest, 2 softest; default 0.2, AMD's). Read every frame: the in-game menu changes them (live_settings.h).
     extern volatile int ac_upscaler;
     extern volatile float ac_fsr_sharpness;
-    if (ac_upscaler < 0) { const char *u = getenv("AC_UPSCALER"); ac_upscaler = u && !strcmp(u, "fsr1"); }
+    if (ac_upscaler < 0) { const char *u = getenv("AC_UPSCALER"); ac_upscaler = u && !strcmp(u, "fsr1"); }  // ("fsr": temporal.c)
     if (ac_fsr_sharpness < 0) {
         const char *sh = getenv("AC_FSR_SHARPNESS");
         float s = sh ? (float)atof(sh) : 0.2f;

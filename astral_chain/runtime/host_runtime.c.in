@@ -111,6 +111,24 @@ static int heap_gpu_pinned;
  * size below that is ignored there. */
 static int res_w=-1,res_h,res_fixed;  /* res_fixed: AC_RESOLUTION given (no dynamic resolution) */
 static uint64_t res_pool;
+/* AC_UPSCALER=fsr (temporal upscaling, las/nvn/vulkan/temporal.c; issue #31): the 3D scene is drawn at the render
+ * resolution divided by AC_UPSCALE_QUALITY's ratio (native 1, quality 1.5, balanced 1.7, performance 2, ultra 3) and
+ * the upscaler brings it to the render resolution, where the HUD is drawn. The game has this split itself: its
+ * dynamic resolution levels are the scene's sizes under one display size (svc #0xB3). res_scene_w = 0: off. */
+static int res_scene_w,res_scene_h;
+static void res_scene_config(void) {
+ char u[16],q[24];DWORD un=GetEnvironmentVariableA("AC_UPSCALER",u,sizeof(u));
+ if(!un || un>=sizeof(u) || strcmp(u,"fsr")) return;
+ DWORD qn=GetEnvironmentVariableA("AC_UPSCALE_QUALITY",q,sizeof(q));
+ double ratio=1.5;
+ if(qn && qn<sizeof(q)) ratio=!strcmp(q,"native")?1.0:!strcmp(q,"balanced")?1.7:!strcmp(q,"performance")?2.0:!strcmp(q,"ultra")?3.0:1.5;
+ int dw=res_w<1600?1600:res_w,dh=res_w<1600?900:res_h;  /* (the display size: svc #0xB3) */
+ res_scene_w=(int)(dw/ratio+0.5)&~1;res_scene_h=(int)(dh/ratio+0.5)&~1;
+ if(res_scene_w<320) res_scene_w=320;
+ if(res_scene_h<180) res_scene_h=180;
+ res_fixed=1;
+ printf("[app] temporal upscaling: the scene at %dx%d, upscaled to %dx%d\n",res_scene_w,res_scene_h,dw,dh);fflush(stdout);
+}
 static void res_config(void) {
  if(res_w>=0) return;
  char v[32];DWORD n=GetEnvironmentVariableA("AC_RESOLUTION",v,sizeof(v));int w=0,h=0;
@@ -120,7 +138,7 @@ static void res_config(void) {
   char hh[4];DWORD hn=GetEnvironmentVariableA("AC_HANDHELD",hh,sizeof(hh));
   if(hn==1 && hh[0]=='1' && (res_w<1280 || res_h<720)) {
    printf("[app] render resolution %dx%d ignored: handheld mode renders at 1280x720\n",res_w,res_h);fflush(stdout);
-   res_w=1600;res_h=900;res_fixed=0;return;
+   res_w=1600;res_h=900;res_fixed=0;res_scene_config();return;
   }
   if((uint64_t)res_w*res_h>8640000ull) {
    double k=sqrt(8640000.0/((double)res_w*res_h));res_w=(int)(res_w*k)&~1;res_h=(int)(res_h*k)&~1;
@@ -130,6 +148,7 @@ static void res_config(void) {
   printf("[app] render resolution %dx%d (AC_RESOLUTION), render target pool %llu MB\n",res_w,res_h,
          (unsigned long long)(res_pool>>20));fflush(stdout);
  }
+ res_scene_config();
 }
 /* Wider than 16:9 (21:9, 32:9, 48:9): by more than 1%, so 854x480 (16:9 rounded to whole pixels) is not. */
 static int res_wide(int64_t w,int64_t h) {return w*900>h*1616;}
@@ -709,6 +728,8 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   res_config();
   int custom=res_fixed;
   int32_t w=res_w,h=res_h,l1w=custom?w:1440,l1h=custom?h:810,l2w=custom?w:1280;
+  int32_t lw=res_scene_w?res_scene_w:w,lh=res_scene_w?res_scene_h:h;  /* (level 0, or every level with an upscaler) */
+  if(res_scene_w) {l1w=l2w=lw;l1h=lh;}
   uint64_t at=pc-0x7000010000ull;
   /* The display size and the render targets are at least the game's 1600x900: the game also makes 1280x720 (handheld
    * size) textures in their memory. A smaller size (for slow GPUs) is only the level size: the 3D view is drawn at it
@@ -721,7 +742,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    case 0x4328C8:SETW(8,th);return;
    case 0x40D5E4:case 0x40FB04:SETW(9,tw);return;
    case 0x40D5F0:case 0x40FB14:SETW(9,th);return;
-   case 0x40F184:SETW(1,docked?w:(uint32_t)c->x[19]);SETW(2,docked?h:(uint32_t)c->x[20]);return;
+   case 0x40F184:SETW(1,docked?lw:(uint32_t)c->x[19]);SETW(2,docked?lh:(uint32_t)c->x[20]);return;
    case 0x40F1A4:SETW(20,630);SETW(22,l1h);SETW(1,docked?l1w:1024);SETW(2,docked?l1h:630);return;
    case 0x40F1D0:SETW(1,docked?l2w:800);SETW(2,docked?l1h:630);return;
    case 0x40E0B0:SETW(8,res_pool);return;  /* the render target pool's size */
