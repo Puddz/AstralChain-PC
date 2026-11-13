@@ -2,6 +2,23 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-13**
+
+- **F3 hides the HUD** (issue #35; *not yet confirmed in play*): in the game, **F3** hides everything the game draws
+  over the scene (HUD, markers, subtitles, button prompts, its menus) for screenshots, and **F3** again shows it. A
+  line at the top says which for a moment. It is not saved: the HUD is back the next time you start. In scripted runs
+  the HUD, the Legion wheel and the title screen's text were gone and the title's video stayed.
+- **Anisotropic filtering** (issue #33; *not yet confirmed in play*): **Settings > Display > Anisotropic filtering**
+  (and the F1 menu; applies at the next start): 4x, 8x or 16x for textures seen at a slant, such as the ground in the
+  distance. The default is the game's own (2x or 4x on some surfaces). It is applied to the textures the game repeats
+  across surfaces, not to every texture: with all of them at 16x, red speckles followed the edges in the scene. In the
+  one dark scene tested here the picture was clean and the gain was small.
+- **Clearer names for the scaling options** (issue #34): **Upscaling** is now **Window scaling** (how the finished
+  picture is enlarged to the window; on the `dlss-fsr` branch it is separate from DLSS and FSR 3.1 / 4), and its
+  sharpening is **Window scaling: FSR 1 sharpening**. Options that do nothing with the current choice (a sharpening
+  whose upscaler is not picked, the frame rate's corner with the frame rate off) are greyed out in the launcher and in
+  the F1 menu. **Ultrawide: HUD at the screen's edges** is no longer marked experimental.
+
 **2026-11-12**
 
 - **Render resolutions, AMD FSR 1 and ultrawide are now in the main version:** the `upscaling` branch was merged
