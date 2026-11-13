@@ -1347,6 +1347,16 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     if (si.maxLod < si.minLod) si.maxLod = si.minLod;
     si.mipLodBias = d->lod_bias;
     if (d->max_aniso > 1) { si.anisotropyEnable = VK_TRUE; si.maxAnisotropy = fminf(d->max_aniso, 16); }
+    // AC_ANISO=2..16 (the launcher's Anisotropic filtering; issue #33): at least that much on the samplers the game
+    // itself filters anisotropically (2x and 4x) and on the other mip-filtered ones that repeat a texture (surfaces,
+    // as the ground). Not on the clamped ones: those read screen-size and lookup textures (with all of them at 16x,
+    // red speckles followed every edge in the scene).
+    static float aniso = -1;
+    if (aniso < 0) { const char *e = getenv("AC_ANISO"); aniso = e ? (float)atof(e) : 0; if (aniso < 2 || aniso > 16) aniso = 0; }
+    bool repeats = (d->wrap[0] == 1 || d->wrap[0] == 6) && (d->wrap[1] == 1 || d->wrap[1] == 6);
+    if (aniso > si.maxAnisotropy && !d->compare_mode && (d->max_aniso > 1 || ((mf == 3 || mf == 5) && d->mag_filter == 1 && repeats))) {
+        si.anisotropyEnable = VK_TRUE; si.maxAnisotropy = aniso;
+    }
     static float lodmin = -1;
     if (lodmin < 0) lodmin = getenv("LARECOMP_LOD_MIN") ? (float)atof(getenv("LARECOMP_LOD_MIN")) : 0;
     if (lodmin > 0 && mf > 1) si.minLod = fmaxf(si.minLod, lodmin);
