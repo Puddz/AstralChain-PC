@@ -208,6 +208,15 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
    }
    return 0;
   }
+  /* F3 (unless it is a game key): the game's HUD and menus are not drawn, for screenshots; again: they are (exec.c) */
+  if(wparam==VK_F3 && !hid_key_mapped[VK_F3] && !ac_menu_open) {
+   if(down && !repeat) {
+    LONG hidden=!ac_hud_hidden;
+    InterlockedExchange(&ac_hud_hidden,hidden);ac_hud_hidden_tick=GetTickCount64();
+    printf("[hud] %s\n",hidden ? "hidden" : "shown");fflush(stdout);
+   }
+   return 0;
+  }
   if(ac_menu_open && wparam!=VK_F11 && !(wparam==VK_RETURN && (lparam&(1<<29)))) {
    menu_push(4,(int)wparam,down);
    if(message==WM_SYSKEYDOWN || message==WM_SYSKEYUP) return DefWindowProcW(window,message,wparam,lparam);  /* (Alt+F4) */

@@ -35,6 +35,8 @@ extern "C" {
 extern volatile long ac_menu_open, ac_menu_close_request, ac_menu_quit_request, ac_menu_modal, ac_menu_page;
 extern volatile int ac_hud_layout[4][2];                 // (live_settings.h: the F2 HUD layout)
 extern volatile long ac_hud_seen;
+extern volatile LONG ac_hud_hidden;                      // (live_settings.h: F3, the game's HUD is not drawn)
+extern volatile unsigned long long ac_hud_hidden_tick;
 struct AcMenuEvent { int kind, a, b; };
 extern AcMenuEvent ac_menu_events[256];
 extern volatile long ac_menu_head, ac_menu_tail;
@@ -88,9 +90,14 @@ std::vector<Opt> opts = {
      "1600x900 is the Switch's (with its dynamic resolution). The smaller sizes are for slow GPUs; 21:9 and 32:9 for ultrawide screens, 48:9 for three screens side by side.",
      CHOICE, "1600x900", "854x480|854x480 (480p);960x540|960x540 (540p);1280x720|1280x720 (720p);1600x900|1600x900 (default);1920x1080|1920x1080;2560x1440|2560x1440;3840x2160|3840x2160;"
      "2560x1080|2560x1080 (21:9);3440x1440|3440x1440 (21:9);3840x1080|3840x1080 (32:9);5120x1440|5120x1440 (32:9);5760x1080|5760x1080 (48:9);7680x1440|7680x1440 (48:9, drawn at 6788x1272)", 0, 0, false},
-    {"upscaler", "Display", "Upscaling (experimental)", "Only when the window is larger than the picture.",
+    {"upscaler", "Display", "Window scaling",
+     "How the finished picture is enlarged when the window or screen is larger than the render resolution. It is not "
+     "DLSS or FSR 3.1 / 4 (below), which rebuild the 3D scene.",
      CHOICE, "off", "off|Smooth (default);fsr1|AMD FSR 1", 0, 0, true},
-    {"fsr_sharpness", "Display", "FSR 1 sharpening", nullptr, CHOICE, "0.2", "0|Strong;0.2|Normal (default);0.5|Light;1|Very light", 0, 0, true},
+    {"fsr_sharpness", "Display", "Window scaling: FSR 1 sharpening", nullptr, CHOICE, "0.2", "0|Strong;0.2|Normal (default);0.5|Light;1|Very light", 0, 0, true},
+    {"aniso", "Display", "Anisotropic filtering",
+     "Keeps textures seen at a slant sharp (the ground in the distance). The game's own: as on the Switch.",
+     CHOICE, "0", "0|The game's own (default);4|4x;8|8x;16|16x", 0, 0, false},
     {"temporal", "Display", "Anti-aliasing and upscaling (experimental)",
      "The game's own: SMAA. DLSS (NVIDIA RTX) and FSR draw the 3D scene smaller (the quality below) and rebuild it at the "
      "render resolution from several frames; the HUD stays at the render resolution. FSR 4 on Radeon GPUs that have it, "
@@ -101,7 +108,7 @@ std::vector<Opt> opts = {
      CHOICE, "quality", "native|Native (100%, anti-aliasing only);quality|Quality (67%, default);balanced|Balanced (59%);"
      "performance|Performance (50%);ultra|Ultra performance (33%)", 0, 0, false},
     {"temporal_sharpness", "Display", "FSR 3.1 / 4 sharpening", nullptr, CHOICE, "0", "0|Off (default);0.3|Light;0.6|Normal;1|Strong", 0, 0, true},
-    {"hud_edges", "Display", "Ultrawide: HUD at the screen's edges (experimental)",
+    {"hud_edges", "Display", "Ultrawide: HUD at the screen's edges",
      "With a render resolution wider than 16:9, the HUD's side panels (health, minimap, objectives, tutorials) move to "
      "the edges of the screen. Markers over characters stay where they are. HUD layout (F2): how far each corner's "
      "panels move, and up or down.", CHECK, "0", nullptr, 0, 0, true},
@@ -147,6 +154,7 @@ void read_session() {
         else if (k == "handheld") v = env("AC_HANDHELD") == "1" ? "1" : "0";
         else if (k == "resolution") { std::string e = env("AC_RESOLUTION"); if (!e.empty()) v = e; }
         else if (k == "upscaler") v = env("AC_UPSCALER") == "fsr1" ? "fsr1" : "off";
+        else if (k == "aniso") { std::string e = env("AC_ANISO"); v = e == "4" || e == "8" || e == "16" ? e : "0"; }
         else if (k == "fsr_sharpness") { std::string e = env("AC_FSR_SHARPNESS"); if (!e.empty()) v = e; }
         else if (k == "temporal") { std::string e = env("AC_TEMPORAL"); v = e == "dlss" || e == "fsr" ? e : "off"; }
         else if (k == "temporal_quality") { std::string e = env("AC_TEMPORAL_QUALITY"); if (!e.empty()) v = e; }
@@ -381,6 +389,17 @@ void combo(Opt &o) {
 }
 
 bool picture_wide();
+Opt *find_opt(const char *key);
+
+// An option that does nothing with what another one is set to now (shown greyed out; issue #34).
+bool unused(const Opt &o) {
+    auto is = [](const char *key, const char *value) { Opt *p = find_opt(key); return p && p->value == value; };
+    if (!strcmp(o.key, "fsr_sharpness")) return !is("upscaler", "fsr1");
+    if (!strcmp(o.key, "temporal_quality")) return is("temporal", "off");
+    if (!strcmp(o.key, "temporal_sharpness")) return !is("temporal", "fsr");
+    if (!strcmp(o.key, "fps_corner")) return is("fps_counter", "0");
+    return false;
+}
 
 void draw(float scale) {
     ImGuiIO &io = ImGui::GetIO();
@@ -394,6 +413,7 @@ void draw(float scale) {
     ImGui::Begin("Astral Chain PC: settings", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_NoSavedSettings);
     ImGui::TextDisabled("F1 or Minus + Plus: back to the game. The game does not get your input while this is open.");
+    ImGui::TextDisabled("F3 in the game: hides the game's HUD and menus (for screenshots), and shows them again.");
     if (picture_wide()) {  // (the HUD layout's button is further down, under Display)
         ImGui::TextDisabled("Wide screen: the HUD's place is in");
         ImGui::SameLine();
@@ -404,6 +424,8 @@ void draw(float scale) {
     for (Opt &o : opts) {
         if (!group || strcmp(group, o.group)) { group = o.group; ImGui::Spacing(); ImGui::SeparatorText(group); }
         ImGui::PushID(o.key);
+        bool off = unused(o);
+        ImGui::BeginDisabled(off);
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(o.label);
         ImGui::SameLine(label_w);
@@ -416,6 +438,7 @@ void draw(float scale) {
             if (ImGui::SliderInt("##v", &v, o.lo, o.hi, "%d", ImGuiSliderFlags_AlwaysClamp)) set(o, std::to_string(v), false);
             if (ImGui::IsItemDeactivatedAfterEdit()) saved_ok = save(o.key, o.value);
         } else combo(o);
+        ImGui::EndDisabled();
         if (!strcmp(o.key, "hud_edges")) {
             ImGui::SetCursorPosX(label_w);
             if (ImGui::Button("HUD layout (F2)...")) InterlockedExchange(&ac_menu_page, 1);
@@ -626,6 +649,27 @@ void draw_hint(float w, float h, ULONGLONG now) {
     ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0, text);
     ImVec2 pos((w - ts.x) / 2, h * 0.055f);
     float t = (float)(now - hint_since), a = t < 400 ? t / 400 : t > 14000 ? (15000 - t) / 1000 : 1;
+    if (a < 0) a = 0;
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    float pad = size * 0.45f;
+    dl->AddRectFilled(ImVec2(pos.x - pad * 1.6f, pos.y - pad), ImVec2(pos.x + ts.x + pad * 1.6f, pos.y + ts.y + pad),
+                      ImGui::GetColorU32(ImVec4(0.055f, 0.067f, 0.11f, 0.8f * a)), size * 0.3f);
+    dl->AddText(f, size, pos, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.95f * a)), text);
+}
+
+// F3 (app_window.h; issue #35): says for 2.5 s that the game's HUD is hidden (and how to get it back) or shown again.
+bool hud_note_due(ULONGLONG now) {
+    ULONGLONG t = ac_hud_hidden_tick;
+    return t && now - t < 2500;
+}
+
+void draw_hud_note(float w, float h, ULONGLONG now) {
+    const char *text = ac_hud_hidden ? "HUD hidden: F3 shows it again" : "HUD shown";
+    float size = h * 0.026f;
+    ImFont *f = font ? font : ImGui::GetFont();
+    ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0, text);
+    ImVec2 pos((w - ts.x) / 2, h * 0.055f);
+    float t = (float)(now - ac_hud_hidden_tick), a = t < 200 ? t / 200 : t > 2000 ? (2500 - t) / 500 : 1;
     if (a < 0) a = 0;
     ImDrawList *dl = ImGui::GetForegroundDrawList();
     float pad = size * 0.45f;
@@ -1159,7 +1203,8 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     ULONGLONG tick = GetTickCount64();
     bool credit = credit_due(tick);
     bool fps = fps_due();
-    bool hint = !open && hint_due(tick);
+    bool note = !open && hud_note_due(tick);
+    bool hint = !open && !note && hint_due(tick);
     if (!open) {
         if (was_open || ac_menu_head != ac_menu_tail) {  // (closed: drop what came in, let go of keys)
             InterlockedExchange(&ac_menu_tail, ac_menu_head);
@@ -1168,7 +1213,7 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
             quit_asked = false;
             InterlockedExchange(&ac_menu_modal, 0);
         }
-        if ((!credit && !fps && !hint) || failed) return;
+        if ((!credit && !fps && !hint && !note) || failed) return;
         if (!inited) {
             if (!init()) { failed = true; return; }
             inited = true;
@@ -1182,6 +1227,7 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
         if (credit) draw_credit((float)w, (float)h, tick);
         if (fps) draw_fps((float)w, (float)h);
         if (hint) draw_hint((float)w, (float)h, tick);
+        if (note) draw_hud_note((float)w, (float)h, tick);
         ImGui::Render();
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);
         return;

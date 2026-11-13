@@ -134,7 +134,7 @@ namespace AstralChainLauncher
                 "graphics card has less to do " +
                 "(a slow processor is not helped). Larger sizes are sharper and need a faster GPU; 3840x2160 is " +
                 "the largest. The 21:9 and 32:9 sizes are for ultrawide screens, 48:9 for three screens side by side: the 3D view gets wider and the HUD " +
-                "stays 16:9 in the middle (untested on a real ultrawide monitor). Handheld mode keeps 1280x720 and ignores the sizes below it. " +
+                "stays 16:9 in the middle (or at the screen's edges: the option below). Handheld mode keeps 1280x720 and ignores the sizes below it. " +
                 "Applies the next time you press Play.", OptKind.Choice,
                 "1600x900", OptTarget.Game, v => v == "1600x900" ? "" : "AC_RESOLUTION=" + v);
             resolution.Choices = new[] { "854x480|854x480 (480p)", "960x540|960x540 (540p)", "1280x720|1280x720 (720p)",
@@ -142,16 +142,24 @@ namespace AstralChainLauncher
                 "3840x2160|3840x2160", "2560x1080|2560x1080 (21:9)", "3440x1440|3440x1440 (21:9)",
                 "3840x1080|3840x1080 (32:9)", "5120x1440|5120x1440 (32:9)",
                 "5760x1080|5760x1080 (48:9)", "7680x1440|7680x1440 (48:9, drawn at 6788x1272)" };
-            var upscaler = Add("upscaler", "Display", "Upscaling (experimental)",
-                "How the picture is enlarged to a bigger window or screen. Smooth: plain scaling (default). " +
+            var upscaler = Add("upscaler", "Display", "Window scaling",
+                "How the finished picture is enlarged when the window or screen is larger than the render resolution. " +
+                "Smooth: plain scaling (default). " +
                 "AMD FSR 1: edge-aware upscaling and sharpening, crisper on 1440p and 4K screens; works on any GPU. " +
-                "It has no effect when the window is not larger than the picture.", OptKind.Choice, "off",
+                "It has no effect when the window is not larger than the picture. It is not DLSS or FSR 3.1 / 4 " +
+                "(below), which rebuild the 3D scene, and can be used with them.", OptKind.Choice, "off",
                 OptTarget.Game, v => v == "fsr1" ? "AC_UPSCALER=fsr1" : "");
             upscaler.Choices = new[] { "off|Smooth (default)", "fsr1|AMD FSR 1" };
-            var sharpen = Add("fsr_sharpness", "Display", "FSR 1 sharpening",
-                "How much FSR 1 sharpens after upscaling. Only used with AMD FSR 1.", OptKind.Choice, "0.2",
+            var sharpen = Add("fsr_sharpness", "Display", "Window scaling: FSR 1 sharpening",
+                "How much FSR 1 sharpens after upscaling. Only used with AMD FSR 1 as the window scaling.", OptKind.Choice, "0.2",
                 OptTarget.Game, v => v == "0.2" ? "" : "AC_FSR_SHARPNESS=" + v);
             sharpen.Choices = new[] { "0|Strong", "0.2|Normal (default)", "0.5|Light", "1|Very light" };
+            var aniso = Add("aniso", "Display", "Anisotropic filtering",
+                "Keeps textures seen at a slant sharp, such as the ground in the distance. The game's own: what the " +
+                "game asks for, as on the Switch (default). 4x, 8x, 16x: at least that much on the textures the " +
+                "game repeats across surfaces; higher is sharper and costs a little GPU time. Applies the next time you press Play.",
+                OptKind.Choice, "0", OptTarget.Game, v => v == "4" || v == "8" || v == "16" ? "AC_ANISO=" + v : "");
+            aniso.Choices = new[] { "0|The game's own (default)", "4|4x", "8|8x", "16|16x" };
             var temporal = Add("temporal", "Display", "Anti-aliasing and upscaling (experimental)",
                 "The game's own: SMAA, with the 3D scene at the render resolution (default).\n" +
                 "NVIDIA DLSS and AMD FSR draw the 3D scene smaller (the quality below) and rebuild it at the render " +
@@ -175,12 +183,13 @@ namespace AstralChainLauncher
                 "FSR's own sharpening of its result. DLSS has none. Also in the in-game menu (F1), where it changes at once.",
                 OptKind.Choice, "0", OptTarget.Game, v => v == "0" ? "" : "AC_TEMPORAL_SHARPNESS=" + v);
             temporalSharpen.Choices = new[] { "0|Off (default)", "0.3|Light", "0.6|Normal", "1|Strong" };
-            Add("hud_edges", "Display", "Ultrawide: HUD at the screen's edges (experimental)",
+            Add("hud_edges", "Display", "Ultrawide: HUD at the screen's edges",
                 "With a render resolution wider than 16:9 (21:9, 32:9, 48:9), the HUD's side panels (health, Legion, " +
                 "minimap, objectives, tutorials) move to the left and right edges of the screen instead of staying in " +
                 "the middle 16:9 area. Markers over characters and targets, subtitles and menus stay where they are. " +
                 "Also in the game's menu (F1), where it changes at once. In the game, F2 opens the HUD layout: how far " +
-                "each corner's panels move toward the edge, and up or down.",
+                "each corner's panels move toward the edge, and up or down. F3 in the game hides the whole HUD (for " +
+                "screenshots) and shows it again.",
                 OptKind.Check, "0", OptTarget.Game, When("1", "AC_HUD_EDGES=1"));
             Add("handheld", "Display", "Handheld mode: render at 1280x720",
                 "The game runs as on a Switch out of its dock: it renders at 1280x720 instead of 1600x900, for GPUs " +
@@ -1506,6 +1515,11 @@ namespace AstralChainLauncher
                 y += help.Height + 8;
             }
             panel.Controls.Add(new Label { Location = new Point(0, y), Size = new Size(1, 1) });
+            // (an option that does nothing with what another is set to is greyed out; issue #34)
+            Depend("fsr_sharpness", "upscaler", v => v == "fsr1");
+            Depend("temporal_quality", "temporal", v => v != "off");
+            Depend("temporal_sharpness", "temporal", v => v == "fsr");
+            Depend("fps_corner", "fps_counter", v => v != "0");
 
             var defaults = new NeonButton { Text = "Defaults", Location = new Point(14, 596), Size = new Size(100, 34) };
             defaults.Click += (s, e) => LoadDefaults();
@@ -1520,6 +1534,17 @@ namespace AstralChainLauncher
             KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) DialogResult = DialogResult.Cancel; };
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
+        }
+
+        void Depend(string key, string on, Func<string, bool> used)
+        {
+            Control c, p;
+            if (!inputs.TryGetValue(key, out c) || !inputs.TryGetValue(on, out p) || !(p is ComboBox)) return;
+            var combo = (ComboBox)p;
+            Opt o = Options.All.First(x => x.Key == on);
+            EventHandler update = (s, e) => c.Enabled = used(o.Choices[Math.Max(0, combo.SelectedIndex)].Split('|')[0]);
+            combo.SelectedIndexChanged += update;
+            update(null, EventArgs.Empty);
         }
 
         void LoadDefaults()

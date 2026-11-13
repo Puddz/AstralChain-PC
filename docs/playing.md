@@ -48,6 +48,9 @@ menu closes the game, after asking first, so a controller alone is enough.
 the F1 menu, opens a window where you choose where the HUD's side panels go: for each corner, how far toward the
 screen's edge and how far up or down. F2, Esc or B close it.
 
+**Hide the HUD.** **F3** hides everything the game draws over the scene (HUD, markers, subtitles, button prompts and
+its menus) for screenshots; **F3** again shows it. It is not saved.
+
 F11 or Alt+Enter: fullscreen on or off (F11 and Alt stay game keys if you assign them in **Controls**).
 
 **Title screen.** The scene behind the title is a video of one of the twins on a roof, in the outfit of your newest

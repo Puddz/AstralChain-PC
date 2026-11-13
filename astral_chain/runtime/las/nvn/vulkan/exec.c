@@ -4498,6 +4498,19 @@ static void draw_(CmdRec *r, bool indexed) {
             if (last_hash == skip[i] || stage_hash(st.program, 1) == skip[i]) { SKIPPED(); return; }
         extern bool pot_level_active(void);
         if (last_hash == 0xa2177dbb72197bd9ull && pot_level_active()) { SKIPPED(); return; }
+        // No HUD (F3, app_window.h; AC_HUD_HIDDEN=1 from the start; issue #35): what the game draws with its UI shaders
+        // (uibaseshader, uitilingshader: the HUD, markers, subtitles, button prompts, its menus) is left out, for
+        // screenshots. Videos (the title screen, Bink movies) are drawn with the same vertex shader and stay.
+        extern volatile long ac_hud_hidden;
+        static int hud_env;
+        if (!hud_env) { hud_env = 1; const char *e = getenv("AC_HUD_HIDDEN"); if (e && e[0] == '1') ac_hud_hidden = 1; }
+        if (ac_hud_hidden) {
+            uint64_t vsh = stage_hash(st.program, 0);
+            if (vsh == 0xa09bf88abb4a04a7ull || vsh == 0x833ab16b25a072acull) {
+                uint64_t fsh = stage_hash(st.program, 1);
+                if (fsh != 0xf33b4e637319bed0ull && fsh != 0xef0a83385ad50ec7ull) { SKIPPED(); return; }
+            }
+        }
         if (g_debug_frame && getenv("LARECOMP_LOG_FSHASH")) LOG("[fshash] fs=%llx hash %016llx\n", (unsigned long long)fs, (unsigned long long)last_hash);
         g_cur_fs_hash = last_hash;
         extern void widescreen_backdrop_seen(uint64_t hash);

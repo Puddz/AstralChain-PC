@@ -43,6 +43,8 @@ int ac_hud_edges_on(void) {
  * negative: up). (las/nvn/vulkan/exec.c) */
 volatile int ac_hud_layout[4][2]={{100,0},{100,0},{100,0},{100,0}};
 volatile long ac_hud_seen;       /* the gameplay HUD was drawn wider than 16:9 (exec.c): the menu says once that F2 places it */
+volatile LONG ac_hud_hidden;     /* F3 (app_window.h; AC_HUD_HIDDEN=1 from the start): the game's HUD and menus are not drawn (exec.c; issue #35) */
+volatile unsigned long long ac_hud_hidden_tick;  /* when F3 last changed it (GetTickCount64): the menu says so for a moment */
 volatile int ac_swap_ab=-1;      /* AC_SWAP_AB=1: the controllers' A and B swapped (hid_service.h, las/button_prompts.c) */
 
 /* Swap A and B: the bottom face button (Xbox A, PlayStation cross) is the Switch's A, which confirms and talks, and the
