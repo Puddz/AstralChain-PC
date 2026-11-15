@@ -5,6 +5,11 @@ made by static recompilation: the game's ARM64 code is translated to C and compi
 program, and its graphics run on Vulkan. There is no emulator and no JIT
 ([how it works](docs/how-it-works.md)).
 
+> [!TIP]
+> **On Linux?** SrShadowy keeps a native Linux port based on this project:
+> **[SrShadowy/AstralChain-PC](https://github.com/SrShadowy/AstralChain-PC)**. It is a separate project, not made or
+> tested here, so please report problems with it on its own issues page.
+
 > [!IMPORTANT]
 > **No game files are included.** You need your own legally obtained copy of *Astral Chain*, dumped from your own
 > console: the base game, the v1.0.1 update and your `prod.keys`. How to dump them is not covered here, and requests
