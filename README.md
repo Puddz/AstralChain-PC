@@ -5,6 +5,11 @@ made by static recompilation: the game's ARM64 code is translated to C and compi
 program, and its graphics run on Vulkan. There is no emulator and no JIT
 ([how it works](docs/how-it-works.md)).
 
+> [!TIP]
+> **On Linux?** SrShadowy keeps a native Linux port based on this project:
+> **[SrShadowy/AstralChain-PC](https://github.com/SrShadowy/AstralChain-PC)**. It is a separate project, not made or
+> tested here, so please report problems with it on its own issues page.
+
 > [!NOTE]
 > **This is the `texture-dump` branch** (experimental): `main` plus texture dumping and texture
 > replacement for modders (issue #14). See [Texture mods](docs/texture-mods.md).
