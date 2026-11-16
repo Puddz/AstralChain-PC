@@ -1292,11 +1292,21 @@ static void pass_size(int *w, int *h) {
 // (AC_HUD_EDGES and the F2 HUD layout: the HUD element drawn now moves by this, in the target's pixels; a narrower
 // scissor moves with it)
 static float hud_shift_px, hud_shift_py;
+// (wider than 16:9: the element drawn now is kept in the 16:9 area in the middle, draw_'s ui_box. The game works out
+// a scissor narrower than the target as if the UI covered the whole width, x and width times the target's width /
+// 1280: the scissor goes into that area as the element does. Issue #38: the list of a case's results was cut off on
+// the left)
+static bool ui_box_scissor;
 static VkRect2D scissor_rect(void) {
     int w, h;
     pass_size(&w, &h);
     if (!w) return (VkRect2D){{0, 0}, {pass_w, pass_h}};
     int x = st.scissor[0][0], y = st.scissor[0][1], sw = st.scissor[0][2], sh = st.scissor[0][3];
+    if (ui_box_scissor && st.rt.ncolor && st.rt.color[0] && sw < 16384 && !(x <= 0 && x + sw >= (int)st.rt.color[0]->width)) {
+        double W = st.rt.color[0]->width, bw = st.rt.color[0]->height * 16.0 / 9.0;
+        double x0 = floor((W - bw) / 2 + x * bw / W), x1 = ceil((W - bw) / 2 + ((double)x + sw) * bw / W);
+        x = (int)x0; sw = (int)(x1 - x0);
+    }
     if (hud_shift_px != 0 && st.rt.ncolor && st.rt.color[0] && sw < 16384 && !(x <= 0 && x + sw >= (int)st.rt.color[0]->width)) x += (int)lroundf(hud_shift_px);
     if (hud_shift_py != 0 && st.rt.ncolor && st.rt.color[0] && sh < 16384 && !(y <= 0 && y + sh >= (int)st.rt.color[0]->height)) y += (int)lroundf(hud_shift_py);
     if (vp_sx != 1 || vp_sy != 1 || vp_ox != 0 || vp_oy != 0) {
@@ -4582,6 +4592,10 @@ static void draw_(CmdRec *r, bool indexed) {
         (ui_vs == 0xa09bf88abb4a04a7ull || ui_tiling) && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 48 * 4) {
         const float *p = (const float *)(uintptr_t)st.ubuf[0][0].addr;
         ui_box = fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
+        // (a picture the game draws UI into to look it up later, as the frame the photo on a case's results shows in,
+        // issue #38: it is read back by the layout's x over 1280 across its whole width, so what goes into it is not
+        // put in the middle)
+        if (ui_box && !renderer_texture_presented(st.rt.color[0])) ui_box = false;
         uint64_t fsh = stage_hash(st.program, 1);
         bool video = fsh == 0xf33b4e637319bed0ull || fsh == 0xef0a83385ad50ec7ull;
         if (ui_box && !video && r->x[2] <= 6 && k.stride[0] >= 16 && st.vbuf[0].addr && st.vbuf[0].size >= 4 * k.stride[0] &&
@@ -4647,12 +4661,20 @@ static void draw_(CmdRec *r, bool indexed) {
             }
         }
     }
+    // Effects drawn over the UI (issue #38: the rank badge that lights up beside a case's results) have their own
+    // shaders and are placed as the 2D UI is, in the 1280x720 layout over the whole picture: wider than 16:9 they go
+    // into the 16:9 area in the middle too, as the panel they belong to. They are drawn into the picture itself,
+    // without a depth buffer; the scene's own effects are not.
+    if (!ui_box && (ui_vs == 0xb5baa56b2673446aull || ui_vs == 0x0b479d98b0cba667ull) && !st.rt.depth &&
+        (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 && renderer_texture_presented(st.rt.color[0]))
+        ui_box = true;
     {   // camera-attached effects sized for 16:9 are widened with the view (runtime/hle/widescreen.c)
         extern float widescreen_effect_stretch(uint64_t fs_hash);
         float k = widescreen_effect_stretch(g_cur_fs_hash);
         float vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx;
         if (k > 1.0f) { vx -= vw * (k - 1) / 2; vw *= k; }
         if (ui_box) { float bw = vp[3] * vp_sy * 16.0f / 9.0f; vx += (vw - bw) / 2; vw = bw; }
+        ui_box_scissor = ui_box;
         hud_shift_px = hud_shift_py = 0;
         float vy = vp[1] * vp_sy + vp_oy;
         if (hud_side) {
