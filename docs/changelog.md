@@ -2,6 +2,15 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-16**
+
+- **Ultrawide: a case's results screen** (issue #38; *not yet confirmed in play*): wider than 16:9, the list of
+  bonuses on the results of a case was cut off on its left side, the rank badge (Lappy) that lights up beside the
+  total showed stretched at the far right of the screen, and the photo behind the list was pressed into the left
+  half of its frame. The list's clipping, the badge and the photo's frame now follow the panel into the 16:9 area.
+  In replays of a recorded case at 3840x1080 and 2560x1080 the screen matched the 16:9 one, and the Police Gear
+  menu's pages were unchanged. Still open: the photo itself is the wide scene pressed into its 16:9 frame.
+
 **2026-11-13**
 
 - **F3 hides the HUD** (issue #35; *not yet confirmed in play*): in the game, **F3** hides everything the game draws
