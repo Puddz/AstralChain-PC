@@ -2,6 +2,15 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-17**
+
+- **Ultrawide: boxes and a video in cutscenes** (issue #39; *not yet confirmed in play*): wider than 16:9, some
+  cutscenes showed a darker or hazier box over the middle of the picture, of a different width from shot to shot. It
+  is a flat card the game puts in front of the camera to tint the picture, sized to fill a 16:9 view; such a card is
+  now widened with the picture. A video cut into a cutscene (Olive and Yoseph in File 02) showed the scene from
+  before it at both sides of its 16:9 picture; those sides are now black. In a replay of the end of File 02 at
+  3840x1080 none of the three boxed stretches showed a box any more, and the video had black sides.
+
 **2026-11-16**
 
 - **Ultrawide: a case's results screen** (issue #38; *not yet confirmed in play*): wider than 16:9, the list of
