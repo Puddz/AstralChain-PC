@@ -4818,7 +4818,7 @@ static void draw_(CmdRec *r, bool indexed) {
     // (x: 2/1280 ... -1, y: -2/720 ... 1); cbuf 4 = binding 1, row 0 = the element's x. A quad covering the whole
     // 1280 width (a fade or a backdrop) keeps the full width, except a video (uiyuvshader / uiyuvashader: the title
     // screen's background and logo, Bink movies), which is 16:9 footage and gets the box (black at the sides).
-    bool ui_box = false;
+    bool ui_box = false, video_sides = false;
     int hud_side = 0, hud_corner = 0;  // (AC_HUD_EDGES: -1 to the left edge, 1 to the right; corner 0-3: top left,
                                        // bottom left, top right, bottom right)
     uint64_t ui_vs = st.rt.ncolor && st.rt.color[0] ? stage_hash(st.program, 0) : 0;
@@ -4843,6 +4843,20 @@ static void draw_(CmdRec *r, bool indexed) {
                 lo = fminf(lo, x); hi = fmaxf(hi, x);
             }
             if (lo <= 0.5f && hi >= 1279.5f) ui_box = false;
+        }
+        // A video over the whole layout that is not see-through (uiyuvshader: a movie cut into an in-engine
+        // cutscene, issue #39) leaves what was drawn before it showing beside its 16:9 area: those sides are blacked
+        // out first.
+        if (ui_box && fsh == 0xf33b4e637319bed0ull && r->x[2] <= 6 && k.stride[0] >= 16 && st.vbuf[0].addr &&
+            st.vbuf[0].size >= 4 * k.stride[0] && st.ubuf[0][1].addr && st.ubuf[0][1].size >= 16) {
+            const float *m = (const float *)(uintptr_t)st.ubuf[0][1].addr;
+            float lo = 1e30f, hi = -1e30f;
+            for (int i = 0; i < 4; i++) {
+                const float *v = (const float *)(uintptr_t)(st.vbuf[0].addr + (uint64_t)i * k.stride[0]);
+                float x = m[0] * v[0] + m[1] * v[1] + m[2] * v[2] + m[3] * v[3];
+                lo = fminf(lo, x); hi = fmaxf(hi, x);
+            }
+            video_sides = lo <= 0.5f && hi >= 1279.5f;
         }
         // HUD at the screen's edges (AC_HUD_EDGES=1, the F1 menu; issue #27). The gameplay HUD (uibaseshader, and
         // uitilingshader for the dot patterns behind its panels) is drawn with a 3D
@@ -4906,9 +4920,96 @@ static void draw_(CmdRec *r, bool indexed) {
     {   // camera-attached effects sized for 16:9 are widened with the view (runtime/hle/widescreen.c)
         extern float widescreen_effect_stretch(uint64_t fs_hash);
         float k = widescreen_effect_stretch(g_cur_fs_hash);
+        // Astral Chain (issue #39): cutscenes put a flat card in front of the camera to tint or haze the picture (an
+        // effect model, VS_BASE: world position = cbuf 5 rows 0-2 times the model's position, a quad in the model's
+        // x-y plane; clip position = cbuf 3 rows 8-11 times that). It is sized to fill a 16:9 view, its edges outside
+        // the picture (one seen: a square 60 across, 50 in front of the camera); wider than 16:9 its edges show at the
+        // sides, as a box in the middle. A card that covers all four corners of the 16:9 view but not those of the wide
+        // picture is widened by the picture's aspect over 16:9, about the middle, so it covers the picture as it does
+        // at 16:9.
+        if (k <= 1.0f && !ui_box && (ui_vs == 0x05fe3e95296c5b5eull || ui_vs == 0x19382da07c1b7578ull) && r->x[2] <= 12 && st.rt.depth &&
+            (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 &&
+            (pr->vi->attr_mask & 1) && st.nattrib > 0 && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 192 && st.ubuf[0][2].addr &&
+            st.ubuf[0][2].size >= 48) {
+            uint32_t a = st.attrib[0], stream = (a >> 8) & 0x1F, off = a >> 13;
+            VkFormat vf = vertex_format_supported(vertex_format(a & 0xFF));
+            uint32_t stride = stream < (uint32_t)st.nstream ? st.stream[stream][0] : 0;
+            float g = (float)st.rt.color[0]->width * 9.0f / ((float)st.rt.color[0]->height * 16.0f);
+            bool halfs = vf == VK_FORMAT_R16G16B16A16_SFLOAT || vf == VK_FORMAT_R16G16B16_SFLOAT;
+            if ((halfs || vf == VK_FORMAT_R32G32B32_SFLOAT || vf == VK_FORMAT_R32G32B32A32_SFLOAT) && stride >= (halfs ? 6u : 12u) && stream < 16 &&
+                st.vbuf[stream].addr && st.vbuf[stream].size >= stride * 3ull) {
+                const float *m = (const float *)(uintptr_t)st.ubuf[0][0].addr + 32, *wm = (const float *)(uintptr_t)st.ubuf[0][2].addr;
+                uint64_t n = st.vbuf[stream].size / stride;
+                if (n > 16) n = 16;
+                float lx0 = 1e30f, lx1 = -1e30f, ly0 = 1e30f, ly1 = -1e30f, lz = 0;  // the model's extent in its x-y plane
+                for (uint64_t i = 0; i < n; i++) {
+                    if (off + (halfs ? 6u : 12u) + i * stride > st.vbuf[stream].size) break;
+                    float v[3];
+                    const uint8_t *vb = (const uint8_t *)(uintptr_t)(st.vbuf[stream].addr + i * stride + off);
+                    if (!halfs) memcpy(v, vb, 12);
+                    else for (int c = 0; c < 3; c++) {
+                        uint16_t h; memcpy(&h, vb + c * 2, 2);
+                        int e = (h >> 10) & 31;
+                        float f = e == 0 ? ldexpf((float)(h & 1023), -24) : ldexpf((float)((h & 1023) | 1024), e - 25);
+                        v[c] = (h & 0x8000) ? -f : f;
+                    }
+                    lx0 = fminf(lx0, v[0]); lx1 = fmaxf(lx1, v[0]); ly0 = fminf(ly0, v[1]); ly1 = fmaxf(ly1, v[1]);
+                    if (fabsf(v[2]) > fabsf(lz)) lz = v[2];
+                }
+                // the plane's rectangle in clip space, cut at the camera (w > 0)
+                float px[8], py[8], pw[8]; int np = 0;
+                {   float cx[4], cy[4], cw[4];
+                    for (int i = 0; i < 4; i++) {
+                        float x = (i == 0 || i == 3) ? lx0 : lx1, y = i < 2 ? ly0 : ly1;
+                        float wx = wm[0] * x + wm[1] * y + wm[2] * lz + wm[3], wy = wm[4] * x + wm[5] * y + wm[6] * lz + wm[7];
+                        float wz = wm[8] * x + wm[9] * y + wm[10] * lz + wm[11];
+                        cx[i] = m[0] * wx + m[1] * wy + m[2] * wz + m[3]; cy[i] = m[4] * wx + m[5] * wy + m[6] * wz + m[7];
+                        cw[i] = m[12] * wx + m[13] * wy + m[14] * wz + m[15];
+                    }
+                    const float near_w = 0.01f;
+                    for (int i = 0; i < 4; i++) {
+                        int j = (i + 1) & 3;
+                        if (cw[i] >= near_w) { px[np] = cx[i]; py[np] = cy[i]; pw[np] = cw[i]; np++; }
+                        if ((cw[i] >= near_w) != (cw[j] >= near_w)) {
+                            float t = (near_w - cw[i]) / (cw[j] - cw[i]);
+                            px[np] = cx[i] + (cx[j] - cx[i]) * t; py[np] = cy[i] + (cy[j] - cy[i]) * t; pw[np] = near_w; np++;
+                        }
+                    }
+                }
+                bool card = false;
+                int in16 = 0, inw = 0;
+                if (np >= 3 && lx1 > lx0 && ly1 > ly0 && fabsf(lz) < 1e-3f) {
+                    for (int i = 0; i < np; i++) { px[i] /= pw[i]; py[i] /= pw[i]; }
+                    for (int c = 0; c < 8; c++) {  // corners of the 16:9 view (0-3) and of the wide picture (4-7)
+                        float qx = ((c & 1) ? 0.98f : -0.98f) / (c < 4 ? g : 1.0f), qy = (c & 2) ? 0.98f : -0.98f;
+                        int pos = 0, neg = 0;
+                        for (int i = 0; i < np; i++) {
+                            int j = (i + 1) % np;
+                            float cr = (px[j] - px[i]) * (qy - py[i]) - (py[j] - py[i]) * (qx - px[i]);
+                            if (cr > 0) pos++; else if (cr < 0) neg++;
+                        }
+                        if (!pos || !neg) { if (c < 4) in16++; else inw++; }
+                    }
+                    card = in16 == 4 && inw < 4;
+                }
+                if (card) k = g;
+            }
+        }
         float vx = vp[0] * vp_sx + vp_ox, vw = vp[2] * vp_sx;
         if (k > 1.0f) { vx -= vw * (k - 1) / 2; vw *= k; }
         if (ui_box) { float bw = vp[3] * vp_sy * 16.0f / 9.0f; vx += (vw - bw) / 2; vw = bw; }
+        if (video_sides && ui_box && in_pass) {
+            int pw, ph;
+            pass_size(&pw, &ph);
+            int x0 = (int)floorf(vx), x1 = (int)ceilf(vx + vw);
+            VkClearAttachment ca = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .colorAttachment = 0};
+            ca.clearValue.color.float32[3] = 1.0f;
+            VkClearRect cr[2];
+            uint32_t ncr = 0;
+            if (x0 > 0) cr[ncr++] = (VkClearRect){{{0, 0}, {(uint32_t)(x0 < pw ? x0 : pw), (uint32_t)ph}}, 0, 1};
+            if (x1 < pw) cr[ncr++] = (VkClearRect){{{x1 > 0 ? x1 : 0, 0}, {(uint32_t)(pw - (x1 > 0 ? x1 : 0)), (uint32_t)ph}}, 0, 1};
+            if (ncr) vkCmdClearAttachments(cb, 1, &ca, ncr, cr);
+        }
         ui_box_scissor = ui_box;
         hud_shift_px = hud_shift_py = 0;
         float vy = vp[1] * vp_sy + vp_oy;
