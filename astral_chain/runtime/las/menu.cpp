@@ -98,8 +98,8 @@ std::vector<Opt> opts = {
      "Keeps textures seen at a slant sharp (the ground in the distance). The game's own: as on the Switch.",
      CHOICE, "0", "0|The game's own (default);4|4x;8|8x;16|16x", 0, 0, false},
     {"shadow_res", "Display", "Shadow resolution",
-     "How finely shadows are drawn. The game's own: as on the Switch (blocky edges from close up). 4x uses about 250 MB more video memory.",
-     CHOICE, "1", "1|The game's own (default);2|2x;4|4x", 0, 0, false},
+     "How finely shadows are drawn. The game's own: as on the Switch (blocky edges from close up). Video memory: about 250 MB at 4x, 1 GB at 8x, 4 GB at 16x.",
+     CHOICE, "1", "1|The game's own (default);2|2x;4|4x;8|8x (1 GB of video memory);16|16x (4 GB of video memory)", 0, 0, false},
     {"hud_edges", "Display", "Ultrawide: HUD at the screen's edges",
      "With a render resolution wider than 16:9, the HUD's side panels (health, minimap, objectives, tutorials) move to "
      "the edges of the screen. Markers over characters stay where they are. HUD layout (F2): how far each corner's "
@@ -147,7 +147,7 @@ void read_session() {
         else if (k == "resolution") { std::string e = env("AC_RESOLUTION"); if (!e.empty()) v = e; }
         else if (k == "upscaler") v = env("AC_UPSCALER") == "fsr1" ? "fsr1" : "off";
         else if (k == "aniso") { std::string e = env("AC_ANISO"); v = e == "4" || e == "8" || e == "16" ? e : "0"; }
-        else if (k == "shadow_res") { std::string e = env("AC_SHADOW_SCALE"); v = e == "2" || e == "4" ? e : "1"; }
+        else if (k == "shadow_res") { std::string e = env("AC_SHADOW_SCALE"); v = e == "2" || e == "4" || e == "8" || e == "16" ? e : "1"; }
         else if (k == "fsr_sharpness") { std::string e = env("AC_FSR_SHARPNESS"); if (!e.empty()) v = e; }
         else if (k == "present") { std::string e = env("LARECOMP_VK_PRESENT"); if (!e.empty()) v = e; }
         else if (k == "uncapped") v = env("AC_UNCAPPED") == "1" ? "1" : "0";

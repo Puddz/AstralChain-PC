@@ -181,11 +181,25 @@ static bool tex_scalable(const NvnTexture *t) {
 }
 
 // Astral Chain (issue #40): the game's shadow maps are square depth targets (2048x2048, a 1024x1024 tile per
-// cascade), coarse at high output resolutions. AC_SHADOW_SCALE=2|4 allocates them that many times larger each way; the
-// passes that draw into them and the shaders that read them scale as they do for a resized picture (sx, sy).
+// cascade), coarse at high output resolutions. AC_SHADOW_SCALE=2|4|8|16 allocates them that many times larger each way;
+// the passes that draw into them and the shaders that read them scale as they do for a resized picture (sx, sy). A
+// factor the GPU's largest picture cannot hold (16384 or 32768 a side) is halved until it can.
 static float shadow_scale(void) {
     static float k = 0;
-    if (k == 0) { const char *e = getenv("AC_SHADOW_SCALE"); int v = e ? atoi(e) : 1; k = v == 2 || v == 4 ? (float)v : 1; }
+    if (k == 0) { const char *e = getenv("AC_SHADOW_SCALE"); int v = e ? atoi(e) : 1; k = v == 2 || v == 4 || v == 8 || v == 16 ? (float)v : 1; }
+    return k;
+}
+static float shadow_scale_for(const NvnTexture *t) {
+    float k = shadow_scale();
+    uint32_t limit = g_vk.props.limits.maxImageDimension2D;
+    while (k > 1 && ((float)t->width * k > (float)limit || (float)t->height * k > (float)limit)) k /= 2;
+    static bool said;
+    if (!said) {
+        said = true;
+        LOG("[vk] shadow map %ux%u drawn at %.0fx%.0f (AC_SHADOW_SCALE %.0f%s, about %.0f MB)\n", t->width, t->height, t->width * k,
+            t->height * k, shadow_scale(), k < shadow_scale() ? ": more than this GPU's largest picture, halved" : "",
+            (double)t->width * k * t->height * k * 4 / 1048576.0);
+    }
     return k;
 }
 static bool tex_shadow_map(const NvnTexture *t) {
@@ -280,8 +294,8 @@ void vk_collect_dead(void) {
 
 static void create_image(NvnTexture *t, TexBackend *b) {
     VkFmt mf = fmt_of(t->format);
-    b->sx = b->shadow ? shadow_scale() : b->scalable ? g_rs_x : 1;
-    b->sy = b->shadow ? shadow_scale() : b->scalable ? g_rs_y : 1;
+    b->sx = b->shadow ? shadow_scale_for(t) : b->scalable ? g_rs_x : 1;
+    b->sy = b->shadow ? b->sx : b->scalable ? g_rs_y : 1;
     uint32_t tw = t->width ? t->width : 1, th = t->height ? t->height : 1;
     if (b->scalable) {
         tw = (uint32_t)lroundf(tw * b->sx); th = (uint32_t)lroundf(th * b->sy);
