@@ -34,6 +34,7 @@ extern "C" {
 // The runtime's (live_settings.h, app_window.h)
 extern volatile long ac_menu_open, ac_menu_close_request, ac_menu_quit_request, ac_menu_modal, ac_menu_page;
 extern volatile int ac_hud_layout[4][2];                 // (live_settings.h: the F2 HUD layout)
+extern volatile int ac_hud_scale;                        // (the size of the HUD's corner panels, percent)
 extern volatile long ac_hud_seen;
 extern volatile LONG ac_hud_hidden;                      // (live_settings.h: F3, the game's HUD is not drawn)
 extern volatile unsigned long long ac_hud_hidden_tick;
@@ -397,6 +398,13 @@ void combo(Opt &o) {
 bool picture_wide();
 Opt *find_opt(const char *key);
 
+// What the detailed frame rate panel shows (launcher.ini fps_hide, or AC_FPS_HIDE: the parts not shown, a sum of
+// 1 << part, so a part added later shows by default).
+const char *const fps_part_names[] = {"GPU and video memory", "CPU and memory", "Frame rate and frame time", "Frame time graph",
+                                      "Renderer timings", "Render sizes", "Frame limit and presentation", "GPU and CPU names"};
+const int FPS_PARTS = 8;
+int fps_hide;
+
 // An option that does nothing with what another one is set to now (shown greyed out; issue #34).
 bool unused(const Opt &o) {
     auto is = [](const char *key, const char *value) { Opt *p = find_opt(key); return p && p->value == value; };
@@ -420,6 +428,8 @@ void draw(float scale) {
                  ImGuiWindowFlags_NoSavedSettings);
     ImGui::TextDisabled("F1 or Minus + Plus: back to the game. The game does not get your input while this is open.");
     ImGui::TextDisabled("F3 in the game: hides the game's HUD and menus (for screenshots), and shows them again.");
+    if (env("AC_SAVE_STATES") == "1") ImGui::TextDisabled("Save states are on: F6 in the game saves a state, F7 loads it.");
+    else ImGui::TextDisabled("Save states (F6 and F7 in the game) are off: Save states, under Troubleshooting in the launcher.");
     if (picture_wide()) {  // (the HUD layout's button is further down, under Display)
         ImGui::TextDisabled("Wide screen: the HUD's place is in");
         ImGui::SameLine();
@@ -447,7 +457,21 @@ void draw(float scale) {
         ImGui::EndDisabled();
         if (!strcmp(o.key, "hud_edges")) {
             ImGui::SetCursorPosX(label_w);
-            if (ImGui::Button("HUD layout (F2)...")) InterlockedExchange(&ac_menu_page, 1);
+            if (ImGui::Button("HUD layout and size (F2)...")) InterlockedExchange(&ac_menu_page, 1);
+        }
+        if (!strcmp(o.key, "fps_counter") && o.value == "2") {  // (the detailed panel's parts)
+            bool changed = false;
+            for (int i = 0; i < FPS_PARTS; i++) {
+                bool on = !(fps_hide >> i & 1);
+                if (!i) { ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Detailed shows"); ImGui::SameLine(label_w); }
+                else ImGui::SetCursorPosX(label_w);
+                if (ImGui::Checkbox(fps_part_names[i], &on)) { fps_hide = on ? fps_hide & ~(1 << i) : fps_hide | 1 << i; changed = true; }
+            }
+            if (changed) {
+                saved_ok = save("fps_hide", std::to_string(fps_hide));
+                printf("[menu] fps_hide=%d\n", fps_hide);
+                fflush(stdout);
+            }
         }
         if (o.help || !o.live) {
             ImGui::PushTextWrapPos(0);
@@ -486,6 +510,11 @@ void draw(float scale) {
         ImGui::EndPopup();
     }
     InterlockedExchange(&ac_menu_modal, quit_asked);
+    {   // (test) AC_MENU_SCROLL=<percent>: the list scrolled that far down
+        static int test_scroll = -2;
+        if (test_scroll == -2) { std::string e = env("AC_MENU_SCROLL"); test_scroll = e.empty() ? -1 : atoi(e.c_str()); }
+        if (test_scroll >= 0) ImGui::SetScrollY(ImGui::GetScrollMaxY() * test_scroll / 100.0f);
+    }
     ImGui::End();
 }
 
@@ -531,6 +560,13 @@ void load_layout() {
     if (t.empty()) t = load("hud_layout");
     if (!t.empty()) parse_layout(t);
     hint_done = env("AC_HUD_HINT") == "0" || load("hud_layout_seen") == "1";
+    t = env("AC_HUD_SCALE");
+    if (t.empty()) t = load("hud_scale");
+    int pct = atoi(t.c_str());
+    if (pct >= 50 && pct <= 150) ac_hud_scale = pct;
+    t = env("AC_FPS_HIDE");
+    if (t.empty()) t = load("fps_hide");
+    fps_hide = atoi(t.c_str()) & ((1 << FPS_PARTS) - 1);
 }
 
 bool picture_wide() {
@@ -558,17 +594,33 @@ void draw_hud(float scale) {
                  ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
     ImGui::PushTextWrapPos(0);
     ImGui::TextDisabled("F2 or B: back to the game. F1: the other settings. The game is drawn behind this, so each change shows at once.");
+    ImGui::PopTextWrapPos();
+    bool done = false, size_done = false;
+    float label_w = ImGui::GetContentRegionAvail().x * 0.3f;
+    {   // the size: at any render resolution
+        int pct = ac_hud_scale;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Size of the panels");
+        ImGui::SameLine(label_w);
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderInt("##size", &pct, 50, 150, "%d%%", ImGuiSliderFlags_AlwaysClamp)) ac_hud_scale = pct;
+        size_done |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextDisabled("The panels in the corners (health, minimap, objectives, items, tutorials), each from its own corner. "
+                            "Markers over characters, text in the middle and the menus keep their size.");
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+    }
+    ImGui::PushTextWrapPos(0);
     if (!picture_wide())
-        ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "The render resolution is not wider than 16:9, so the HUD fits as it is: this "
-                           "applies with a wider one (21:9, 32:9, 48:9: Render resolution, F1).");
+        ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "The render resolution is not wider than 16:9, so the HUD is at the screen's "
+                           "edges as it is: what is below applies with a wider one (21:9, 32:9, 48:9: Render resolution, F1).");
     ImGui::PopTextWrapPos();
     Opt *edges = find_opt("hud_edges");
     bool on = edges && edges->value == "1";
     if (ImGui::Checkbox("Move the HUD's side panels toward the screen's edges", &on) && edges) set(*edges, on ? "1" : "0");
     ImGui::Spacing();
     ImGui::BeginDisabled(!on);
-    bool done = false;
-    float label_w = ImGui::GetContentRegionAvail().x * 0.3f;
     // All four at once: across only (the corners' own heights stay)
     int all = ac_hud_layout[0][0];
     bool same = true;
@@ -613,6 +665,15 @@ void draw_hud(float scale) {
         done = true;
     }
     ImGui::EndDisabled();
+    if (ac_hud_scale != 100) {
+        ImGui::SameLine();
+        if (ImGui::Button("Reset the size")) { ac_hud_scale = 100; size_done = true; }
+    }
+    if (size_done) {
+        saved_ok = save("hud_scale", std::to_string((int)ac_hud_scale));
+        printf("[menu] hud_scale=%d\n", (int)ac_hud_scale);
+        fflush(stdout);
+    }
     if (Opt *o = find_opt("fps_corner")) {  // (issue #30; also on the settings page)
         ImGui::Spacing();
         ImGui::PushID(o->key);
@@ -1140,26 +1201,33 @@ void draw_fps_detailed(float w, float h) {
         ImGui::TableNextColumn(); ImGui::TextUnformatted(y);
         ImGui::TableNextColumn(); ImGui::TextUnformatted(z);
     };
-    if (ImGui::BeginTable("##m", 4, ImGuiTableFlags_SizingFixedFit)) {
+    auto shows = [](int part) { return !(fps_hide >> part & 1); };
+    if ((shows(0) || shows(1) || shows(2)) && ImGui::BeginTable("##m", 4, ImGuiTableFlags_SizingFixedFit)) {
+      if (shows(0)) {
         num(a, "%.0f%%", m.gpu); num(b, "%.0f \xC2\xB0" "C", m.gpu_temp); num(c, "%.0f W", m.gpu_power);
         row4(green, "GPU", a, m.gpu_temp < 0 ? "" : b, m.gpu_power < 0 ? "" : c);
         snprintf(a, 48, "%.1f GB", sum.vram_used / 1073741824.0);
         snprintf(b, 48, "/ %.1f GB", sum.vram_size / 1073741824.0);
         num(c, "%.0f MHz", m.gpu_clock);
         row4(green, "VRAM", a, b, m.gpu_clock < 0 ? "" : c);
+      }
+      if (shows(1)) {
         num(a, "%.0f%%", m.cpu); num(c, "game %.0f%%", m.cpu_game);
         row4(blue, "CPU", a, "", c);
         snprintf(a, 48, "%.1f GB", m.ram_used / 1073741824.0);
         snprintf(b, 48, "/ %.1f GB", m.ram_total / 1073741824.0);
         snprintf(c, 48, "game %.1f GB", m.ram_game / 1073741824.0);
         row4(pink, "RAM", a, b, c);
+      }
+      if (shows(2)) {
         snprintf(a, 48, "%.0f", sum.fps); num(b, "1%% low %.0f", sum.low1); num(c, "0.1%% low %.0f", sum.low01);
         row4(white, "FPS", a, b, c);
         snprintf(a, 48, "%.1f ms", sum.avg_ms); snprintf(b, 48, "max %.1f ms", sum.max_ms);
         row4(white, "Frame", a, b, "");
+      }
         ImGui::EndTable();
     }
-    {   // the frame times of the last 4 s, 0-50 ms
+    if (shows(3)) {   // the frame times of the last 4 s, 0-50 ms
         static float g[RING];
         int n = 0;
         LARGE_INTEGER now;
@@ -1173,18 +1241,21 @@ void draw_fps_detailed(float w, float h) {
         ImGui::PlotLines("##ft", g, n, 0, nullptr, 0, 50, ImVec2(size * 20, size * 2.6f));
         ImGui::PopStyleColor(2);
     }
-    if (ImGui::BeginTable("##r", 2, ImGuiTableFlags_SizingFixedFit)) {
+    if ((shows(4) || shows(5) || shows(6)) && ImGui::BeginTable("##r", 2, ImGuiTableFlags_SizingFixedFit)) {
         auto row = [](const ImVec4 &col, const char *label, const char *v) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextColored(col, "%s", label);
             ImGui::TableNextColumn(); ImGui::TextUnformatted(v);
         };
+      if (shows(4)) {
         snprintf(a, 48, "%.2f ms", sum.gpu_ms);
         row(gold, "GPU busy per frame", a);
         snprintf(a, 48, "%.2f ms", sum.wait_gpu_ms);
         row(gold, "Waiting for the GPU", a);
         snprintf(a, 48, "%.2f ms", sum.wait_shader_ms);
         row(gold, "Waiting for shaders", a);
+      }
+      if (shows(5)) {
         snprintf(a, 48, "%dx%d", sum.win_w, sum.win_h);
         row(lav, "Window", a);
         snprintf(a, 48, "%dx%d", sum.img_w, sum.img_h);
@@ -1192,20 +1263,25 @@ void draw_fps_detailed(float w, float h) {
         if (sum.scene_w > 0 && sum.img_w > 0) snprintf(a, 48, "%dx%d, %.0f%%", sum.scene_w, sum.scene_h, 100.0 * sum.scene_w / sum.img_w);
         else snprintf(a, 48, "-");
         row(lav, "3D scene", a);
+      }
+      if (shows(6)) {
         int unc = ac_uncapped;
         if (unc < 0) unc = env("AC_UNCAPPED") == "1";
         row(lav, "Frame limit", unc ? "uncapped (cutscenes 60)" : "60 FPS");
         row(lav, "Presentation", vk_perf_present_mode());
+      }
         ImGui::EndTable();
     }
-    ImGui::TextColored(grey, "%s", vk_perf_gpu_name());
-    if (cpu_name[0]) ImGui::TextColored(grey, "%s", cpu_name);
+    if (shows(7)) {
+        ImGui::TextColored(grey, "%s", vk_perf_gpu_name());
+        if (cpu_name[0]) ImGui::TextColored(grey, "%s", cpu_name);
+    }
     ImGui::End();
     ImGui::PopStyleVar(5);
 }
 
 void draw_fps(float w, float h) {
-    if (fps_mode() == 2) draw_fps_detailed(w, h);
+    if (fps_mode() == 2) { if (fps_hide != (1 << FPS_PARTS) - 1) draw_fps_detailed(w, h); }
     else draw_fps_simple(w, h);
 }
 

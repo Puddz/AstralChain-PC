@@ -46,7 +46,8 @@ menu closes the game, after asking first, so a controller alone is enough.
 
 **HUD layout** (render resolutions wider than 16:9). **F2**, or **HUD layout** in
 the F1 menu, opens a window where you choose where the HUD's side panels go: for each corner, how far toward the
-screen's edge and how far up or down. F2, Esc or B close it.
+screen's edge and how far up or down. F2, Esc or B close it. The same window has **Size of the panels** (50% to
+150%), which works at any render resolution.
 
 **Hide the HUD.** **F3** hides everything the game draws over the scene (HUD, markers, subtitles, button prompts and
 its menus) for screenshots; **F3** again shows it. It is not saved.

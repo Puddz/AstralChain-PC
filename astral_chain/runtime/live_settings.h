@@ -42,6 +42,9 @@ int ac_hud_edges_on(void) {
  * they move toward the screen's edge (0-100% of the band beside the 16:9 area) and down (in 1/720ths of the height;
  * negative: up). (las/nvn/vulkan/exec.c) */
 volatile int ac_hud_layout[4][2]={{100,0},{100,0},{100,0},{100,0}};
+/* The size of the HUD's corner panels, percent (F2; launcher.ini hud_scale, or AC_HUD_SCALE: 50-150), at any aspect:
+ * each panel is made larger or smaller about its own corner (exec.c) */
+volatile int ac_hud_scale=100;
 volatile long ac_hud_seen;       /* the gameplay HUD was drawn wider than 16:9 (exec.c): the menu says once that F2 places it */
 volatile LONG ac_hud_hidden;     /* F3 (app_window.h; AC_HUD_HIDDEN=1 from the start): the game's HUD and menus are not drawn (exec.c; issue #35) */
 /* Save states (savestate.h): what F6 or F7 did last (1 saved, 2 loaded, 3 not saved, 4 no state to load, 5 not
