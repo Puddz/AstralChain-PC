@@ -4885,28 +4885,61 @@ static void draw_(CmdRec *r, bool indexed) {
         // instead: their x axis level (its y part under 0.09 of its length, the cube's faces 0.41 and more), their
         // y axis up or down (0.92 and more of its length), and leaning back or not at all (the normal's y part 0 to
         // 0.38 for one facing the screen; the spinner -0.41). Parts of no height are left as they were.
+        // Some of a panel's parts are turned within the panel's own plane, so they are not upright either (issues #41,
+        // #42: the case icon after the objective's text and the lines by it, a quarter turn; the arrow before the
+        // duty points' total, about 130 degrees, and the bars behind it, a quarter turn; a tutorial box's moving
+        // lines). They lie in exactly the plane of the panel's other parts, right beside them, which nothing of the
+        // wheel does: such a part goes with a part of this or the last frame that moved, has the same normal (each
+        // component within 0.02), is on the same half of the layout and within 150 across and 140 down of it.
         if (!ui_box && st.ubuf[0][1].addr && st.ubuf[0][1].size >= 48 && p[46] != 0 && p[44] == 0 && p[45] == 0 &&
             renderer_texture_presented(st.rt.color[0])) {
             const float *m = (const float *)(uintptr_t)st.ubuf[0][1].addr;
+            static struct { float n[3], tx, ty; int side; } moved[2][48];  // (parts that moved: this frame, the last)
+            static int nmoved[2];
+            static uint64_t moved_frame = ~0ull;
+            if (renderer_present_count() != moved_frame) {
+                memcpy(moved[1], moved[0], sizeof moved[0]); nmoved[1] = nmoved[0]; nmoved[0] = 0;
+                moved_frame = renderer_present_count();
+            }
+            float xl = sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]), yl = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
+            float nx = m[4] * m[9] - m[8] * m[5], ny = m[8] * m[1] - m[0] * m[9], nz = m[0] * m[5] - m[4] * m[1];
+            float nl = sqrtf(nx * nx + ny * ny + nz * nz);
+            bool upright = !(fabsf(m[4]) >= 0.2f * xl || fabsf(m[5]) < 0.85f * yl);
             if (fabsf(m[0]) > 0.05f) {
                 float yaw = m[8] / m[0], tx = m[3];
                 if (yaw > 0.25f && tx < 640) hud_side = -1;
                 else if (yaw < -0.41f && tx > 640 && !(yaw > -0.60f && m[9] / m[0] < -0.15f && tx < 1100) && !(m[6] > 0.15f && m[7] < 490))
                     hud_side = 1;
+                if (hud_side && yl > 1e-4f && (!upright || (nz >= 0 ? ny : -ny) < -0.1f * nl)) hud_side = 0;
+            }
+            if (nl > 1e-6f) {
+                float n[3] = {nx / nl, ny / nl, nz / nl};
+                if (n[2] < 0) { n[0] = -n[0]; n[1] = -n[1]; n[2] = -n[2]; }
                 if (hud_side) {
-                    float xl = sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]), yl = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
-                    float nx = m[4] * m[9] - m[8] * m[5], ny = m[8] * m[1] - m[0] * m[9], nz = m[0] * m[5] - m[4] * m[1];
-                    float nl = sqrtf(nx * nx + ny * ny + nz * nz);
-                    if (yl > 1e-4f && (fabsf(m[4]) >= 0.2f * xl || fabsf(m[5]) < 0.85f * yl || (nz >= 0 ? ny : -ny) < -0.1f * nl))
-                        hud_side = 0;
+                    bool have = false;
+                    for (int i = 0; i < nmoved[0] && !have; i++)
+                        have = fabsf(moved[0][i].n[0] - n[0]) < 0.005f && fabsf(moved[0][i].n[1] - n[1]) < 0.005f &&
+                               fabsf(moved[0][i].tx - m[3]) < 40 && fabsf(moved[0][i].ty - m[7]) < 40 && moved[0][i].side == hud_side;
+                    if (!have && nmoved[0] < 48) {
+                        memcpy(moved[0][nmoved[0]].n, n, sizeof n);
+                        moved[0][nmoved[0]].tx = m[3]; moved[0][nmoved[0]].ty = m[7]; moved[0][nmoved[0]++].side = hud_side;
+                    }
+                } else if (!upright && xl > 1e-4f && yl > 1e-4f && n[2] >= 0.3f) {
+                    for (int f = 0; f < 2 && !hud_side; f++)
+                        for (int i = 0; i < nmoved[f]; i++)
+                            if (fabsf(moved[f][i].n[0] - n[0]) < 0.02f && fabsf(moved[f][i].n[1] - n[1]) < 0.02f && fabsf(moved[f][i].n[2] - n[2]) < 0.02f &&
+                                fabsf(moved[f][i].tx - m[3]) < 150 && fabsf(moved[f][i].ty - m[7]) < 140 && (moved[f][i].tx < 640) == (m[3] < 640)) {
+                                hud_side = moved[f][i].side;
+                                break;
+                            }
                 }
-                if (hud_side) {
-                    extern volatile long ac_hud_seen;  // (live_settings.h: the menu's hint that F2 places the HUD)
-                    if (!ac_hud_seen) ac_hud_seen = 1;
-                    extern int ac_hud_edges_on(void);
-                    if (ac_hud_edges_on()) hud_corner = (hud_side > 0 ? 2 : 0) + (m[7] >= 360 ? 1 : 0);
-                    else hud_side = 0;
-                }
+            }
+            if (hud_side) {
+                extern volatile long ac_hud_seen;  // (live_settings.h: the menu's hint that F2 places the HUD)
+                if (!ac_hud_seen) ac_hud_seen = 1;
+                extern int ac_hud_edges_on(void);
+                if (ac_hud_edges_on()) hud_corner = (hud_side > 0 ? 2 : 0) + (m[7] >= 360 ? 1 : 0);
+                else hud_side = 0;
             }
         }
     }
