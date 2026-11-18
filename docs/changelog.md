@@ -4,7 +4,17 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-18**
 
-- **Save states (experimental, off by default; *not yet confirmed in play*)**: with the launcher's new **Save
+- **Detailed frame rate panel: choose what it shows** (issue #43; *not yet confirmed in play*): with **Show the
+  frame rate** on **Detailed**, the in-game menu (**F1**) lists the panel's eight parts under it, each with a box:
+  GPU and video memory, CPU and memory, frame rate and frame time, the graph, renderer timings (the three orange
+  lines), render sizes, frame limit and presentation, GPU and CPU names. Applies at once and is kept.
+- **Size of the HUD's panels** (issue #43; *not yet confirmed in play*): the HUD layout page (**F2**) has a new
+  slider, 50% to 150%, at any render resolution. It makes the HUD's corner panels (health, Legion, minimap,
+  objectives, items, tutorials) smaller or larger, each from its own corner. Markers over characters, text in the
+  middle of the screen, subtitles and the menus keep their size. Looked at in a replay at 3440x1440 and 2560x1440,
+  at 70%, 80% and 130%; only that one place in the game was looked at.
+- The in-game menu (**F1**) now says at the top that F6 and F7 are the save states, and where they are turned on.
+- **Save states (experimental, off by default; confirmed in play on two PCs)**: with the launcher's new **Save
   states** option (Troubleshooting) on, **F6** writes the whole running game to a file and **F7** goes back to it:
   at once, after the game was started again, or on another PC. It is meant for showing a problem from the moment
   before it happens, in place of a long recording. The file is

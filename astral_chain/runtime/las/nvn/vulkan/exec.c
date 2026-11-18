@@ -1292,6 +1292,9 @@ static void pass_size(int *w, int *h) {
 // (AC_HUD_EDGES and the F2 HUD layout: the HUD element drawn now moves by this, in the target's pixels; a narrower
 // scissor moves with it)
 static float hud_shift_px, hud_shift_py;
+// (the F2 HUD layout's size: the element drawn now is this much larger or smaller, about its panel's corner, a point
+// in the target's pixels; a narrower scissor is sized with it)
+static float hud_scale = 1, hud_ax, hud_ay;
 // (wider than 16:9: the element drawn now is kept in the 16:9 area in the middle, draw_'s ui_box. The game works out
 // a scissor narrower than the target as if the UI covered the whole width, x and width times the target's width /
 // 1280: the scissor goes into that area as the element does. Issue #38: the list of a case's results was cut off on
@@ -1307,8 +1310,18 @@ static VkRect2D scissor_rect(void) {
         double x0 = floor((W - bw) / 2 + x * bw / W), x1 = ceil((W - bw) / 2 + ((double)x + sw) * bw / W);
         x = (int)x0; sw = (int)(x1 - x0);
     }
-    if (hud_shift_px != 0 && st.rt.ncolor && st.rt.color[0] && sw < 16384 && !(x <= 0 && x + sw >= (int)st.rt.color[0]->width)) x += (int)lroundf(hud_shift_px);
-    if (hud_shift_py != 0 && st.rt.ncolor && st.rt.color[0] && sh < 16384 && !(y <= 0 && y + sh >= (int)st.rt.color[0]->height)) y += (int)lroundf(hud_shift_py);
+    bool part_x = st.rt.ncolor && st.rt.color[0] && sw < 16384 && !(x <= 0 && x + sw >= (int)st.rt.color[0]->width);
+    bool part_y = st.rt.ncolor && st.rt.color[0] && sh < 16384 && !(y <= 0 && y + sh >= (int)st.rt.color[0]->height);
+    if (hud_shift_px != 0 && part_x) x += (int)lroundf(hud_shift_px);
+    if (hud_shift_py != 0 && part_y) y += (int)lroundf(hud_shift_py);
+    if (hud_scale != 1 && part_x) {
+        double x0 = floor(hud_ax + (x - (double)hud_ax) * hud_scale), x1 = ceil(hud_ax + ((double)x + sw - hud_ax) * hud_scale);
+        x = (int)x0; sw = (int)(x1 - x0);
+    }
+    if (hud_scale != 1 && part_y) {
+        double y0 = floor(hud_ay + (y - (double)hud_ay) * hud_scale), y1 = ceil(hud_ay + ((double)y + sh - hud_ay) * hud_scale);
+        y = (int)y0; sh = (int)(y1 - y0);
+    }
     if (vp_sx != 1 || vp_sy != 1 || vp_ox != 0 || vp_oy != 0) {
         double x0 = floor(x * (double)vp_sx + vp_ox), y0 = floor(y * (double)vp_sy + vp_oy);
         double x1 = ceil(((double)x + sw) * vp_sx + vp_ox), y1 = ceil(((double)y + sh) * vp_sy + vp_oy);
@@ -4624,12 +4637,16 @@ static void draw_(CmdRec *r, bool indexed) {
     bool ui_box = false, video_sides = false;
     int hud_side = 0, hud_corner = 0;  // (AC_HUD_EDGES: -1 to the left edge, 1 to the right; corner 0-3: top left,
                                        // bottom left, top right, bottom right)
+    bool hud_move = false;             // (the panel moves toward the edge: AC_HUD_EDGES, wider than 16:9)
+    extern volatile int ac_hud_scale;  // (live_settings.h: the F2 HUD layout's size, percent; at any aspect)
+    int hud_pct = ac_hud_scale < 50 ? 50 : ac_hud_scale > 150 ? 150 : ac_hud_scale;
+    bool rt_wide = st.rt.ncolor && st.rt.color[0] && (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100;
     uint64_t ui_vs = st.rt.ncolor && st.rt.color[0] ? stage_hash(st.program, 0) : 0;
     bool ui_tiling = ui_vs == 0x833ab16b25a072acull;  // (uitilingshader: dot patterns, the menus' dotted lines)
-    if (st.rt.ncolor && st.rt.color[0] && (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 &&
+    if (st.rt.ncolor && st.rt.color[0] && (rt_wide || hud_pct != 100) &&
         (ui_vs == 0xa09bf88abb4a04a7ull || ui_tiling) && st.ubuf[0][0].addr && st.ubuf[0][0].size >= 48 * 4) {
         const float *p = (const float *)(uintptr_t)st.ubuf[0][0].addr;
-        ui_box = fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
+        ui_box = rt_wide && fabsf(p[32] - 2.0f / 1280) < 1e-7f && p[33] == 0 && p[35] == -1.0f && fabsf(p[37] + 2.0f / 720) < 1e-7f && p[39] == 1.0f;
         // (a picture the game draws UI into to look it up later, as the frame the photo on a case's results shows in,
         // issue #38: it is read back by the layout's x over 1280 across its whole width, so what goes into it is not
         // put in the middle)
@@ -4688,6 +4705,8 @@ static void draw_(CmdRec *r, bool indexed) {
         // instead: their x axis level (its y part under 0.09 of its length, the cube's faces 0.41 and more), their
         // y axis up or down (0.92 and more of its length), and leaning back or not at all (the normal's y part 0 to
         // 0.38 for one facing the screen; the spinner -0.41). Parts of no height are left as they were.
+        // The layout's size (not 100%: at 16:9 too) makes a corner's panels larger or smaller about that corner of
+        // the 16:9 area, where it is after the move: the viewport and a narrower scissor are scaled about it.
         // Some of a panel's parts are turned within the panel's own plane, so they are not upright either (issues #41,
         // #42: the case icon after the objective's text and the lines by it, a quarter turn; the arrow before the
         // duty points' total, about 130 degrees, and the bars behind it, a quarter turn; a tutorial box's moving
@@ -4739,9 +4758,10 @@ static void draw_(CmdRec *r, bool indexed) {
             }
             if (hud_side) {
                 extern volatile long ac_hud_seen;  // (live_settings.h: the menu's hint that F2 places the HUD)
-                if (!ac_hud_seen) ac_hud_seen = 1;
+                if (rt_wide && !ac_hud_seen) ac_hud_seen = 1;
                 extern int ac_hud_edges_on(void);
-                if (ac_hud_edges_on()) hud_corner = (hud_side > 0 ? 2 : 0) + (m[7] >= 360 ? 1 : 0);
+                hud_move = rt_wide && ac_hud_edges_on();
+                if (hud_move || hud_pct != 100) hud_corner = (hud_side > 0 ? 2 : 0) + (m[7] >= 360 ? 1 : 0);
                 else hud_side = 0;
             }
         }
@@ -4848,26 +4868,39 @@ static void draw_(CmdRec *r, bool indexed) {
         }
         ui_box_scissor = ui_box;
         hud_shift_px = hud_shift_py = 0;
-        float vy = vp[1] * vp_sy + vp_oy;
+        hud_scale = 1;
+        float vy = vp[1] * vp_sy + vp_oy, vh = vp[3] * vp_sy;
         if (hud_side) {
-            extern volatile int ac_hud_layout[4][2];  // (live_settings.h: per corner, across % and down in 1/720ths)
-            int across = ac_hud_layout[hud_corner][0], down = ac_hud_layout[hud_corner][1];
-            hud_shift_px = hud_side * ((float)st.rt.color[0]->width - st.rt.color[0]->height * 16.0f / 9.0f) / 2 * across / 100.0f;
-            hud_shift_py = down * (float)st.rt.color[0]->height / 720.0f;
-            vx += hud_shift_px * vp_sx;
-            vy += hud_shift_py * vp_sy;
+            float W = (float)st.rt.color[0]->width, H = (float)st.rt.color[0]->height, box = H * 16.0f / 9.0f;
+            if (hud_move) {
+                extern volatile int ac_hud_layout[4][2];  // (live_settings.h: per corner, across % and down in 1/720ths)
+                int across = ac_hud_layout[hud_corner][0], down = ac_hud_layout[hud_corner][1];
+                hud_shift_px = hud_side * (W - box) / 2 * across / 100.0f;
+                hud_shift_py = down * H / 720.0f;
+                vx += hud_shift_px * vp_sx;
+                vy += hud_shift_py * vp_sy;
+            }
+            if (hud_pct != 100) {
+                hud_scale = hud_pct / 100.0f;
+                hud_ax = W / 2 + hud_side * box / 2 + hud_shift_px;
+                hud_ay = ((hud_corner & 1) ? H : 0) + hud_shift_py;
+                float ax = hud_ax * vp_sx + vp_ox, ay = hud_ay * vp_sy + vp_oy;
+                vx = ax + (vx - ax) * hud_scale; vw *= hud_scale;
+                vy = ay + (vy - ay) * hud_scale; vh *= hud_scale;
+            }
         }
-        set_viewport(vx, vy, vw, vp[3] * vp_sy, zn, zf);
+        set_viewport(vx, vy, vw, vh, zn, zf);
         if (g_debug_frame) {
             VkRect2D sr = scissor_rect();
             LOG("[draw]   vp %.2f %.2f %.2f %.2f (stretch %.3f, fs hash %016llx) scissor %d %d %u %u | guest sc %d %d %d %d | pass %ux%u s %.4f %.4f\n",
-                vx, vy, vw, vp[3] * vp_sy, k, (unsigned long long)g_cur_fs_hash, sr.offset.x, sr.offset.y,
+                vx, vy, vw, vh, k, (unsigned long long)g_cur_fs_hash, sr.offset.x, sr.offset.y,
                 sr.extent.width, sr.extent.height, st.scissor[0][0], st.scissor[0][1], st.scissor[0][2], st.scissor[0][3], pass_w, pass_h,
                 vp_sx, vp_sy);
         }
     }
     apply_scissor();
     hud_shift_px = hud_shift_py = 0;
+    hud_scale = 1;
     float rs0[4] = {vp_sx, vp_sy, vp_ox, vp_oy};
     uint64_t prof_t1_ = prof ? SDL_GetTicksNS() : 0;
     VkDescriptorSet fset = stage_set(pr, pr->set_layout[1], 1, 1, pr->fi, rs0, tint, 0, 0, 0, fii);
