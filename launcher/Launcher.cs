@@ -160,6 +160,13 @@ namespace AstralChainLauncher
                 "game repeats across surfaces; higher is sharper and costs a little GPU time. Applies the next time you press Play.",
                 OptKind.Choice, "0", OptTarget.Game, v => v == "4" || v == "8" || v == "16" ? "AC_ANISO=" + v : "");
             aniso.Choices = new[] { "0|The game's own (default)", "4|4x", "8|8x", "16|16x" };
+            var shadows = Add("shadow_res", "Display", "Shadow resolution",
+                "How finely the shadows of characters and objects are drawn. The game's own: as on the Switch, where " +
+                "their edges show as blocks from close up or at a high resolution (default). 2x, 4x: the shadow " +
+                "map that many times finer each way, so the blocks get that much smaller; 4x uses about 250 MB more " +
+                "video memory. Applies the next time you press Play.",
+                OptKind.Choice, "1", OptTarget.Game, v => v == "2" || v == "4" ? "AC_SHADOW_SCALE=" + v : "");
+            shadows.Choices = new[] { "1|The game's own (default)", "2|2x", "4|4x" };
             var temporal = Add("temporal", "Display", "Anti-aliasing and upscaling (experimental)",
                 "The game's own: SMAA, with the 3D scene at the render resolution (default).\n" +
                 "NVIDIA DLSS and AMD FSR draw the 3D scene smaller (the quality below) and rebuild it at the render " +

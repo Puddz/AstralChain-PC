@@ -179,6 +179,19 @@ static bool tex_scalable(const NvnTexture *t) {
     return a > 1.74f && a < 1.81f;
 }
 
+// Astral Chain (issue #40): the game's shadow maps are square depth targets (2048x2048, a 1024x1024 tile per
+// cascade), coarse at high output resolutions. AC_SHADOW_SCALE=2|4 allocates them that many times larger each way; the
+// passes that draw into them and the shaders that read them scale as they do for a resized picture (sx, sy).
+static float shadow_scale(void) {
+    static float k = 0;
+    if (k == 0) { const char *e = getenv("AC_SHADOW_SCALE"); int v = e ? atoi(e) : 1; k = v == 2 || v == 4 ? (float)v : 1; }
+    return k;
+}
+static bool tex_shadow_map(const NvnTexture *t) {
+    return shadow_scale() > 1 && t->target == 1 && t->samples <= 1 && (t->flags & 8) && (t->format == 0x34 || t->format == 0x35) &&
+           t->width == t->height && t->width >= 1024 && t->width <= 4096;
+}
+
 bool renderer_texture_first_write(NvnTexture *t) {
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     uint64_t total_frames = renderer_present_count();
@@ -203,7 +216,7 @@ bool renderer_texture_frame_fresh(NvnTexture *t) {
     if (on < 0) on = getenv("LARECOMP_NO_FRAME_CLEAR") == NULL;
     TexBackend *b = t ? (TexBackend *)t->backend : NULL;
     uint64_t total_frames = renderer_present_count();
-    if (!on || !b || !b->scalable || b->frame_cleared == total_frames + 1) return false;
+    if (!on || !b || !b->scalable || b->shadow || b->frame_cleared == total_frames + 1) return false;
     b->frame_cleared = total_frames + 1;
     return true;
 }
@@ -213,7 +226,7 @@ bool renderer_texture_level_fresh(NvnTexture *t) {
     static int keep = -1;
     if (keep < 0) keep = getenv("LARECOMP_KEEP_TARGETS") != NULL;
     if (!b || keep || b->level_gen == g_level_gen) return false;
-    if (!b->scalable) { b->level_gen = g_level_gen; return false; }
+    if (!b->scalable || b->shadow) { b->level_gen = g_level_gen; return false; }
     bool fresh = b->level_gen != 0;
     b->level_gen = g_level_gen;
     return fresh;
@@ -266,8 +279,8 @@ void vk_collect_dead(void) {
 
 static void create_image(NvnTexture *t, TexBackend *b) {
     VkFmt mf = fmt_of(t->format);
-    b->sx = b->scalable ? g_rs_x : 1;
-    b->sy = b->scalable ? g_rs_y : 1;
+    b->sx = b->shadow ? shadow_scale() : b->scalable ? g_rs_x : 1;
+    b->sy = b->shadow ? shadow_scale() : b->scalable ? g_rs_y : 1;
     uint32_t tw = t->width ? t->width : 1, th = t->height ? t->height : 1;
     if (b->scalable) {
         tw = (uint32_t)lroundf(tw * b->sx); th = (uint32_t)lroundf(th * b->sy);
@@ -427,7 +440,7 @@ static void live_remove(TexBackend *b) {
 static TexBackend *tex_backend(NvnTexture *t) {
     TexBackend *b = t->backend;
     if (b) {
-        if (b->scalable && (b->sx != g_rs_x || b->sy != g_rs_y)) {  // output resolution changed: reallocate
+        if (b->scalable && !b->shadow && (b->sx != g_rs_x || b->sy != g_rs_y)) {  // output resolution changed: reallocate
             destroy_image(b);
             create_image(t, b);
         }
@@ -435,7 +448,8 @@ static TexBackend *tex_backend(NvnTexture *t) {
     }
     vk_collect_dead();
     b = calloc(1, sizeof *b);
-    b->scalable = tex_scalable(t);
+    b->shadow = tex_shadow_map(t);
+    b->scalable = b->shadow || tex_scalable(t);
     create_image(t, b);
     t->backend = b;
     live_add(t, b);
