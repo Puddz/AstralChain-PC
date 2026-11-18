@@ -23,6 +23,7 @@
 #include <string.h>
 #include <string>
 #include <vector>
+#include <set>
 #include <algorithm>
 
 #include "imgui.h"
@@ -423,21 +424,43 @@ void key_chip(const char *k, const char *what, bool first) {
 
 ImVec2 box_p0;
 float box_w, box_pad;
-bool box_open, box_first;
+bool box_open, box_body, box_first;
+// (the boxes closed by their header, by title: launcher.ini menu_closed, titles with | between them)
+std::set<std::string> boxes_closed;
+int menu_size = 100;  // the menu's own size, percent (launcher.ini menu_size, or AC_MENU_SIZE: 60-160)
 
-void box_begin(const char *title) {
+// A box's header: a click (or A on it) closes or opens the box. False: closed, its settings are not drawn.
+bool box_begin(const char *title) {
     ImGuiStyle &st = ImGui::GetStyle();
     float fs = ImGui::GetFontSize(), hh = ImGui::GetFrameHeight();
     box_pad = fs * 0.6f;
     box_p0 = ImGui::GetCursorScreenPos();
     box_w = ImGui::GetContentRegionAvail().x;
+    ImGui::PushID(title);
+    bool hit = ImGui::InvisibleButton("##box", ImVec2(box_w, hh));
+    bool lit = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+    ImGui::PopID();
+    if (hit) {
+        if (!boxes_closed.erase(title)) boxes_closed.insert(title);
+        std::string t;
+        for (const std::string &c : boxes_closed) t += (t.empty() ? "" : "|") + c;
+        saved_ok = save("menu_closed", t);
+    }
+    box_body = !boxes_closed.count(title);
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(box_p0, ImVec2(box_p0.x + box_w, box_p0.y + hh), ImGui::GetColorU32(ImVec4(0.09f, 0.153f, 0.29f, 1)), fs * 0.3f,
-                      ImDrawFlags_RoundCornersTop);
-    dl->AddText(ImVec2(box_p0.x + box_pad, box_p0.y + st.FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), title);
-    ImGui::Dummy(ImVec2(box_w, hh));
-    ImGui::Indent(box_pad);
+    dl->AddRectFilled(box_p0, ImVec2(box_p0.x + box_w, box_p0.y + hh),
+                      ImGui::GetColorU32(lit ? ImVec4(0.13f, 0.22f, 0.42f, 1) : ImVec4(0.09f, 0.153f, 0.29f, 1)), fs * 0.3f,
+                      box_body ? ImDrawFlags_RoundCornersTop : ImDrawFlags_RoundCornersAll);
+    {   // the arrow: down when open, right when closed
+        float a = fs * 0.22f, cx = box_p0.x + box_pad + a, cy = box_p0.y + hh * 0.5f;
+        ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
+        if (box_body) dl->AddTriangleFilled(ImVec2(cx - a, cy - a * 0.6f), ImVec2(cx + a, cy - a * 0.6f), ImVec2(cx, cy + a * 0.8f), col);
+        else dl->AddTriangleFilled(ImVec2(cx - a * 0.6f, cy - a), ImVec2(cx - a * 0.6f, cy + a), ImVec2(cx + a * 0.8f, cy), col);
+    }
+    dl->AddText(ImVec2(box_p0.x + box_pad + fs * 0.8f, box_p0.y + st.FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), title);
+    if (box_body) ImGui::Indent(box_pad);
     box_open = box_first = true;
+    return box_body;
 }
 
 void box_row() {  // (before each setting: a line above it, but for the box's first)
@@ -452,9 +475,12 @@ void box_row() {  // (before each setting: a line above it, but for the box's fi
 void box_end() {
     if (!box_open) return;
     box_open = false;
-    ImGui::Unindent(box_pad);
-    ImGui::Dummy(ImVec2(0, box_pad * 0.2f));
-    float y1 = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y;
+    float y1 = box_p0.y + ImGui::GetFrameHeight();
+    if (box_body) {
+        ImGui::Unindent(box_pad);
+        ImGui::Dummy(ImVec2(0, box_pad * 0.2f));
+        y1 = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y;
+    }
     ImGui::GetWindowDrawList()->AddRect(box_p0, ImVec2(box_p0.x + box_w, y1), ImGui::GetColorU32(ImGuiCol_Border), ImGui::GetFontSize() * 0.3f);
     ImGui::Dummy(ImVec2(0, box_pad * 0.5f));
 }
@@ -468,7 +494,8 @@ void draw(float scale) {
     ImGuiIO &io = ImGui::GetIO();
     // (B leaves a list or a slider first: only with nothing open since the last frame does it close the menu)
     bool busy = ImGui::IsAnyItemActive() || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
-    ImVec2 size(io.DisplaySize.x * 0.62f, io.DisplaySize.y * 0.8f);
+    float ms = menu_size / 100.0f;  // (a larger menu takes more of the window, a smaller one less)
+    ImVec2 size(io.DisplaySize.x * (0.62f * ms > 0.96f ? 0.96f : 0.62f * ms), io.DisplaySize.y * (0.8f * ms > 0.94f ? 0.94f : 0.8f * ms));
     if (size.x < 760 * scale) size.x = io.DisplaySize.x * 0.92f;
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
@@ -482,14 +509,16 @@ void draw(float scale) {
     else key_chip("F6 / F7", "save states: off (launcher, Troubleshooting)", false);
     key_chip("F11", "fullscreen", false);
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("The game does not get your input while this is open. (?) after a name: point at it, or move to the setting, for more.");
+    ImGui::TextDisabled("The game does not get your input while this is open. (?) after a name: point at it, or move to the setting, for more. A box's title closes and opens it.");
     ImGui::PopTextWrapPos();
     ImGui::Spacing();
     const char *group = nullptr;
     float label_w = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.5f;
     float fs = ImGui::GetFontSize();
+    bool show = true;
     for (Opt &o : opts) {
-        if (!group || strcmp(group, o.group)) { group = o.group; box_end(); box_begin(group); }
+        if (!group || strcmp(group, o.group)) { group = o.group; box_end(); show = box_begin(group); }
+        if (!show) continue;
         ImGui::PushID(o.key);
         box_row();
         bool off = unused(o), child = is_child(o);
@@ -573,6 +602,25 @@ void draw(float scale) {
             ImGui::EndDisabled();
         }
         ImGui::PopID();
+    }
+    box_end();
+    if (box_begin("This menu")) {  // (its size: set when the slider is let go, as the whole menu changes with it)
+        static int pending = -1;
+        box_row();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Size");
+        ImGui::SameLine(label_w);
+        ImGui::SetNextItemWidth(-box_pad);
+        int v = pending >= 0 ? pending : menu_size;
+        if (ImGui::SliderInt("##menusize", &v, 60, 160, "%d%%", ImGuiSliderFlags_AlwaysClamp)) pending = v;
+        if (ImGui::IsItemDeactivated() && pending >= 0) {
+            menu_size = pending;
+            pending = -1;
+            saved_ok = save("menu_size", std::to_string(menu_size));
+            printf("[menu] menu_size=%d\n", menu_size);
+            fflush(stdout);
+        }
+        ImGui::TextDisabled("The size of this menu's text and window, and of the HUD layout page (F2).");
     }
     box_end();
     ImGui::Spacing();
@@ -664,6 +712,18 @@ void load_layout() {
     if (t.empty()) t = load("fps_size");
     pct = atoi(t.c_str());
     if (pct >= 50 && pct <= 200) fps_size = pct;
+    t = env("AC_MENU_SIZE");
+    if (t.empty()) t = load("menu_size");
+    pct = atoi(t.c_str());
+    if (pct >= 60 && pct <= 160) menu_size = pct;
+    t = env("AC_MENU_CLOSED");
+    if (t.empty()) t = load("menu_closed");
+    for (size_t at = 0; at < t.size();) {
+        size_t end = t.find('|', at);
+        if (end == std::string::npos) end = t.size();
+        if (end > at) boxes_closed.insert(t.substr(at, end - at));
+        at = end + 1;
+    }
 }
 
 bool picture_wide() {
@@ -689,106 +749,120 @@ void draw_hud(float scale) {
     if (!was_open) ImGui::SetNextWindowFocus();
     ImGui::Begin("Astral Chain PC: HUD layout", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("F2 or B: back to the game. F1: the other settings. The game is drawn behind this, so each change shows at once.");
-    ImGui::PopTextWrapPos();
+    key_chip("F2", "or B: back to the game", true);
+    key_chip("F1", "the other settings", false);
     bool done = false, size_done = false;
-    float label_w = ImGui::GetContentRegionAvail().x * 0.3f;
-    {   // the size: at any render resolution
+    float label_w = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.3f;
+    auto wrap = [] { ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - box_pad); };
+    if (box_begin("Size of the panels")) {  // (at any render resolution)
+        box_row();
         int pct = ac_hud_scale;
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Size of the panels");
+        ImGui::TextUnformatted("Size");
         ImGui::SameLine(label_w);
-        ImGui::SetNextItemWidth(-1);
+        float reset_w = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2 + ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetNextItemWidth(-(box_pad + reset_w));
         if (ImGui::SliderInt("##size", &pct, 50, 150, "%d%%", ImGuiSliderFlags_AlwaysClamp)) ac_hud_scale = pct;
         size_done |= ImGui::IsItemDeactivatedAfterEdit();
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextDisabled("The panels in the corners (health, minimap, objectives, items, tutorials), each from its own corner. "
-                            "Markers over characters, text in the middle and the menus keep their size.");
-        ImGui::PopTextWrapPos();
-        ImGui::Spacing();
-    }
-    ImGui::PushTextWrapPos(0);
-    if (!picture_wide())
-        ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "The render resolution is not wider than 16:9, so the HUD is at the screen's "
-                           "edges as it is: what is below applies with a wider one (21:9, 32:9, 48:9: Render resolution, F1).");
-    ImGui::PopTextWrapPos();
-    Opt *edges = find_opt("hud_edges");
-    bool on = edges && edges->value == "1";
-    if (ImGui::Checkbox("Move the HUD's side panels toward the screen's edges", &on) && edges) set(*edges, on ? "1" : "0");
-    ImGui::Spacing();
-    ImGui::BeginDisabled(!on);
-    // All four at once: across only (the corners' own heights stay)
-    int all = ac_hud_layout[0][0];
-    bool same = true;
-    for (int c = 1; c < 4; c++) same = same && ac_hud_layout[c][0] == all;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("All corners, across");
-    ImGui::SameLine(label_w);
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderInt("##all", &all, 0, 100, same ? "%d%%" : "(differ)", ImGuiSliderFlags_AlwaysClamp))
-        for (int c = 0; c < 4; c++) ac_hud_layout[c][0] = all;
-    done |= ImGui::IsItemDeactivatedAfterEdit();
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("Across: 100%% is the screen's edge, 0%% the HUD's place on a 16:9 screen. Up and down: in 1/720ths of the "
-                        "screen's height, minus is up.");
-    ImGui::PopTextWrapPos();
-    if (ImGui::BeginTable("##corners", 3)) {
-        ImGui::TableSetupColumn("##n", ImGuiTableColumnFlags_WidthFixed, label_w - ImGui::GetStyle().CellPadding.x * 2);
-        ImGui::TableSetupColumn("Across", ImGuiTableColumnFlags_WidthStretch, 1);
-        ImGui::TableSetupColumn("Up and down", ImGuiTableColumnFlags_WidthStretch, 1);
-        ImGui::TableHeadersRow();
-        for (int c = 0; c < 4; c++) {
-            ImGui::PushID(c);
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(corner_names[c]);
-            ImGui::TableNextColumn();
-            int a = ac_hud_layout[c][0], d = ac_hud_layout[c][1];
-            ImGui::SetNextItemWidth(-1);
-            if (ImGui::SliderInt("##a", &a, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) ac_hud_layout[c][0] = a;
-            done |= ImGui::IsItemDeactivatedAfterEdit();
-            ImGui::TableNextColumn();
-            ImGui::SetNextItemWidth(-1);
-            if (ImGui::SliderInt("##d", &d, -200, 200, "%d", ImGuiSliderFlags_AlwaysClamp)) ac_hud_layout[c][1] = d;
-            done |= ImGui::IsItemDeactivatedAfterEdit();
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
-    }
-    if (ImGui::Button("Reset")) {
-        for (int c = 0; c < 4; c++) { ac_hud_layout[c][0] = corner_default[c][0]; ac_hud_layout[c][1] = corner_default[c][1]; }
-        done = true;
-    }
-    ImGui::EndDisabled();
-    if (ac_hud_scale != 100) {
         ImGui::SameLine();
-        if (ImGui::Button("Reset the size")) { ac_hud_scale = 100; size_done = true; }
+        ImGui::BeginDisabled(ac_hud_scale == 100);
+        if (ImGui::Button("Reset##size")) { ac_hud_scale = 100; size_done = true; }
+        ImGui::EndDisabled();
+        wrap();
+        ImGui::TextDisabled("The panels in the corners, each from its own corner. Markers, text in the middle and menus keep their size.");
+        ImGui::PopTextWrapPos();
     }
+    box_end();
     if (size_done) {
         saved_ok = save("hud_scale", std::to_string((int)ac_hud_scale));
         printf("[menu] hud_scale=%d\n", (int)ac_hud_scale);
         fflush(stdout);
     }
-    if (Opt *o = find_opt("fps_corner")) {  // (issue #30; also on the settings page)
-        ImGui::Spacing();
-        ImGui::PushID(o->key);
+    if (box_begin("Place on a wide screen")) {
+        box_row();
+        if (!picture_wide()) {
+            wrap();
+            ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "The render resolution is not wider than 16:9, so the HUD is at the screen's "
+                               "edges as it is: this box applies with a wider one (21:9, 32:9, 48:9: Render resolution, F1).");
+            ImGui::PopTextWrapPos();
+        }
+        Opt *edges = find_opt("hud_edges");
+        bool on = edges && edges->value == "1";
+        if (ImGui::Checkbox("Move the HUD's side panels toward the screen's edges", &on) && edges) set(*edges, on ? "1" : "0");
+        ImGui::BeginDisabled(!on);
+        {   // (at the right of the same line)
+            float bw = ImGui::CalcTextSize("Reset").x + ImGui::GetStyle().FramePadding.x * 2;
+            ImGui::SameLine(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - box_pad - bw);
+            if (ImGui::Button("Reset##place")) {
+                for (int c = 0; c < 4; c++) { ac_hud_layout[c][0] = corner_default[c][0]; ac_hud_layout[c][1] = corner_default[c][1]; }
+                done = true;
+            }
+        }
+        box_row();
+        // All four at once: across only (the corners' own heights stay)
+        int all = ac_hud_layout[0][0];
+        bool same = true;
+        for (int c = 1; c < 4; c++) same = same && ac_hud_layout[c][0] == all;
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Frame rate: position");
+        ImGui::TextUnformatted("All corners, across");
         ImGui::SameLine(label_w);
-        ImGui::SetNextItemWidth(-1);
-        combo(*o);
-        ImGui::PopID();
-        Opt *shown = find_opt("fps_counter");
-        if (shown && shown->value == "0") ImGui::TextDisabled("The frame rate is not shown now: Show the frame rate, in Settings (F1).");
+        ImGui::SetNextItemWidth(-box_pad);
+        if (ImGui::SliderInt("##all", &all, 0, 100, same ? "%d%%" : "(differ)", ImGuiSliderFlags_AlwaysClamp))
+            for (int c = 0; c < 4; c++) ac_hud_layout[c][0] = all;
+        done |= ImGui::IsItemDeactivatedAfterEdit();
+        wrap();
+        ImGui::TextDisabled("Across: 100%% is the screen's edge, 0%% the HUD's place on a 16:9 screen. Up and down: in 1/720ths of the "
+                            "screen's height, minus is up.");
+        ImGui::PopTextWrapPos();
+        box_row();
+        float first_w = label_w - ImGui::GetCursorPosX() - ImGui::GetStyle().CellPadding.x * 2;
+        if (ImGui::BeginTable("##corners", 3, 0, ImVec2(ImGui::GetContentRegionAvail().x - box_pad, 0))) {
+            ImGui::TableSetupColumn("##n", ImGuiTableColumnFlags_WidthFixed, first_w);
+            ImGui::TableSetupColumn("Across", ImGuiTableColumnFlags_WidthStretch, 1);
+            ImGui::TableSetupColumn("Up and down", ImGuiTableColumnFlags_WidthStretch, 1);
+            ImGui::TableHeadersRow();
+            for (int c = 0; c < 4; c++) {
+                ImGui::PushID(c);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(corner_names[c]);
+                ImGui::TableNextColumn();
+                int a = ac_hud_layout[c][0], d = ac_hud_layout[c][1];
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::SliderInt("##a", &a, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp)) ac_hud_layout[c][0] = a;
+                done |= ImGui::IsItemDeactivatedAfterEdit();
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::SliderInt("##d", &d, -200, 200, "%d", ImGuiSliderFlags_AlwaysClamp)) ac_hud_layout[c][1] = d;
+                done |= ImGui::IsItemDeactivatedAfterEdit();
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        ImGui::EndDisabled();
+    }
+    box_end();
+    if (Opt *o = find_opt("fps_corner")) {  // (issue #30; also on the settings page)
+        if (box_begin("Frame rate display")) {
+            box_row();
+            ImGui::PushID(o->key);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Position");
+            ImGui::SameLine(label_w);
+            ImGui::SetNextItemWidth(-box_pad);
+            combo(*o);
+            ImGui::PopID();
+            Opt *shown = find_opt("fps_counter");  // (off: said on the same line, the page is tall as it is)
+            if (shown && shown->value == "0" && ImGui::IsItemHovered()) ImGui::SetTooltip("The frame rate is not shown now: Frame rate display, in Settings (F1).");
+        }
+        box_end();
     }
     if (done) {
         saved_ok = save("hud_layout", layout_text());
         printf("[menu] hud_layout=%s\n", layout_text().c_str());
         fflush(stdout);
     }
-    ImGui::Spacing();
     ImGui::Separator();
     if (!saved_ok) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "Could not save to userdata\\launcher.ini: changes last until you close the game.");
     if (ImGui::Button("Back to the game")) InterlockedExchange(&ac_menu_close_request, 1);
@@ -1437,6 +1511,7 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     drain(io);
     float scale = (float)h / 1080.0f;
     if (scale < 0.5f) scale = 0.5f;
+    scale *= menu_size / 100.0f;
     io.FontGlobalScale = scale;
     // (each time from the unscaled style: ScaleAllSizes rounds down, and scaling the scaled sizes again loses a pixel)
     static float styled = 1;

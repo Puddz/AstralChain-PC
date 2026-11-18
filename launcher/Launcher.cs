@@ -1433,6 +1433,134 @@ namespace AstralChainLauncher
         readonly Dictionary<string, Control> inputs = new Dictionary<string, Control>();
         static readonly Color Field = Color.FromArgb(24, 30, 46);
 
+        // The boxes, in order: a title, then its options ("key", "key=another label here"; ">key": set in under the
+        // one above it, which it depends on). An option not listed goes at the end of the box named as its group
+        // (a new box if there is none).
+        static readonly string[][] BoxLayout =
+        {
+            new[] { "Game", "uncapped", "cutscene_fps_30", "ignore_focus", "save_snapshots" },
+            new[] { "Sound", "audio_resync", "cut_carry" },
+            new[] { "Picture", "fullscreen", "resolution", "handheld", "upscaler", ">fsr_sharpness=FSR 1 sharpening", "aniso",
+                "shadow_res", "present" },
+            new[] { "Anti-aliasing and upscaling (experimental)", "temporal=Method", ">temporal_quality=Quality",
+                ">temporal_sharpness" },
+            new[] { "Frame rate display", "fps_counter=Show", ">fps_corner=Position" },
+            new[] { "Ultrawide and HUD", "hud_edges=HUD at the screen's edges" },
+            new[] { "Title screen", "port_credit", "title_own_twin" },
+            new[] { "Mouse and keyboard", "mouse_look", ">mouse_sens=Camera sensitivity (%)", ">mouse_invert=Invert up and down",
+                "prompts" },
+            new[] { "Controller", "swap_ab", "rumble" },
+            new[] { "Shaders and performance", "gpu_warm", "async_submit", "bc7", "heap_in_ram" },
+            new[] { "Troubleshooting", "gpu_astc", "gpl", "pipe_warm", "gpu_hang_ms", "record_input", "save_states",
+                "show_consoles", "extra_env" },
+        };
+
+        // (a box's title: answers BM_CLICK as the launcher's buttons do, for UI tests and screen readers' default action)
+        class BoxHead : Label
+        {
+            protected override void WndProc(ref Message m)
+            {
+                if (m.Msg == 0xF5) { OnClick(EventArgs.Empty); return; }
+                base.WndProc(ref m);
+            }
+        }
+
+        class Row { public Opt O; public string Label; public bool Child; }
+        class Box { public string Title; public Panel Body; public Label Head; public Control End; public List<Row> Rows = new List<Row>(); }
+
+        readonly List<Box> boxes = new List<Box>();
+        readonly HashSet<string> closed = new HashSet<string>();
+        Panel list;
+        Control listTop, listEnd;
+        ToolTip tips;
+
+        List<Box> Arrange()
+        {
+            var result = new List<Box>();
+            var used = new HashSet<string>();
+            foreach (var g in BoxLayout)
+            {
+                var box = new Box { Title = g[0] };
+                foreach (var item in g.Skip(1))
+                {
+                    bool child = item.StartsWith(">");
+                    string key = child ? item.Substring(1) : item, label = null;
+                    int eq = key.IndexOf('=');
+                    if (eq > 0) { label = key.Substring(eq + 1); key = key.Substring(0, eq); }
+                    var o = Options.All.FirstOrDefault(x => x.Key == key);
+                    if (o == null) continue;  // (not in this branch)
+                    used.Add(key);
+                    box.Rows.Add(new Row { O = o, Label = label ?? o.Label, Child = child });
+                }
+                if (box.Rows.Count > 0) result.Add(box);
+            }
+            foreach (var o in Options.All)
+            {
+                if (used.Contains(o.Key)) continue;
+                var box = result.FirstOrDefault(b => b.Title == o.Group);
+                if (box == null) { box = new Box { Title = o.Group }; result.Add(box); }
+                box.Rows.Add(new Row { O = o, Label = o.Label, Child = false });
+            }
+            return result;
+        }
+
+        // The first sentence of an explanation shows under the name; the rest is a tooltip
+        static void SplitHelp(string help, out string first, out string rest)
+        {
+            first = help ?? "";
+            rest = "";
+            int dot = first.IndexOf(". "), line = first.IndexOf('\n');
+            if (line >= 0 && (dot < 0 || line < dot)) { rest = first.Substring(line + 1).Replace('\n', ' '); first = first.Substring(0, line); }
+            else if (dot >= 0 && dot + 2 < first.Length) { rest = first.Substring(dot + 2).Replace('\n', ' '); first = first.Substring(0, dot + 1); }
+        }
+
+        static string Wrap(string text, int width)
+        {
+            var sb = new StringBuilder();
+            int line = 0;
+            foreach (var word in text.Split(' '))
+            {
+                if (line > 0 && line + word.Length + 1 > width) { sb.Append('\n'); line = 0; }
+                else if (line > 0) { sb.Append(' '); line++; }
+                sb.Append(word);
+                line += word.Length;
+            }
+            return sb.ToString();
+        }
+
+        // Where each box goes, by what is open: sizes come from the controls themselves, which Windows has scaled
+        void Relayout()
+        {
+            if (boxes.Count == 0) return;
+            list.SuspendLayout();
+            Point scroll = list.AutoScrollPosition;
+            list.AutoScrollPosition = new Point(0, 0);
+            int gap = Math.Max(4, boxes[0].Head.Height / 3);
+            int y = listTop.Bottom + gap;
+            foreach (var b in boxes)
+            {
+                bool open = !closed.Contains(b.Title);
+                foreach (Control c in b.Body.Controls) if (c != b.Head) c.Visible = open;
+                b.Head.Text = (open ? "▾  " : "▸  ") + b.Title;
+                b.Body.Top = y;
+                b.Body.Height = open ? b.End.Bottom : b.Head.Bottom + 1;
+                y += b.Body.Height + gap;
+                b.Body.Invalidate();
+            }
+            listEnd.Top = y;
+            list.ResumeLayout();
+            list.AutoScrollPosition = new Point(-scroll.X, -scroll.Y);
+        }
+
+        void Toggle(Box b)
+        {
+            if (!closed.Remove(b.Title)) closed.Add(b.Title);
+            Relayout();
+            try { settings.Set("settings_closed", string.Join("|", closed.OrderBy(x => x))); settings.Save(); } catch { }
+        }
+
+        protected override void OnShown(EventArgs e) { base.OnShown(e); Relayout(); }
+
         public SettingsForm(Settings settings)
         {
             this.settings = settings;
@@ -1466,77 +1594,124 @@ namespace AstralChainLauncher
 
             var panel = new Panel { Location = new Point(1, 44), Size = new Size(558, 544), AutoScroll = true };
             Controls.Add(panel);
-            int y = 10;
-            string group = null;
-            foreach (var o in Options.All)
+            list = panel;
+            tips = new ToolTip { AutoPopDelay = 30000, InitialDelay = 300, ReshowDelay = 100 };
+            foreach (var t in (settings.Raw("settings_closed") ?? "").Split('|')) if (t.Length > 0) closed.Add(t);
+            listTop = new Label { ForeColor = Theme.Dim, Location = new Point(12, 8), Size = new Size(516, 50),
+                Text = "Keys in the game: F1 settings, F2 HUD layout and size, F3 hide the HUD, F6 / F7 save and load a state " +
+                       "(Save states, under Troubleshooting), F11 fullscreen.\nA box's title closes and opens it. (?) after a " +
+                       "name: point at it for more." };
+            panel.Controls.Add(listTop);
+            Color boxBack = Color.FromArgb(17, 22, 38), headBack = Color.FromArgb(23, 39, 74), edge = Color.FromArgb(43, 58, 92);
+            foreach (var box in Arrange())
             {
-                if (o.Group != group)
+                var b = box;
+                b.Body = new Panel { Location = new Point(10, 0), Size = new Size(520, 40), BackColor = boxBack };
+                b.Body.Paint += (s, e) =>
                 {
-                    group = o.Group;
-                    panel.Controls.Add(new Label { Text = group.ToUpperInvariant(), Font = new Font("Segoe UI", 10F, FontStyle.Bold),
-                        Location = new Point(14, y), AutoSize = true, ForeColor = Theme.Accent });
-                    y += 28;
-                }
-                string value = settings.Get(o.Key);
-                Control input;
-                if (o.Kind == OptKind.Check)
+                    var c = (Control)s;
+                    using (var pen = new Pen(edge)) e.Graphics.DrawRectangle(pen, 0, 0, c.Width - 1, c.Height - 1);
+                };
+                b.Head = new BoxHead { Text = b.Title, Font = new Font("Segoe UI Semibold", 9.5F), ForeColor = Theme.Text,
+                    BackColor = headBack, Location = new Point(1, 1), Size = new Size(518, 26), Padding = new Padding(8, 0, 0, 0),
+                    TextAlign = ContentAlignment.MiddleLeft, Cursor = Cursors.Hand };
+                b.Head.Click += (s, e) => Toggle(b);
+                b.Head.MouseEnter += (s, e) => b.Head.BackColor = Color.FromArgb(33, 56, 107);
+                b.Head.MouseLeave += (s, e) => b.Head.BackColor = headBack;
+                b.Body.Controls.Add(b.Head);
+                int y = 33;
+                bool firstRow = true;
+                foreach (var row in b.Rows)
                 {
-                    input = new CheckBox { Text = o.Label, Checked = value == "1", Location = new Point(20, y),
-                        Size = new Size(500, 22) };
-                    panel.Controls.Add(input);
-                    y += 22;
-                }
-                else
-                {
-                    panel.Controls.Add(new Label { Text = o.Label, Location = new Point(20, y + 3), AutoSize = true });
-                    if (o.Kind == OptKind.Choice)
+                    Opt o = row.O;
+                    if (!firstRow)
                     {
-                        var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat,
-                            BackColor = Field, ForeColor = Theme.Text, Location = new Point(250, y), Size = new Size(270, 24) };
-                        foreach (var c in o.Choices) combo.Items.Add(c.Split('|')[1]);
-                        int index = Array.FindIndex(o.Choices, c => c.Split('|')[0] == value);
-                        combo.SelectedIndex = index < 0 ? 0 : index;
-                        input = combo;
+                        b.Body.Controls.Add(new Panel { Location = new Point(12, y), Size = new Size(496, 1), BackColor = Color.FromArgb(30, 42, 70) });
+                        y += 5;
                     }
-                    else if (o.Kind == OptKind.Number)
+                    firstRow = false;
+                    int x = 12 + (row.Child ? 18 : 0);
+                    string first, rest;
+                    SplitHelp(o.Help, out first, out rest);
+                    string tip = rest.Length > 0 ? Wrap(rest, 64) : null;
+                    string name = row.Label + (tip != null ? "  (?)" : "");
+                    string value = settings.Get(o.Key);
+                    Control input;
+                    if (o.Kind == OptKind.Check)
                     {
-                        int n;
-                        if (!int.TryParse(value, out n)) n = int.Parse(o.Default);
-                        input = new NumericUpDown { Minimum = o.Min, Maximum = o.Max, Increment = 100,
-                            Value = Math.Max(o.Min, Math.Min(o.Max, n)), Location = new Point(250, y),
-                            Size = new Size(100, 24), BackColor = Field, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
+                        input = new CheckBox { Text = name, Checked = value == "1", Location = new Point(x, y), Size = new Size(508 - x, 22) };
+                        b.Body.Controls.Add(input);
+                        y += 24;
                     }
                     else if (o.Kind == OptKind.Folder)
                     {
-                        var box = new TextBox { Text = value, Location = new Point(250, y), Size = new Size(190, 24),
+                        var folderLabel = new Label { Text = name, Location = new Point(x, y + 3), AutoSize = true };
+                        b.Body.Controls.Add(folderLabel);
+                        if (tip != null) tips.SetToolTip(folderLabel, tip);
+                        var folder = new TextBox { Text = value, Location = new Point(250, y), Size = new Size(178, 24),
                             BackColor = Field, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
-                        var browse = new NeonButton { Text = "Browse", Location = new Point(446, y - 2), Size = new Size(74, 28) };
+                        var browse = new NeonButton { Text = "Browse", Location = new Point(434, y - 2), Size = new Size(74, 28) };
                         browse.Click += (s, e) =>
                         {
                             using (var d = new FolderBrowserDialog { Description = o.Label, ShowNewFolderButton = true })
                             {
-                                if (box.Text.Trim() != "" && Directory.Exists(box.Text.Trim())) d.SelectedPath = box.Text.Trim();
-                                if (d.ShowDialog(this) == DialogResult.OK) box.Text = d.SelectedPath;
+                                if (folder.Text.Trim() != "" && Directory.Exists(folder.Text.Trim())) d.SelectedPath = folder.Text.Trim();
+                                if (d.ShowDialog(this) == DialogResult.OK) folder.Text = d.SelectedPath;
                             }
                         };
-                        panel.Controls.Add(browse);
-                        input = box;
+                        b.Body.Controls.Add(browse);
+                        b.Body.Controls.Add(folder);
+                        input = folder;
+                        y += 30;
                     }
                     else
-                        input = new TextBox { Text = value, Location = new Point(250, y), Size = new Size(270, 24),
-                            BackColor = Field, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
-                    panel.Controls.Add(input);
-                    y += 28;
+                    {
+                        var label = new Label { Text = name, Location = new Point(x, y + 3), AutoSize = true };
+                        b.Body.Controls.Add(label);
+                        if (tip != null) tips.SetToolTip(label, tip);
+                        if (o.Kind == OptKind.Choice)
+                        {
+                            var combo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat,
+                                BackColor = Field, ForeColor = Theme.Text, Location = new Point(250, y), Size = new Size(258, 24) };
+                            foreach (var c in o.Choices) combo.Items.Add(c.Split('|')[1]);
+                            int index = Array.FindIndex(o.Choices, c => c.Split('|')[0] == value);
+                            combo.SelectedIndex = index < 0 ? 0 : index;
+                            input = combo;
+                        }
+                        else if (o.Kind == OptKind.Number)
+                        {
+                            int n;
+                            if (!int.TryParse(value, out n)) n = int.Parse(o.Default);
+                            input = new NumericUpDown { Minimum = o.Min, Maximum = o.Max, Increment = 100,
+                                Value = Math.Max(o.Min, Math.Min(o.Max, n)), Location = new Point(250, y),
+                                Size = new Size(100, 24), BackColor = Field, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
+                        }
+                        else
+                            input = new TextBox { Text = value, Location = new Point(250, y), Size = new Size(258, 24),
+                                BackColor = Field, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
+                        b.Body.Controls.Add(input);
+                        y += 28;
+                    }
+                    if (tip != null) tips.SetToolTip(input, tip);
+                    inputs[o.Key] = input;
+                    if (first.Length > 0)
+                    {
+                        int hx = x + 18, hw = 508 - hx;
+                        var help = new Label { Text = first, ForeColor = Theme.Dim, Location = new Point(hx, y), Font = Font, Size = new Size(hw, 32) };
+                        help.Height = TextRenderer.MeasureText(first, help.Font, new Size(hw, 1000), TextFormatFlags.WordBreak).Height + 2;
+                        if (tip != null) tips.SetToolTip(help, tip);
+                        b.Body.Controls.Add(help);
+                        y += help.Height + 4;
+                    }
                 }
-                inputs[o.Key] = input;
-                var help = new Label { Text = o.Help, ForeColor = Theme.Dim, Location = new Point(38, y), Font = Font,
-                    Size = new Size(482, 32) };
-                help.Height = TextRenderer.MeasureText(o.Help, help.Font, new Size(482, 1000),
-                    TextFormatFlags.WordBreak).Height + 2;
-                panel.Controls.Add(help);
-                y += help.Height + 8;
+                b.End = new Label { Location = new Point(0, y + 3), Size = new Size(1, 1) };
+                b.Body.Controls.Add(b.End);
+                panel.Controls.Add(b.Body);
+                boxes.Add(b);
             }
-            panel.Controls.Add(new Label { Location = new Point(0, y), Size = new Size(1, 1) });
+            listEnd = new Label { Location = new Point(0, 0), Size = new Size(1, 1) };
+            panel.Controls.Add(listEnd);
+            Relayout();
             // (an option that does nothing with what another is set to is greyed out; issue #34)
             Depend("fsr_sharpness", "upscaler", v => v == "fsr1");
             Depend("temporal_quality", "temporal", v => v != "off");

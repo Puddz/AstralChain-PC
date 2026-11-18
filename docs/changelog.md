@@ -4,6 +4,13 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-18**
 
+- **Settings in boxes, in the launcher too; boxes close and open; menu size** (issue #43; *not yet confirmed in
+  play*): the launcher's **Settings** window now has the same titled boxes by topic as the in-game menu, with the
+  first sentence of each explanation under the name and the rest as a tooltip on the **(?)**, and a line at the
+  top listing the keys used in the game (save states included). In both, a click on a box's title closes or opens
+  it, and that is remembered. The HUD layout page (**F2**) has the same look (Size of the panels, Place on a wide
+  screen, Frame rate display). The in-game menu's last box, **This menu**, has a **Size** slider (60% to 160%) for
+  its text and window. Looked at in screenshots of the three windows; not tried with a controller.
 - **Frame rate: size** (*not yet confirmed in play*): a slider under **Frame rate display** in the in-game menu
   (**F1**) makes the frame rate counter and the detailed panel smaller or larger, 50% to 200%. Applies at once.
 - **In-game settings (F1): a tidier page** (issue #43; *not yet confirmed in play*): the settings are in titled
