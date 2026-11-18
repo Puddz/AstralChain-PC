@@ -4,6 +4,8 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-18**
 
+- **Frame rate: size** (*not yet confirmed in play*): a slider under **Frame rate display** in the in-game menu
+  (**F1**) makes the frame rate counter and the detailed panel smaller or larger, 50% to 200%. Applies at once.
 - **In-game settings (F1): a tidier page** (issue #43; *not yet confirmed in play*): the settings are in titled
   boxes by topic (Controller, Mouse, Picture, Frame rate display, Ultrawide and HUD, Title screen, Game), with a
   line between settings and the ones that depend on another set in under it. Only the first sentence of each

@@ -404,6 +404,7 @@ const char *const fps_part_names[] = {"GPU and video memory", "CPU and memory", 
                                       "Renderer timings", "Render sizes", "Frame limit and presentation", "GPU and CPU names"};
 const int FPS_PARTS = 8;
 int fps_hide;
+int fps_size = 100;  // the frame rate's and the panel's size, percent (launcher.ini fps_size, or AC_FPS_SIZE: 50-200)
 
 // An option that does nothing with what another one is set to now (shown greyed out; issue #34).
 bool unused(const Opt &o) {
@@ -570,6 +571,21 @@ void draw(float scale) {
             ImGui::PopTextWrapPos();
             if (child) ImGui::Unindent(fs * 1.2f);
         }
+        if (!strcmp(o.key, "fps_corner")) {  // (the size, of the frame rate and of the detailed panel)
+            box_row();
+            ImGui::BeginDisabled(off);
+            ImGui::Indent(fs * 1.2f); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Size");
+            ImGui::Unindent(fs * 1.2f); ImGui::SameLine(label_w);
+            ImGui::SetNextItemWidth(-box_pad);
+            int v = fps_size;
+            if (ImGui::SliderInt("##size", &v, 50, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp)) fps_size = v;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                saved_ok = save("fps_size", std::to_string(fps_size));
+                printf("[menu] fps_size=%d\n", fps_size);
+                fflush(stdout);
+            }
+            ImGui::EndDisabled();
+        }
         ImGui::PopID();
     }
     box_end();
@@ -658,6 +674,10 @@ void load_layout() {
     t = env("AC_FPS_HIDE");
     if (t.empty()) t = load("fps_hide");
     fps_hide = atoi(t.c_str()) & ((1 << FPS_PARTS) - 1);
+    t = env("AC_FPS_SIZE");
+    if (t.empty()) t = load("fps_size");
+    pct = atoi(t.c_str());
+    if (pct >= 50 && pct <= 200) fps_size = pct;
 }
 
 bool picture_wide() {
@@ -1244,8 +1264,8 @@ bool fps_due(void) {
 }
 
 void draw_fps_simple(float w, float h) {
-    float size = h * 0.028f;
-    if (size < 14) size = 14;
+    float size = h * 0.028f * fps_size / 100.0f;
+    if (size < 10) size = 10;
     ImFont *f = font ? font : ImGui::GetFont();
     ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0, fps_text);
     float m = size * 0.5f;
@@ -1259,8 +1279,8 @@ void draw_fps_simple(float w, float h) {
 
 // The detailed panel: a window of its own in the chosen corner (no input, no focus), its text sized for the window.
 void draw_fps_detailed(float w, float h) {
-    float size = h * 0.02f;
-    if (size < 13) size = 13;
+    float size = h * 0.02f * fps_size / 100.0f;
+    if (size < 9) size = 9;
     ImGuiIO &io = ImGui::GetIO();
     ImFont *f = font ? font : ImGui::GetFont();
     float pad = size * 0.5f;
