@@ -77,66 +77,66 @@ struct Opt {
 
 // The launcher's options (launcher/Launcher.cs: same keys, defaults and meaning) that make sense while playing.
 std::vector<Opt> opts = {
-    {"prompts", "Controls", "Button icons in the game",
+    {"prompts", "Controller", "Button icons in the game",
      "Automatic: the icons follow what you last used (keyboard and mouse, an Xbox, PlayStation or Switch controller).",
      CHOICE, "auto", "auto|Automatic;keyboard|Keyboard and mouse;xbox|Xbox controller;playstation|PlayStation controller;switch|Switch controller", 0, 0, true},
-    {"swap_ab", "Controls", "Swap A and B on the controller",
+    {"swap_ab", "Controller", "Swap A and B on the controller",
      "On: the bottom button (Xbox A, PlayStation cross) confirms and talks, the right one goes back. The button icons follow.",
      CHECK, "0", nullptr, 0, 0, true},
-    {"rumble", "Controls", "Rumble strength (%)", "0 turns rumble off.", NUMBER, "100", nullptr, 0, 200, true},
-    {"mouse_look", "Controls", "Mouse moves the camera", "Click in the game to give it the mouse; hold Alt to get the cursor back.",
+    {"rumble", "Controller", "Rumble strength (%)", "0 turns rumble off.", NUMBER, "100", nullptr, 0, 200, true},
+    {"mouse_look", "Mouse", "Mouse moves the camera", "Click in the game to give it the mouse; hold Alt to get the cursor back.",
      CHECK, "1", nullptr, 0, 0, true},
-    {"mouse_sens", "Controls", "Mouse camera sensitivity (%)", nullptr, NUMBER, "100", nullptr, 10, 500, true},
-    {"mouse_invert", "Controls", "Invert mouse up and down", nullptr, CHECK, "0", nullptr, 0, 0, true},
-    {"fullscreen", "Display", "Fullscreen", "Also F11 or Alt+Enter. The game starts the way you leave it.", CHECK, "0", nullptr, 0, 0, true},
-    {"resolution", "Display", "Render resolution (experimental)",
+    {"mouse_sens", "Mouse", "Camera sensitivity (%)", nullptr, NUMBER, "100", nullptr, 10, 500, true},
+    {"mouse_invert", "Mouse", "Invert up and down", nullptr, CHECK, "0", nullptr, 0, 0, true},
+    {"fullscreen", "Picture", "Fullscreen", "Also F11 or Alt+Enter. The game starts the way you leave it.", CHECK, "0", nullptr, 0, 0, true},
+    {"resolution", "Picture", "Render resolution (experimental)",
      "1600x900 is the Switch's (with its dynamic resolution). The smaller sizes are for slow GPUs; 21:9 and 32:9 for ultrawide screens, 48:9 for three screens side by side.",
      CHOICE, "1600x900", "854x480|854x480 (480p);960x540|960x540 (540p);1280x720|1280x720 (720p);1600x900|1600x900 (default);1920x1080|1920x1080;2560x1440|2560x1440;3840x2160|3840x2160;"
      "2560x1080|2560x1080 (21:9);3440x1440|3440x1440 (21:9);3840x1080|3840x1080 (32:9);5120x1440|5120x1440 (32:9);5760x1080|5760x1080 (48:9);7680x1440|7680x1440 (48:9, drawn at 6788x1272)", 0, 0, false},
-    {"upscaler", "Display", "Window scaling",
+    {"handheld", "Picture", "Handheld mode: render at 1280x720", "For GPUs that cannot hold 60 fps.", CHECK, "0", nullptr, 0, 0, false},
+    {"upscaler", "Picture", "Window scaling",
      "How the finished picture is enlarged when the window or screen is larger than the render resolution. It is not "
      "DLSS or FSR 3.1 / 4 (below), which rebuild the 3D scene.",
      CHOICE, "off", "off|Smooth (default);fsr1|AMD FSR 1", 0, 0, true},
-    {"fsr_sharpness", "Display", "Window scaling: FSR 1 sharpening", nullptr, CHOICE, "0.2", "0|Strong;0.2|Normal (default);0.5|Light;1|Very light", 0, 0, true},
-    {"aniso", "Display", "Anisotropic filtering",
+    {"fsr_sharpness", "Picture", "FSR 1 sharpening", nullptr, CHOICE, "0.2", "0|Strong;0.2|Normal (default);0.5|Light;1|Very light", 0, 0, true},
+    {"aniso", "Picture", "Anisotropic filtering",
      "Keeps textures seen at a slant sharp (the ground in the distance). The game's own: as on the Switch.",
      CHOICE, "0", "0|The game's own (default);4|4x;8|8x;16|16x", 0, 0, false},
-    {"shadow_res", "Display", "Shadow resolution",
+    {"shadow_res", "Picture", "Shadow resolution",
      "How finely shadows are drawn. The game's own: as on the Switch (blocky edges from close up). Video memory: about 250 MB at 4x, 1 GB at 8x.",
      CHOICE, "1", "1|The game's own (default);2|2x;4|4x;8|8x (1 GB of video memory)", 0, 0, false},
-    {"temporal", "Display", "Anti-aliasing and upscaling (experimental)",
+    {"present", "Picture", "Presentation mode", "Mailbox: no tearing. Vsync: waits for the display. Immediate: tearing, lowest latency.",
+     CHOICE, "mailbox", "mailbox|Mailbox (default);fifo|Vsync (FIFO);immediate|Immediate", 0, 0, false},
+    {"temporal", "Anti-aliasing and upscaling (experimental)", "Method",
      "The game's own: SMAA. DLSS (NVIDIA RTX) and FSR draw the 3D scene smaller (the quality below) and rebuild it at the "
      "render resolution from several frames; the HUD stays at the render resolution. FSR 4 on Radeon GPUs that have it, "
      "FSR 3.1 on any GPU. Their files are downloaded by the launcher at the next Play.",
      CHOICE, "off", "off|The game's own (default);dlss|NVIDIA DLSS;fsr|AMD FSR 3.1 / 4", 0, 0, false},
-    {"temporal_quality", "Display", "DLSS / FSR quality",
+    {"temporal_quality", "Anti-aliasing and upscaling (experimental)", "Quality",
      "The size the 3D scene is drawn at, as a share of the render resolution. Native: full size, anti-aliasing only (DLAA).",
      CHOICE, "quality", "native|Native (100%, anti-aliasing only);quality|Quality (67%, default);balanced|Balanced (59%);"
      "performance|Performance (50%);ultra|Ultra performance (33%)", 0, 0, false},
-    {"temporal_sharpness", "Display", "FSR 3.1 / 4 sharpening", nullptr, CHOICE, "0", "0|Off (default);0.3|Light;0.6|Normal;1|Strong", 0, 0, true},
-    {"hud_edges", "Display", "Ultrawide: HUD at the screen's edges",
-     "With a render resolution wider than 16:9, the HUD's side panels (health, minimap, objectives, tutorials) move to "
-     "the edges of the screen. Markers over characters stay where they are. HUD layout (F2): how far each corner's "
-     "panels move, and up or down.", CHECK, "0", nullptr, 0, 0, true},
-    {"fps_counter", "Display", "Show the frame rate",
+    {"temporal_sharpness", "Anti-aliasing and upscaling (experimental)", "FSR 3.1 / 4 sharpening", nullptr, CHOICE, "0", "0|Off (default);0.3|Light;0.6|Normal;1|Strong", 0, 0, true},
+    {"fps_counter", "Frame rate display", "Show",
      "Frame rate: frames per second and the average frame time. Detailed: also a frame time graph, "
      "the slowest frames, GPU and CPU load, memory, the GPU's temperature and power where its driver gives them, and the "
      "render sizes.",
      CHOICE, "0", "0|Off;1|Frame rate;2|Detailed", 0, 0, true},
-    {"fps_corner", "Display", "Frame rate: position", "Where in the window the frame rate is shown.",
+    {"fps_corner", "Frame rate display", "Position", "Where in the window the frame rate is shown.",
      CHOICE, "tl", "tl|Top left (default);tr|Top right;ml|Middle left;mr|Middle right;bl|Bottom left;br|Bottom right", 0, 0, true},
-    {"port_credit", "Display", "Show \"Port by Puddz\" on the title screen", nullptr, CHECK, "1", nullptr, 0, 0, true},
-    {"title_own_twin", "Display", "Title screen shows the twin you play as",
+    {"hud_edges", "Ultrawide and HUD", "HUD at the screen's edges",
+     "With a render resolution wider than 16:9, the HUD's side panels (health, minimap, objectives, tutorials) move to "
+     "the edges of the screen. Markers over characters stay where they are. HUD layout (F2): how far each corner's "
+     "panels move, and up or down.", CHECK, "0", nullptr, 0, 0, true},
+    {"port_credit", "Title screen", "Show \"Port by Puddz\"", nullptr, CHECK, "1", nullptr, 0, 0, true},
+    {"title_own_twin", "Title screen", "Show the twin you play as",
      "The game shows the other twin. From the next time the title screen appears.", CHECK, "0", nullptr, 0, 0, true},
-    {"handheld", "Display", "Handheld mode: render at 1280x720", "For GPUs that cannot hold 60 fps.", CHECK, "0", nullptr, 0, 0, false},
-    {"present", "Display", "Presentation mode", "Mailbox: no tearing. Vsync: waits for the display. Immediate: tearing, lowest latency.",
-     CHOICE, "mailbox", "mailbox|Mailbox (default);fifo|Vsync (FIFO);immediate|Immediate", 0, 0, false},
     {"uncapped", "Game", "Uncapped frame rate (experimental)",
      "Gameplay is not held to 60 fps (cutscenes stay at 60). With Vsync, the display's refresh rate is the limit.",
      CHECK, "0", nullptr, 0, 0, true},
     {"cutscene_fps_30", "Game", "Cutscenes at 30 fps, as on the Switch", "From the next cutscene on.", CHECK, "0", nullptr, 0, 0, true},
-    {"ignore_focus", "Game", "Keep running while the game window is minimized", nullptr, CHECK, "0", nullptr, 0, 0, true},
-    {"async_submit", "Game", "Prepare graphics on a separate thread (experimental)", nullptr, CHECK, "0", nullptr, 0, 0, false},
+    {"ignore_focus", "Game", "Keep running while minimized", nullptr, CHECK, "0", nullptr, 0, 0, true},
+    {"async_submit", "Game", "Graphics on a separate thread (experimental)", nullptr, CHECK, "0", nullptr, 0, 0, false},
 };
 
 std::string env(const char *name) {
@@ -415,6 +415,68 @@ bool unused(const Opt &o) {
     return false;
 }
 
+// ---- the settings page's looks: a strip of keys, then one bordered box per topic (the options' groups), each
+// setting a row in it with a line between rows; a setting that only matters with the one above it is set in.
+void key_chip(const char *k, const char *what, bool first) {
+    ImGuiStyle &st = ImGui::GetStyle();
+    float fs = ImGui::GetFontSize();
+    ImVec2 ts = ImGui::CalcTextSize(k);
+    float need = ts.x + st.FramePadding.x * 2 + fs * 0.3f + ImGui::CalcTextSize(what).x;
+    if (!first) { ImGui::SameLine(0, fs * 0.9f); if (ImGui::GetContentRegionAvail().x < need) ImGui::NewLine(); }
+    ImVec2 p = ImGui::GetCursorScreenPos(), sz(ts.x + st.FramePadding.x * 2, ImGui::GetFrameHeight());
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x + sz.x, p.y + sz.y), ImGui::GetColorU32(ImGuiCol_FrameBg), fs * 0.15f);
+    dl->AddRect(p, ImVec2(p.x + sz.x, p.y + sz.y), ImGui::GetColorU32(ImGuiCol_Border), fs * 0.15f);
+    dl->AddText(ImVec2(p.x + st.FramePadding.x, p.y + st.FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), k);
+    ImGui::Dummy(sz);
+    ImGui::SameLine(0, fs * 0.3f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", what);
+}
+
+ImVec2 box_p0;
+float box_w, box_pad;
+bool box_open, box_first;
+
+void box_begin(const char *title) {
+    ImGuiStyle &st = ImGui::GetStyle();
+    float fs = ImGui::GetFontSize(), hh = ImGui::GetFrameHeight();
+    box_pad = fs * 0.6f;
+    box_p0 = ImGui::GetCursorScreenPos();
+    box_w = ImGui::GetContentRegionAvail().x;
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(box_p0, ImVec2(box_p0.x + box_w, box_p0.y + hh), ImGui::GetColorU32(ImVec4(0.09f, 0.153f, 0.29f, 1)), fs * 0.3f,
+                      ImDrawFlags_RoundCornersTop);
+    dl->AddText(ImVec2(box_p0.x + box_pad, box_p0.y + st.FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), title);
+    ImGui::Dummy(ImVec2(box_w, hh));
+    ImGui::Indent(box_pad);
+    box_open = box_first = true;
+}
+
+void box_row() {  // (before each setting: a line above it, but for the box's first)
+    if (!box_first) {
+        float y = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y * 0.5f;
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(box_p0.x + box_pad, y), ImVec2(box_p0.x + box_w - box_pad, y),
+                                            ImGui::GetColorU32(ImVec4(0.25f, 0.32f, 0.5f, 0.3f)));
+    }
+    box_first = false;
+}
+
+void box_end() {
+    if (!box_open) return;
+    box_open = false;
+    ImGui::Unindent(box_pad);
+    ImGui::Dummy(ImVec2(0, box_pad * 0.2f));
+    float y1 = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y;
+    ImGui::GetWindowDrawList()->AddRect(box_p0, ImVec2(box_p0.x + box_w, y1), ImGui::GetColorU32(ImGuiCol_Border), ImGui::GetFontSize() * 0.3f);
+    ImGui::Dummy(ImVec2(0, box_pad * 0.5f));
+}
+
+bool is_child(const Opt &o) {
+    return !strcmp(o.key, "fsr_sharpness") || !strcmp(o.key, "temporal_quality") || !strcmp(o.key, "temporal_sharpness") ||
+           !strcmp(o.key, "fps_corner") || !strcmp(o.key, "mouse_sens") || !strcmp(o.key, "mouse_invert");
+}
+
 void draw(float scale) {
     ImGuiIO &io = ImGui::GetIO();
     // (B leaves a list or a slider first: only with nothing open since the last frame does it close the menu)
@@ -426,26 +488,42 @@ void draw(float scale) {
     if (!was_open) ImGui::SetNextWindowFocus();
     ImGui::Begin("Astral Chain PC: settings", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_NoSavedSettings);
-    ImGui::TextDisabled("F1 or Minus + Plus: back to the game. The game does not get your input while this is open.");
-    ImGui::TextDisabled("F3 in the game: hides the game's HUD and menus (for screenshots), and shows them again.");
-    if (env("AC_SAVE_STATES") == "1") ImGui::TextDisabled("Save states are on: F6 in the game saves a state, F7 loads it.");
-    else ImGui::TextDisabled("Save states (F6 and F7 in the game) are off: Save states, under Troubleshooting in the launcher.");
-    if (picture_wide()) {  // (the HUD layout's button is further down, under Display)
-        ImGui::TextDisabled("Wide screen: the HUD's place is in");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("HUD layout (F2)")) InterlockedExchange(&ac_menu_page, 1);
-    }
+    key_chip("F1", "or Minus + Plus: back to the game", true);
+    key_chip("F2", "HUD layout and size", false);
+    key_chip("F3", "hide the HUD", false);
+    if (env("AC_SAVE_STATES") == "1") { key_chip("F6", "save a state", false); key_chip("F7", "load it", false); }
+    else key_chip("F6 / F7", "save states: off (launcher, Troubleshooting)", false);
+    key_chip("F11", "fullscreen", false);
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("The game does not get your input while this is open. (?) after a name: point at it, or move to the setting, for more.");
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
     const char *group = nullptr;
-    float label_w = ImGui::GetContentRegionAvail().x * 0.5f;
+    float label_w = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.5f;
+    float fs = ImGui::GetFontSize();
     for (Opt &o : opts) {
-        if (!group || strcmp(group, o.group)) { group = o.group; ImGui::Spacing(); ImGui::SeparatorText(group); }
+        if (!group || strcmp(group, o.group)) { group = o.group; box_end(); box_begin(group); }
         ImGui::PushID(o.key);
-        bool off = unused(o);
+        box_row();
+        bool off = unused(o), child = is_child(o);
+        // the first sentence of the help under the name; the rest behind a (?)
+        std::string first = o.help ? o.help : "", rest;
+        size_t dot = first.find(". ");
+        if (dot != std::string::npos && dot + 2 < first.size()) { rest = first.substr(dot + 2); first.resize(dot + 1); }
+        bool tip = false;
         ImGui::BeginDisabled(off);
+        if (child) ImGui::Indent(fs * 1.2f);
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(o.label);
+        tip |= ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+        if (!rest.empty()) {
+            ImGui::SameLine(0, fs * 0.4f);
+            ImGui::TextDisabled("(?)");
+            tip |= ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+        }
+        if (child) ImGui::Unindent(fs * 1.2f);
         ImGui::SameLine(label_w);
-        ImGui::SetNextItemWidth(-1);
+        ImGui::SetNextItemWidth(-box_pad);
         if (o.kind == CHECK) {
             bool on = o.value == "1";
             if (ImGui::Checkbox("##v", &on)) set(o, on ? "1" : "0");
@@ -454,7 +532,15 @@ void draw(float scale) {
             if (ImGui::SliderInt("##v", &v, o.lo, o.hi, "%d", ImGuiSliderFlags_AlwaysClamp)) set(o, std::to_string(v), false);
             if (ImGui::IsItemDeactivatedAfterEdit()) saved_ok = save(o.key, o.value);
         } else combo(o);
+        tip |= ImGui::IsItemFocused() && io.NavVisible && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
         ImGui::EndDisabled();
+        if (tip && !rest.empty()) {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(fs * 26);
+            ImGui::TextUnformatted(rest.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
         if (!strcmp(o.key, "hud_edges")) {
             ImGui::SetCursorPosX(label_w);
             if (ImGui::Button("HUD layout and size (F2)...")) InterlockedExchange(&ac_menu_page, 1);
@@ -463,8 +549,10 @@ void draw(float scale) {
             bool changed = false;
             for (int i = 0; i < FPS_PARTS; i++) {
                 bool on = !(fps_hide >> i & 1);
-                if (!i) { ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Detailed shows"); ImGui::SameLine(label_w); }
-                else ImGui::SetCursorPosX(label_w);
+                if (!i) {
+                    ImGui::Indent(fs * 1.2f); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Detailed shows");
+                    ImGui::Unindent(fs * 1.2f); ImGui::SameLine(label_w);
+                } else ImGui::SetCursorPosX(label_w);
                 if (ImGui::Checkbox(fps_part_names[i], &on)) { fps_hide = on ? fps_hide & ~(1 << i) : fps_hide | 1 << i; changed = true; }
             }
             if (changed) {
@@ -473,15 +561,18 @@ void draw(float scale) {
                 fflush(stdout);
             }
         }
-        if (o.help || !o.live) {
-            ImGui::PushTextWrapPos(0);
-            if (!o.live) ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "Applies at the next start.");
-            if (!o.live && o.help) ImGui::SameLine();
-            if (o.help) ImGui::TextDisabled("%s", o.help);
+        if (!first.empty() || !o.live) {
+            if (child) ImGui::Indent(fs * 1.2f);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - box_pad);
+            if (!o.live) ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "Next start.");
+            if (!o.live && !first.empty()) ImGui::SameLine();
+            if (!first.empty()) ImGui::TextDisabled("%s", first.c_str());
             ImGui::PopTextWrapPos();
+            if (child) ImGui::Unindent(fs * 1.2f);
         }
         ImGui::PopID();
     }
+    box_end();
     ImGui::Spacing();
     ImGui::Separator();
     if (restart_needed) ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "Some changes apply when you next start the game.");
