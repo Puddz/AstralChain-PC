@@ -308,7 +308,7 @@ static void nv_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *reque
   uint64_t aruid=0;
   if(request->argument_size<8 || !request->send_pid || request->send_size) boundary("nv-client-layout",&state,state.pc);
   memcpy(&aruid,request->arguments,8);
-  if(aruid!=GetCurrentProcessId()) boundary("nv-client-identity",&state,state.pc);
+  if(aruid!=AC_PID()) boundary("nv-client-identity",&state,state.pc);
   sessions[session].nv_aruid=aruid;ipc_reply_u32(buffer,256,0,request->token);return;
  }
  if(request->command==0) {

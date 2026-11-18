@@ -14,6 +14,14 @@
 #define RETF(f) do { c->v[0] = 0; *(float *)&c->v[0] = (f); } while (0)
 #define HOST(T, guest) ((T *)(uintptr_t)(*(uint64_t *)(uintptr_t)(guest)))
 #define SET_HOST(guest, p) (*(uint64_t *)(uintptr_t)(guest) = (uint64_t)(uintptr_t)(p))
+// (savestate.h, experiment) The host structs of NVN objects live in one arena at a fixed address: it is saved and
+// restored as bytes with guest memory, so the pointers to them in guest memory and in each other stay right.
+enum { NVN_OBJ_SYNC = 1, NVN_OBJ_POOL, NVN_OBJ_TEXTURE, NVN_OBJ_SAMPLER, NVN_OBJ_DESCPOOL, NVN_OBJ_ENTRIES, NVN_OBJ_PROGRAM,
+       NVN_OBJ_WINDOW, NVN_OBJ_CMDBUF, NVN_OBJ_SAMPLER_ENTRIES };
+size_t nvn_obj_size(void *p);
+void *nvn_obj_alloc(size_t size, int type);  // (zeroed)
+void nvn_obj_free(void *p);
+void nvn_obj_walk(void (*fn)(void *obj, int type));
 #define G(T, base, off) (*(T *)((uint8_t *)(uintptr_t)(base) + (off)))
 
 typedef struct NvnPool {

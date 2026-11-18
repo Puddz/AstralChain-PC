@@ -190,6 +190,7 @@ static int hle_intercept(Cpu *c) {
  int nvn=target;
  for(unsigned i=0;!target && i<hle_override_count;i++) target=pc==hle_overrides[i].address;
  if(!target) return 0;
+ if(ss_stop) ss_park(c,pc);
  static int timed=-1;  /* AC_PARALLEL_STATS: host time per guest thread in NVN calls (1.5 million calls/s) */
  if(timed<0) timed=GetEnvironmentVariableA("AC_PARALLEL_STATS",NULL,0)!=0;
  LARGE_INTEGER t0,t1;
@@ -200,7 +201,7 @@ static int hle_intercept(Cpu *c) {
  if(timed && nvn && current_thread<33) {
   QueryPerformanceCounter(&t1);nvn_thread_qpc[current_thread]+=(uint64_t)(t1.QuadPart-t0.QuadPart);nvn_thread_calls[current_thread]++;
  }
- if(guest_threads[current_thread].status!=THREAD_RUNNABLE) {klock();parallel_block();kunlock();}
+ if(guest_threads[current_thread].status!=THREAD_RUNNABLE) {ss_after=0;klock();parallel_block();kunlock();}
  return handled;
 }
 /* ---- glue for vendored LASRecomp NVN objects (runtime/las) ---------------- */

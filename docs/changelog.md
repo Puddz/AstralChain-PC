@@ -4,6 +4,15 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-18**
 
+- **Save states (experimental, off by default; *not yet confirmed in play*)**: with the launcher's new **Save
+  states** option (Troubleshooting) on, **F6** writes the whole running game to a file and **F7** goes back to it:
+  at once, after the game was started again, or on another PC. It is meant for showing a problem from the moment
+  before it happens, in place of a long recording. The file is
+  `userdata\saves\01007300020fa000\savestates\state.acss` (1 to 1.5 GB); it holds game data, so send it
+  privately. A state only loads in the same release and at the same render resolution, and after loading one the
+  game saves that state's progress over your save as usual: read [save states](save-states.md) first. Tested in
+  scripted runs (20 loads in a row, a loading screen, an in-engine cutscene, FSR and DLSS on) and by loading a
+  state made on another PC with another graphics card. With the option off nothing changes.
 - **Frame rate: two more places** (issue #43; *not yet confirmed in play*): the frame rate counter and the detailed
   panel can also sit half way down the left or the right side of the window (**Middle left**, **Middle right**),
   which the game's own HUD leaves free. The setting is now called "Frame rate: position"; it applies at once.

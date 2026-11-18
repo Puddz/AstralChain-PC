@@ -652,6 +652,7 @@ const char *vk_perf_present_mode(void) { return g_present_mode_name; }
 static int g_present_crop[4];
 void backend_present_crop(const int crop[4]) { memcpy(g_present_crop, crop, sizeof g_present_crop); }
 
+void vk_ss_forget_presented(void) { g_last_presented = NULL; }  // (savestate.h)
 void backend_present(NvnTexture *t);
 void backend_represent(void) {
     if (g_last_presented) backend_present(g_last_presented);

@@ -29,6 +29,16 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
   sample. `python -m astral_chain.input_scripts highway|explore <s>|wander <s>` prints ready-made scripts.
   - Mask bits: A `0x1`, B `0x2`, ZL `0x100`, ZR `0x200`, + `0x400`, D-pad left/up/right/down `0x1000-0x8000`.
   - Left stick bits: left/up/right/down `0x10000-0x80000`. The right stick uses `<<4` of those.
+- **Save states** (`runtime/savestate.h`; [player notes](save-states.md)). `AC_SAVE_STATES=1` (launcher: *Save
+  states*): F6 writes `<saves>\<title>\savestates\state.acss` (or `AC_SS_FILE=<file>`), F7 loads it. Every guest
+  thread is stopped at its next supervisor or NVN call, the GPU is brought to rest and all its results are written
+  into guest memory; the file holds the writable guest memory (zero pages left out), the thread contexts, the kernel
+  tables and the NVN object records (kept in one arena at a fixed address, so the pointers to them in guest memory
+  stay right). A load drops every Vulkan object made for the game (they are made again from guest memory), puts
+  the memory map back, makes event and shared memory handles again and restarts every guest thread from its
+  context. A state is tied to `SS_VERSION` and the game code, not to one program file: raise `SS_VERSION` with any
+  change to a table a state holds. Tests: `AC_SS_SAVE_AT=<step>`, `AC_SS_LOAD_AT=<step>[,<step>...]` (game steps),
+  `AC_SS_CYCLE=<n>` (every n steps stop all threads and restart them), `AC_SS_ANY_BUILD=1`.
 - **Recorded input** (`runtime/input_record.h`). `AC_INPUT_RECORD=1` (launcher: *Record controller input*) records
   what the game receives from the controller (buttons and both sticks, after keyboard, mouse and pads are combined)
   from launch. Each session gets a folder `<save folder>-recordings\<date>_<time>` with `input.txt` and `save\data`, the
