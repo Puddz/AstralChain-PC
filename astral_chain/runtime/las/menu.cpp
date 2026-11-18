@@ -43,7 +43,7 @@ extern volatile long ac_menu_head, ac_menu_tail;
 extern volatile long ac_menu_pad_buttons, ac_menu_pad_lx, ac_menu_pad_ly;
 extern volatile int ac_title_credit;                     // (live_settings.h)
 extern volatile int ac_fps_counter;                      // (live_settings.h) 0 off, 1 frame rate, 2 detailed
-extern volatile int ac_fps_corner;                       // (live_settings.h) 0 top left, 1 top right, 2 bottom left, 3 bottom right
+extern volatile int ac_fps_corner;                       // (live_settings.h) 0 top left, 1 top right, 2 bottom left, 3 bottom right, 4 middle left, 5 middle right
 extern volatile int ac_uncapped;                         // (live_settings.h)
 // The renderer's numbers for the detailed frame rate panel (nvn/vulkan/exec.c, device.c)
 extern volatile int vk_perf_detail;
@@ -99,8 +99,8 @@ std::vector<Opt> opts = {
      "Keeps textures seen at a slant sharp (the ground in the distance). The game's own: as on the Switch.",
      CHOICE, "0", "0|The game's own (default);4|4x;8|8x;16|16x", 0, 0, false},
     {"shadow_res", "Display", "Shadow resolution",
-     "How finely shadows are drawn. The game's own: as on the Switch (blocky edges from close up). Video memory: about 250 MB at 4x, 1 GB at 8x, 4 GB at 16x.",
-     CHOICE, "1", "1|The game's own (default);2|2x;4|4x;8|8x (1 GB of video memory);16|16x (4 GB of video memory)", 0, 0, false},
+     "How finely shadows are drawn. The game's own: as on the Switch (blocky edges from close up). Video memory: about 250 MB at 4x, 1 GB at 8x.",
+     CHOICE, "1", "1|The game's own (default);2|2x;4|4x;8|8x (1 GB of video memory)", 0, 0, false},
     {"temporal", "Display", "Anti-aliasing and upscaling (experimental)",
      "The game's own: SMAA. DLSS (NVIDIA RTX) and FSR draw the 3D scene smaller (the quality below) and rebuild it at the "
      "render resolution from several frames; the HUD stays at the render resolution. FSR 4 on Radeon GPUs that have it, "
@@ -120,8 +120,8 @@ std::vector<Opt> opts = {
      "the slowest frames, GPU and CPU load, memory, the GPU's temperature and power where its driver gives them, and the "
      "render sizes.",
      CHOICE, "0", "0|Off;1|Frame rate;2|Detailed", 0, 0, true},
-    {"fps_corner", "Display", "Frame rate: corner", "The corner of the window the frame rate is shown in.",
-     CHOICE, "tl", "tl|Top left (default);tr|Top right;bl|Bottom left;br|Bottom right", 0, 0, true},
+    {"fps_corner", "Display", "Frame rate: position", "Where in the window the frame rate is shown.",
+     CHOICE, "tl", "tl|Top left (default);tr|Top right;ml|Middle left;mr|Middle right;bl|Bottom left;br|Bottom right", 0, 0, true},
     {"port_credit", "Display", "Show \"Port by Puddz\" on the title screen", nullptr, CHECK, "1", nullptr, 0, 0, true},
     {"title_own_twin", "Display", "Title screen shows the twin you play as",
      "The game shows the other twin. From the next time the title screen appears.", CHECK, "0", nullptr, 0, 0, true},
@@ -158,7 +158,7 @@ void read_session() {
         else if (k == "resolution") { std::string e = env("AC_RESOLUTION"); if (!e.empty()) v = e; }
         else if (k == "upscaler") v = env("AC_UPSCALER") == "fsr1" ? "fsr1" : "off";
         else if (k == "aniso") { std::string e = env("AC_ANISO"); v = e == "4" || e == "8" || e == "16" ? e : "0"; }
-        else if (k == "shadow_res") { std::string e = env("AC_SHADOW_SCALE"); v = e == "2" || e == "4" || e == "8" || e == "16" ? e : "1"; }
+        else if (k == "shadow_res") { std::string e = env("AC_SHADOW_SCALE"); v = e == "2" || e == "4" || e == "8" ? e : "1"; }
         else if (k == "fsr_sharpness") { std::string e = env("AC_FSR_SHARPNESS"); if (!e.empty()) v = e; }
         else if (k == "temporal") { std::string e = env("AC_TEMPORAL"); v = e == "dlss" || e == "fsr" ? e : "off"; }
         else if (k == "temporal_quality") { std::string e = env("AC_TEMPORAL_QUALITY"); if (!e.empty()) v = e; }
@@ -170,7 +170,7 @@ void read_session() {
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
         else if (k == "port_credit") v = env("AC_TITLE_CREDIT") == "0" ? "0" : "1";
         else if (k == "fps_counter") { std::string e = env("AC_FPS_COUNTER"); v = e == "1" || e == "2" ? e : "0"; }
-        else if (k == "fps_corner") { std::string e = env("AC_FPS_CORNER"); v = e == "tr" || e == "bl" || e == "br" ? e : "tl"; }
+        else if (k == "fps_corner") { std::string e = env("AC_FPS_CORNER"); v = e == "tr" || e == "bl" || e == "br" || e == "ml" || e == "mr" ? e : "tl"; }
         else if (k == "title_own_twin") v = env("AC_TITLE_OWN_TWIN") == "1" ? "1" : "0";
         o.value = v;
     }
@@ -615,7 +615,7 @@ void draw_hud(float scale) {
         ImGui::Spacing();
         ImGui::PushID(o->key);
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Frame rate: corner");
+        ImGui::TextUnformatted("Frame rate: position");
         ImGui::SameLine(label_w);
         ImGui::SetNextItemWidth(-1);
         combo(*o);
@@ -709,7 +709,7 @@ void draw_credit(float w, float h, ULONGLONG now) {
 
 // Frame rate counter (off by default; AC_FPS_COUNTER=1 or 2, or the menu's option): frames presented per second and
 // their average time, counted here (menu_render runs once per presented frame) over half-second windows, in a corner
-// of the window (top left; AC_FPS_CORNER=tr, bl, br or the menu's option: another one, issue #30). 2 ("Detailed", issue #28) shows a panel instead: the frame time graph and the slowest
+// of the window (top left; AC_FPS_CORNER=tr, bl, br or the menu's option: another one, issue #30; ml, mr: half way down the left or right side, issue #43). 2 ("Detailed", issue #28) shows a panel instead: the frame time graph and the slowest
 // frames, the machine's load and memory, the GPU's sensors where its driver gives them, the renderer's waits and the
 // render sizes.
 LARGE_INTEGER fps_t0, fps_freq, fps_last;
@@ -723,8 +723,9 @@ int fps_mode(void) {
 
 // The corner: bit 0 right, bit 1 bottom.
 int fps_corner(void) {
-    if (ac_fps_corner < 0) { std::string e = env("AC_FPS_CORNER"); ac_fps_corner = e == "tr" ? 1 : e == "bl" ? 2 : e == "br" ? 3 : 0; }
-    return ac_fps_corner & 3;
+    if (ac_fps_corner < 0) { std::string e = env("AC_FPS_CORNER"); ac_fps_corner = e == "tr" ? 1 : e == "bl" ? 2 : e == "br" ? 3 : e == "ml" ? 4 : e == "mr" ? 5 : 0; }
+    int c = ac_fps_corner;  // (0-3: bit 0 right, bit 1 bottom; 4, 5: half way down the left or right side, issue #43)
+    return c >= 0 && c <= 5 ? c : 0;
 }
 
 // ---- detailed: the frames (render thread)
@@ -1090,7 +1091,7 @@ void draw_fps_simple(float w, float h) {
     ImDrawList *dl = ImGui::GetForegroundDrawList();
     int corner = fps_corner();
     float bw = ts.x + m, bh = ts.y + m;  // the box, half a margin from the corner's two edges
-    float x0 = corner & 1 ? w - m * 0.5f - bw : m * 0.5f, y0 = corner & 2 ? h - m * 0.5f - bh : m * 0.5f;
+    float x0 = corner & 1 ? w - m * 0.5f - bw : m * 0.5f, y0 = corner >= 4 ? (h - bh) * 0.5f : corner & 2 ? h - m * 0.5f - bh : m * 0.5f;
     dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + bw, y0 + bh), ImGui::GetColorU32(ImVec4(0, 0, 0, 0.45f)), size * 0.2f);
     dl->AddText(f, size, ImVec2(x0 + m * 0.5f, y0 + m * 0.5f), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.95f)), fps_text);
 }
@@ -1103,8 +1104,8 @@ void draw_fps_detailed(float w, float h) {
     ImFont *f = font ? font : ImGui::GetFont();
     float pad = size * 0.5f;
     int corner = fps_corner();
-    ImGui::SetNextWindowPos(ImVec2(corner & 1 ? w - pad : pad, corner & 2 ? h - pad : pad), ImGuiCond_Always,
-                            ImVec2(corner & 1 ? 1.0f : 0.0f, corner & 2 ? 1.0f : 0.0f));
+    ImGui::SetNextWindowPos(ImVec2(corner & 1 ? w - pad : pad, corner >= 4 ? h * 0.5f : corner & 2 ? h - pad : pad), ImGuiCond_Always,
+                            ImVec2(corner & 1 ? 1.0f : 0.0f, corner >= 4 ? 0.5f : corner & 2 ? 1.0f : 0.0f));
     ImGui::SetNextWindowBgAlpha(0.6f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(size * 0.7f, size * 0.5f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(size * 0.5f, size * 0.2f));

@@ -110,10 +110,11 @@ namespace AstralChainLauncher
                 "and the window, picture and 3D render sizes. Also in the in-game menu (F1).",
                 OptKind.Choice, "0", OptTarget.Game, v => v == "1" || v == "2" ? "AC_FPS_COUNTER=" + v : "");
             fps.Choices = new[] { "0|Off (default)", "1|Frame rate", "2|Detailed" };
-            var fpsCorner = Add("fps_corner", "Display", "Frame rate: corner",
-                "The corner of the game window the frame rate is shown in. Also in the in-game menu (F1).",
-                OptKind.Choice, "tl", OptTarget.Game, v => v == "tr" || v == "bl" || v == "br" ? "AC_FPS_CORNER=" + v : "");
-            fpsCorner.Choices = new[] { "tl|Top left (default)", "tr|Top right", "bl|Bottom left", "br|Bottom right" };
+            var fpsCorner = Add("fps_corner", "Display", "Frame rate: position",
+                "Where in the game window the frame rate is shown: a corner, or half way down the left or right side, " +
+                "which the game's own HUD leaves free. Also in the in-game menu (F1).",
+                OptKind.Choice, "tl", OptTarget.Game, v => v == "tr" || v == "bl" || v == "br" || v == "ml" || v == "mr" ? "AC_FPS_CORNER=" + v : "");
+            fpsCorner.Choices = new[] { "tl|Top left (default)", "tr|Top right", "ml|Middle left", "mr|Middle right", "bl|Bottom left", "br|Bottom right" };
             Add("port_credit", "Display", "Show \"Port by Puddz\" on the title screen",
                 "A small credit above the version number while the title screen shows (on by default). Also in the " +
                 "in-game menu (F1).",
@@ -162,12 +163,11 @@ namespace AstralChainLauncher
             aniso.Choices = new[] { "0|The game's own (default)", "4|4x", "8|8x", "16|16x" };
             var shadows = Add("shadow_res", "Display", "Shadow resolution",
                 "How finely the shadows of characters and objects are drawn. The game's own: as on the Switch, where " +
-                "their edges show as blocks from close up or at a high resolution (default). 2x to 16x: the shadow " +
+                "their edges show as blocks from close up or at a high resolution (default). 2x, 4x, 8x: the shadow " +
                 "map that many times finer each way, so the blocks get that much smaller. It takes video memory: " +
-                "about 250 MB at 4x, 1 GB at 8x, 4 GB at 16x (16x needs a GPU that allows pictures 32768 wide; " +
-                "otherwise 8x is used). Applies the next time you press Play.",
-                OptKind.Choice, "1", OptTarget.Game, v => v == "2" || v == "4" || v == "8" || v == "16" ? "AC_SHADOW_SCALE=" + v : "");
-            shadows.Choices = new[] { "1|The game's own (default)", "2|2x", "4|4x", "8|8x (1 GB of video memory)", "16|16x (4 GB of video memory)" };
+                "about 250 MB at 4x, 1 GB at 8x. Applies the next time you press Play.",
+                OptKind.Choice, "1", OptTarget.Game, v => v == "2" || v == "4" || v == "8" ? "AC_SHADOW_SCALE=" + v : "");
+            shadows.Choices = new[] { "1|The game's own (default)", "2|2x", "4|4x", "8|8x (1 GB of video memory)" };
             var temporal = Add("temporal", "Display", "Anti-aliasing and upscaling (experimental)",
                 "The game's own: SMAA, with the 3D scene at the render resolution (default).\n" +
                 "NVIDIA DLSS and AMD FSR draw the 3D scene smaller (the quality below) and rebuild it at the render " +
