@@ -2,6 +2,15 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-18**
+
+- **Ultrawide, HUD at the edges: the duty points and the case icon** (issues #41, #42; *not yet confirmed in play*):
+  with "HUD at the screen's edges" on, the pop-up that counts duty points came apart (its arrow stayed in the middle
+  of the screen, the bars behind the numbers ran too wide), and the red case icon after the objective's text stayed
+  at its 16:9 place while the objective moved to the edge. Those parts are turned within their panel, which is why
+  they were left behind; they now go with the panel they belong to. In a replay of File 02 at 3840x1080 the pop-up
+  and the icon looked as at 16:9, and the Legion wheel, IRIS's profile panel and the Police Gear menu were as before.
+
 **2026-11-17**
 
 - **Ultrawide: boxes and a video in cutscenes** (issue #39; *not yet confirmed in play*): wider than 16:9, some
