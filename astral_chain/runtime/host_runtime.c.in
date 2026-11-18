@@ -92,6 +92,18 @@ static void klock_reacquire(unsigned depth) {
  if(!depth) return;
  AcquireSRWLockExclusive(&klock_srw);klock_owner=GetCurrentThreadId();klock_depth=depth;
 }
+/* (savestate.h) */
+static volatile LONG ss_stop,ss_cmd[33],ss_phase[33],ss_key;  /* ss_key: F6 pressed (1, save), F7 (2, load) */
+static __thread uint64_t ss_after;  /* the instruction after the supervisor call being run (0: c->pc is right) */
+static uint64_t ss_after_of[33];
+static void ss_park(Cpu *c,uint64_t pc);
+static void ss_resume(unsigned i);
+static void ss_frame(Cpu *c,uint64_t after);
+static int ss_enabled(void);
+static DWORD ss_pid;            /* a state of another process is loaded: the process id the game was given then */
+#define AC_PID() (ss_pid ? ss_pid : GetCurrentProcessId())
+static uint64_t ss_tick_offset; /* added to the clock, so it never runs back when such a state is loaded */
+static HANDLE interactive_event;
 static uint32_t application_terminate_result;
 static int application_terminate_result_set;
 static const char *snapshot_path;
@@ -538,12 +550,15 @@ static void reply_wide_value(uint8_t *buffer,const IpcRequest *request,uint64_t 
 #include "account_service.h"
 #include "save_service.h"
 #include "input_record.h"
+#include "savestate.h"
 static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc);
 static unsigned test_stall_ms;  /* (AC_CUTSCENE_STALL) slept after the kernel lock is released */
 /* Parallel mode: supervisor calls run under the kernel lock; any state change may wake other guest threads; a call
  * that leaves this thread waiting blocks its host thread (lock released while asleep); an exited thread ends. */
 void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
  if(!parallel_mode) {rt_svc_body(c,imm,pc);return;}
+ if(ss_stop) ss_park(c,pc);
+ ss_after=pc+4;
  if(imm==0xb) {
   /* SleepThread / yield: nothing else can end it early, so no kernel state is involved (the most frequent call:
    * worker threads poll in sleep loops). */
@@ -580,6 +595,7 @@ void rt_svc(Cpu*c,uint32_t imm,uint64_t pc) {
  klock_holder=current_thread;klock_holder_svc=imm;
  LARGE_INTEGER svc_a,svc_b;QueryPerformanceCounter(&svc_a);
  rt_svc_body(c,imm,pc);
+ if(imm==0xB1) ss_frame(c,pc+4);
  QueryPerformanceCounter(&svc_b);
  {static LARGE_INTEGER f;if(!f.QuadPart) QueryPerformanceFrequency(&f);
   double ms=1000.0*(double)(svc_b.QuadPart-svc_a.QuadPart)/(double)f.QuadPart;  /* (stall reports: under the lock) */
@@ -1069,7 +1085,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   }
   if(kind==SESSION_HID && request.command==0 && request.send_pid && request.argument_size>=8) {
    uint64_t aruid;memcpy(&aruid,request.arguments,8);
-   if(aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    hid_initialize();reply_object(session,buffer,&request,SESSION_HID_RESOURCE);c->x[0]=0;return;
   }
   if(kind==SESSION_HID_RESOURCE && request.command==0) {
@@ -1082,24 +1098,24 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   }
   if(kind==SESSION_HID && request.command==11 && request.send_pid && request.argument_size>=8) {
    uint64_t aruid;memcpy(&aruid,request.arguments,8);
-   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    hid_touch_active=1;hid_touch_publish(rt_ticks());reply_result(buffer,&request,0);c->x[0]=0;return;
   }
   if(kind==SESSION_HID && request.command==31 && request.send_pid && request.argument_size>=8) {
    uint64_t aruid;memcpy(&aruid,request.arguments,8);
-   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    keyboard_active=1;keyboard_publish(rt_ticks(),app_input_focus && app_focus==1 && !app_exit_requested);
    reply_result(buffer,&request,0);c->x[0]=0;return;
   }
   if(kind==SESSION_HID && request.command==21 && request.send_pid && request.argument_size>=8) {
    uint64_t aruid;memcpy(&aruid,request.arguments,8);
-   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    mouse_active=1;mouse_publish(rt_ticks(),app_input_focus && app_focus==1 && !app_exit_requested);
    reply_result(buffer,&request,0);c->x[0]=0;return;
   }
   if(kind==SESSION_HID && (request.command==66 || request.command==67) && request.send_pid && request.argument_size>=16) {
    uint64_t aruid;memcpy(&aruid,request.arguments+8,8);
-   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    unsigned handle=ipc_u32(request.arguments),index=hid_sensor_index(handle);
    if(request.command==66) hid_sensor_started[index/64]|=1ull<<(index%64);
    else hid_sensor_started[index/64]&=~(1ull<<(index%64));
@@ -1128,14 +1144,14 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    uint64_t aruid;memcpy(&aruid,request.arguments+8,8);
    unsigned revision=ipc_u32(request.arguments);
    printf("HID activate revision=%u\n",revision);
-   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    if(revision!=2) boundary("unsupported-hid-revision",c,pc);
    hid_revision=revision;hid_active=1;hid_publish(rt_ticks(),app_input_focus);
    reply_result(buffer,&request,0);c->x[0]=0;return;
   }
   if(kind==SESSION_HID && request.command==100 && request.send_pid && request.argument_size>=16) {
    uint64_t aruid;memcpy(&aruid,request.arguments+8,8);
-   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    unsigned styles=ipc_u32(request.arguments);
    if(styles&~0x7fu) boundary("unsupported-npad-style-mask",c,pc);
    hid_styles=styles;hid_publish(rt_ticks(),app_input_focus);
@@ -1143,12 +1159,12 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   }
   if(kind==SESSION_HID && request.command==101 && request.send_pid && request.argument_size>=8) {
    uint64_t aruid;memcpy(&aruid,request.arguments,8);
-   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    reply_value(buffer,&request,hid_styles);c->x[0]=0;return;
   }
   if(kind==SESSION_HID && request.command==102 && request.send_pid && request.argument_size>=8) {
    uint64_t aruid;memcpy(&aruid,request.arguments,8);
-   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    if(!request.send_is_pointer || request.send_size%4 || request.send_size>40)
     boundary("invalid-npad-id-buffer",c,pc);
    unsigned ids=0;
@@ -1159,7 +1175,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   }
   if(kind==SESSION_HID && (request.command==120 || request.command==121 || request.command==128 || request.command==129) && request.send_pid && request.argument_size>=8) {
    uint64_t aruid;memcpy(&aruid,request.arguments,8);
-   if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",c,pc);
+   if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",c,pc);
    uint64_t *policy=request.command<128 ? &hid_joy_hold_type : &hid_handheld_mode;
    if(!(request.command&1)) {
     if(request.argument_size<16) boundary("short-controller-policy",c,pc);
@@ -1307,7 +1323,6 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   if(kind==SESSION_CONTROLLER_APPLET && (request.command==105 || request.command==106)) {
    /* GetPopOutDataEvent: signalled with the output at completion (the applets here complete in Start).
     * GetPopInteractiveOutDataEvent: these applets never send interactive data; the event stays clear. */
-   static HANDLE interactive_event;
    if(!library_applet_created) boundary("library-applet-not-created",c,pc);
    uint32_t handle=copy_event(request.command==105 ? &library_state_event : &interactive_event);
    ipc_reply_copy(buffer,256,handle,request.domain,request.token);c->x[0]=0;return;
@@ -1379,7 +1394,7 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
    ipc_reply_copy(buffer,256,copy_event(&addon_change_event),request.domain,request.token);c->x[0]=0;return;
   }
   if(kind==SESSION_WINDOW_CONTROLLER && request.command==1) {
-   reply_wide_value(buffer,&request,GetCurrentProcessId()); c->x[0]=0; return;
+   reply_wide_value(buffer,&request,AC_PID()); c->x[0]=0; return;
   }
   if(kind==SESSION_WINDOW_CONTROLLER && request.command==10) {
    if(!app_window || !IsWindowVisible(app_window) || app_focus!=1) boundary("applet-not-active",c,pc);
@@ -1528,7 +1543,7 @@ uint64_t rt_ticks(void) {
  LARGE_INTEGER counter;
  if(!frequency.QuadPart && (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart<=0)) boundary("timer-frequency",&state,state.pc);
  if(!QueryPerformanceCounter(&counter) || counter.QuadPart<0) boundary("timer-counter",&state,state.pc);
- return (uint64_t)(((__uint128_t)(uint64_t)counter.QuadPart*19200000ull)/(uint64_t)frequency.QuadPart);
+ return (uint64_t)(((__uint128_t)(uint64_t)counter.QuadPart*19200000ull)/(uint64_t)frequency.QuadPart)+ss_tick_offset;
 }
 /* file: the code image to load there (a UTF-16 path, so that any folder name works), or NULL. */
 static void reserve(uint64_t base,size_t size,const wchar_t *file) {

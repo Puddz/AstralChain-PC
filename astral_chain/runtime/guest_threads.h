@@ -344,12 +344,14 @@ static void parallel_block(void) {
 static void parallel_block_wait(void) {
  unsigned self=current_thread;
  const char *was=rt_where("parallel_block");
+ ss_after_of[self]=ss_after;InterlockedExchange(&ss_phase[self],2);  /* (savestate.h: stopped whenever the lock is held by another) */
  for(;;) {
+  if(ss_cmd[self]) ss_resume(self);
   unsigned status=guest_threads[self].status;
-  if(status==THREAD_RUNNABLE || status==THREAD_EXITED) {rt_where(was);return;}
+  if(status==THREAD_RUNNABLE || status==THREAD_EXITED) {InterlockedExchange(&ss_phase[self],0);rt_where(was);return;}
   uint64_t now=rt_ticks();
   rt_where("wake check");
-  if(!thread_wake_check(self,now) && guest_threads[self].status==THREAD_RUNNABLE) {rt_where(was);return;}
+  if(!thread_wake_check(self,now) && guest_threads[self].status==THREAD_RUNNABLE) {InterlockedExchange(&ss_phase[self],0);rt_where(was);return;}
   rt_where("parallel_block");
   status=guest_threads[self].status;
   uint64_t deadline=status==THREAD_WAIT_ADDRESS ? guest_threads[self].address_deadline :

@@ -87,7 +87,7 @@ static uint64_t vi_create_managed_layer(void) {
  if(i==16 || vi_next_binder_id>=0x7fffffff) boundary("vi-layer-limit",&state,state.pc);
  app_open();memset(&vi_layers[i],0,sizeof(vi_layers[i]));
  vi_layers[i].id=vi_next_layer_id++;vi_layers[i].binder=vi_next_binder_id++;
- vi_layers[i].aruid=GetCurrentProcessId();
+ vi_layers[i].aruid=AC_PID();
  /* Initial BufferQueue default size; explicit producer buffers will provide
   * their own dimensions. This is not the native window's client size. */
  vi_layers[i].producer.width=1;vi_layers[i].producer.height=1;
@@ -182,7 +182,7 @@ static void vi_dispatch(unsigned session,int kind,uint8_t *buffer,const IpcReque
   if(vi_layers[i].opens[session][object]>=32) boundary("vi-layer-open-limit",&state,state.pc);
   uint8_t parcel[60]={0};
   ipc_put32(parcel,40);ipc_put32(parcel+4,16);ipc_put32(parcel+8,4);ipc_put32(parcel+12,56);
-  ipc_put32(parcel+16,2);ipc_put32(parcel+20,GetCurrentProcessId());ipc_put32(parcel+24,vi_layers[i].binder);
+  ipc_put32(parcel+16,2);ipc_put32(parcel+20,AC_PID());ipc_put32(parcel+24,vi_layers[i].binder);
   memcpy(parcel+40,"dispdrv",7);
   memcpy((void*)(uintptr_t)request->receive_address,parcel,sizeof(parcel));
   vi_layers[i].opens[session][object]++;vi_layers[i].open_count++;

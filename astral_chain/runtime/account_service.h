@@ -45,7 +45,7 @@ static void account_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *
   if(request->argument_size<16 || request->argument_size>32 || request->send_pid || request->send_count ||
      request->receive_count || request->copy_count || request->input_object_count || request->receive_mode)
    boundary("account-existence-layout",&state,state.pc);
-  if(*pid!=GetCurrentProcessId()) boundary("account-not-initialized",&state,state.pc);
+  if(*pid!=AC_PID()) boundary("account-not-initialized",&state,state.pc);
   const uint8_t zero[16]={0};
   if(!memcmp(account_uid,zero,16)) boundary("account-profile-not-configured",&state,state.pc);
   if(!memcmp(request->arguments,zero,16)) {reply_result(buffer,request,0x287c);return;}
@@ -58,7 +58,7 @@ static void account_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *
      !request->receive_is_pointer || request->receive_mode || request->copy_count || request->input_object_count ||
      request->receive_size>4096 || request->receive_size%16)
    boundary("account-open-users-layout",&state,state.pc);
-  if(*pid!=GetCurrentProcessId()) boundary("account-not-initialized",&state,state.pc);
+  if(*pid!=AC_PID()) boundary("account-not-initialized",&state,state.pc);
   const uint8_t zero[16]={0};
   if(!memcmp(account_uid,zero,16)) boundary("account-profile-not-configured",&state,state.pc);
   if(request->receive_size) {
@@ -77,7 +77,7 @@ static void account_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *
   if(request->argument_size<16 || request->argument_size>32 || request->send_pid || request->send_count ||
      request->receive_count || request->copy_count || request->input_object_count || request->receive_mode)
    boundary("account-manager-layout",&state,state.pc);
-  if(*pid!=GetCurrentProcessId()) boundary("account-not-initialized",&state,state.pc);
+  if(*pid!=AC_PID()) boundary("account-not-initialized",&state,state.pc);
   const uint8_t zero[16]={0};
   if(!memcmp(account_uid,zero,16)) boundary("account-profile-not-configured",&state,state.pc);
   if(!memcmp(request->arguments,zero,16)) {reply_result(buffer,request,0x287c);return;} /* account null argument */
@@ -91,7 +91,7 @@ static void account_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *
   if(request->argument_size>8 || request->send_pid || request->send_count || request->receive_count ||
      request->copy_count || request->input_object_count || request->receive_mode)
    boundary("account-switch-layout",&state,state.pc);
-  if(*pid!=GetCurrentProcessId()) boundary("account-not-initialized",&state,state.pc);
+  if(*pid!=AC_PID()) boundary("account-not-initialized",&state,state.pc);
   if(ACCOUNT_SWITCH_LOCK!=0 && ACCOUNT_SWITCH_LOCK!=1) boundary("account-control-missing",&state,state.pc);
   uint8_t locked=ACCOUNT_SWITCH_LOCK;
   printf("ACCOUNT switch locked=%u (NACP)\n",locked);
@@ -105,7 +105,7 @@ static void account_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *
  uint64_t placeholder;memcpy(&placeholder,request->arguments,8);
  if(placeholder) boundary("account-process-placeholder",&state,state.pc);
  if(*pid) boundary("account-already-initialized",&state,state.pc);
- *pid=GetCurrentProcessId();
+ *pid=AC_PID();
  printf("ACCOUNT application bound pid=%u\n",*pid);
  reply_result(buffer,request,0);
 }

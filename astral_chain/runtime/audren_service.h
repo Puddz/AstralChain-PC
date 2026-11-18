@@ -18,7 +18,7 @@ static void audren_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *r
  AudioDeviceState device={0};device.revision=ipc_u32(request->arguments);
  memcpy(&device.aruid,request->arguments+8,8);
  if(device.revision!=0x35564552) boundary("audren-device-revision",&state,state.pc);
- if(device.aruid!=GetCurrentProcessId()) boundary("audren-device-resource-user",&state,state.pc);
+ if(device.aruid!=AC_PID()) boundary("audren-device-resource-user",&state,state.pc);
  unsigned object=reply_object(session,buffer,request,SESSION_AUDIO_DEVICE);
  if(request->domain) sessions[session].object_audio_device[object-1]=device;
  else sessions[session_index(object)].audio_device=device;
@@ -38,7 +38,7 @@ static unsigned audio_device_volume_set;
 static void audio_device_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *request) {
  const AudioDeviceState *device=request->domain ?
   &sessions[session].object_audio_device[request->object_id-1] : &sessions[session].audio_device;
- if(device->revision!=0x35564552 || device->aruid!=GetCurrentProcessId())
+ if(device->revision!=0x35564552 || device->aruid!=AC_PID())
   boundary("audio-device-state",&state,state.pc);
  audren_capture("device",request);
  if(request->command==0 || request->command==6) {

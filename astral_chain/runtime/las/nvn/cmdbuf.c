@@ -11,12 +11,12 @@
 static NvnCmdBuf *cb_of(uint64_t guest) { return HOST(NvnCmdBuf, guest); }
 
 NVN(nvnCommandBufferInitialize) {
-    NvnCmdBuf *cb = calloc(1, sizeof *cb);
+    NvnCmdBuf *cb = nvn_obj_alloc(sizeof *cb, NVN_OBJ_CMDBUF);
     cb->guest = A(0);
     SET_HOST(A(0), cb);
     RET(1);
 }
-NVN(nvnCommandBufferFinalize) { free(cb_of(A(0))); SET_HOST(A(0), 0); }
+NVN(nvnCommandBufferFinalize) { nvn_obj_free(cb_of(A(0))); SET_HOST(A(0), 0); }
 NVN(nvnCommandBufferSetDebugLabel) { (void)c; }
 
 static CmdRec *raw_rec(uint64_t at, uint32_t op, uint32_t size) {
@@ -278,6 +278,10 @@ NVN(nvnCommandBufferRestoreZCullData) { (void)c; }
 
 static uint64_t copy_row_stride, copy_image_stride;
 RT_ON_RESET(cmdbuf_reset) { copy_row_stride = copy_image_stride = 0; }
+void nvn_ss_cmdbuf(uint64_t *v, int set) {  // (savestate.h)
+    if (set) { copy_row_stride = v[0]; copy_image_stride = v[1]; }
+    else { v[0] = copy_row_stride; v[1] = copy_image_stride; }
+}
 NVN(nvnCommandBufferSetCopyRowStride) {
     Snap s = snap(c);
     copy_row_stride = s.x[1];
