@@ -80,6 +80,7 @@ typedef struct TexBackend {
     uint64_t data_hash, sample_hash, checked_frame, full_frame;
     uint32_t wgen;  // page write tracking generation at the last upload check (textures.c)
     bool scalable, presented;
+    bool shadow;  // (Astral Chain) a shadow map drawn larger than the game's (AC_SHADOW_SCALE, textures.c)
     uint64_t touched_frame, frame_cleared;
     uint32_t level_gen;
     float sx, sy;

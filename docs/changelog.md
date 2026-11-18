@@ -4,6 +4,12 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-18**
 
+- **Shadow resolution** (issue #40; *not yet confirmed in play*): a new setting in the launcher and the F1 menu,
+  under Display. The game draws the shadows of characters and objects into one 2048x2048 shadow map, as on the
+  Switch; from close up or at a high resolution their edges show as blocks. **2x** and **4x** make that map finer
+  each way, so the blocks get that much smaller (4x uses about 250 MB more video memory). Off by default; applies
+  at the next start. In the police headquarters at 2560x1440 the blocks along a shadow's edge shrank with each
+  step. The line where the game switches to its coarser shadows further away is still there.
 - **Ultrawide, HUD at the edges: the duty points and the case icon** (issues #41, #42; *not yet confirmed in play*):
   with "HUD at the screen's edges" on, the pop-up that counts duty points came apart (its arrow stayed in the middle
   of the screen, the bars behind the numbers ran too wide), and the red case icon after the objective's text stayed
