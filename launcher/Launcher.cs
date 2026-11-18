@@ -271,6 +271,14 @@ namespace AstralChainLauncher
                 "played again on another PC. Each session goes to a new folder next to your save in userdata\\saves " +
                 "(the one ending in -recordings); zip that session's folder to send it.", OptKind.Check, "0",
                 OptTarget.Game, When("1", "AC_INPUT_RECORD=1"));
+            Add("save_states", "Troubleshooting", "Save states (experimental)",
+                "F6 writes the whole running game to a file, F7 goes back to it, also after the game was started " +
+                "again or on another PC: a problem can be shown from the moment before it happens. The file is " +
+                "userdata\\saves\\01007300020fa000\\savestates\\state.acss (1 to 1.5 GB; each F6 replaces it). " +
+                "It holds the game's memory: send it privately, not on a public page. A state only loads in the " +
+                "same version of this port, at the same render resolution. After loading a state the game saves " +
+                "over your save as usual, with that state's progress. Applies the next time you press Play.",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_SAVE_STATES=1"));
             Add("show_consoles", "Troubleshooting", "Show console windows",
                 "Shows the game's console and the watchdog's window, as the .cmd launchers do.", OptKind.Check, "0",
                 OptTarget.Launcher, null);

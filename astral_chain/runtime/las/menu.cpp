@@ -37,6 +37,8 @@ extern volatile int ac_hud_layout[4][2];                 // (live_settings.h: th
 extern volatile long ac_hud_seen;
 extern volatile LONG ac_hud_hidden;                      // (live_settings.h: F3, the game's HUD is not drawn)
 extern volatile unsigned long long ac_hud_hidden_tick;
+extern volatile long ac_ss_note;
+extern volatile unsigned long long ac_ss_note_tick;
 struct AcMenuEvent { int kind, a, b; };
 extern AcMenuEvent ac_menu_events[256];
 extern volatile long ac_menu_head, ac_menu_tail;
@@ -662,18 +664,25 @@ void draw_hint(float w, float h, ULONGLONG now) {
 }
 
 // F3 (app_window.h; issue #35): says for 2.5 s that the game's HUD is hidden (and how to get it back) or shown again.
+// The same line says what F6 or F7 did (save states, savestate.h), whichever is newer.
 bool hud_note_due(ULONGLONG now) {
-    ULONGLONG t = ac_hud_hidden_tick;
-    return t && now - t < 2500;
+    ULONGLONG t = ac_hud_hidden_tick, s = ac_ss_note_tick;
+    return (t && now - t < 2500) || (s && now - s < 2500);
 }
 
 void draw_hud_note(float w, float h, ULONGLONG now) {
-    const char *text = ac_hud_hidden ? "HUD hidden: F3 shows it again" : "HUD shown";
+    static const char *const states[] = {"", "State saved: F7 loads it", "State loaded", "State not saved (see the log)",
+                                         "No state to load: F6 saves one", "State not loaded (see the log)"};
+    ULONGLONG shown = ac_hud_hidden_tick, st = ac_ss_note_tick;
+    long code = ac_ss_note;
+    bool state = st && st >= shown && code >= 1 && code <= 5;
+    if (state) shown = st;
+    const char *text = state ? states[code] : ac_hud_hidden ? "HUD hidden: F3 shows it again" : "HUD shown";
     float size = h * 0.026f;
     ImFont *f = font ? font : ImGui::GetFont();
     ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0, text);
     ImVec2 pos((w - ts.x) / 2, h * 0.055f);
-    float t = (float)(now - ac_hud_hidden_tick), a = t < 200 ? t / 200 : t > 2000 ? (2500 - t) / 500 : 1;
+    float t = (float)(now - shown), a = t < 200 ? t / 200 : t > 2000 ? (2500 - t) / 500 : 1;
     if (a < 0) a = 0;
     ImDrawList *dl = ImGui::GetForegroundDrawList();
     float pad = size * 0.45f;

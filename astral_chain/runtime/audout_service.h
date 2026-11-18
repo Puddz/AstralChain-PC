@@ -119,7 +119,7 @@ static void audout_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *r
   boundary("audout-open-layout",&state,state.pc);
  if(request->copy_handle!=0xffff8001u) boundary("audout-process-handle",&state,state.pc);
  uint64_t aruid;memcpy(&aruid,request->arguments+8,8);
- if(aruid!=GetCurrentProcessId()) boundary("audout-resource-user",&state,state.pc);
+ if(aruid!=AC_PID()) boundary("audout-resource-user",&state,state.pc);
  unsigned rate=ipc_u32(request->arguments);uint16_t channels;
  memcpy(&channels,request->arguments+4,2); /* offset 6 is padding, observed 0xcafe */
  if(rate!=48000 || channels!=2) boundary("audout-open-format",&state,state.pc);

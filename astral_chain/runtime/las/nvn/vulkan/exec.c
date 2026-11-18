@@ -3467,6 +3467,16 @@ static void gmem_writeback_apply(uint64_t done) {
     pthread_mutex_unlock(&lazy_lock);
 }
 
+// (savestate.h, experiment) Finish all submitted work and put every result into guest memory; no page stays
+// protected for a lazy write-back.
+void vk_ss_quiesce(void) {
+    renderer_flush();
+    vkDeviceWaitIdle(g_vk.dev);
+    gmem_writeback_apply(vk_completed_seq());
+    for (int guard = 0; lazy_n && guard < 100000; guard++) lazy_flush(lazy_tab[0].lo, lazy_tab[0].hi - lazy_tab[0].lo);
+    if (lazy_n) LOG("[ss] %d lazy write-backs left\n", lazy_n);
+}
+
 static VkDescriptorBufferInfo gmem_info(void) {
     static int off = -1;
     // Astral Chain: the device-local mirror by default. The host-pointer import (AC_VK_HEAP_IMPORT=1) made the
@@ -3899,6 +3909,34 @@ void vk_exec_reset(void) {
     if (vc_page_gpu) memset(vc_page_gpu, 0, HEAP_MAX / VC_PAGE);
     vc_epoch++;
     st_defaults();
+}
+
+// (savestate.h, experiment) Before another guest state takes over: every texture's Vulkan objects go and the copies
+// of guest pages are dropped (they are made again from guest memory on use). The bound state is the caller's.
+void *vk_ss_bound_state(size_t *size) { *size = sizeof st; return &st; }
+void vk_ss_fix_bound(void) {  // (a program bound from outside the arena of NVN objects: the renderer's own, not the game's)
+    uint64_t p = (uint64_t)(uintptr_t)st.program;
+    if (p < 0x6E00000000ull || p >= 0x6E10000000ull) st.program = NULL;
+}
+void vk_ss_drop(int programs) {
+    extern void vk_textures_reset(void);
+    extern void vk_ss_forget_presented(void);
+    vk_ss_quiesce();
+    vk_ss_forget_presented();
+    memset(feedback_tex, 0, sizeof feedback_tex);
+    memset(snap_tex, 0, sizeof snap_tex);
+    vk_textures_reset();
+    if (programs) { memset(prog_tab, 0, sizeof prog_tab); memset(pipe_tab, 0, sizeof pipe_tab); g_cs_n = 0; }
+    gcopy_gen++;
+    for (int i = 0; i < VC_TAB; i++)
+        if (vc_tab[i].buf) vmaDestroyBuffer(g_vk.vma, vc_tab[i].buf, vc_tab[i].mem);
+    memset(vc_tab, 0, sizeof vc_tab);
+    vc_npend = 0;
+    vc_free_dead(true);
+    vc_bytes = 0;
+    if (vc_page_gpu) memset(vc_page_gpu, 0, HEAP_MAX / VC_PAGE);
+    vc_epoch++;
+    if (gmem_size) nvn_heap_mirror_mark_all(gmem_size);
 }
 
 static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo *out, float sc[2], uint32_t wh[2]) {

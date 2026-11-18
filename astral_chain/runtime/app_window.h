@@ -208,6 +208,11 @@ static LRESULT CALLBACK app_window_proc(HWND window,UINT message,WPARAM wparam,L
    }
    return 0;
   }
+  /* Save states (savestate.h; AC_SAVE_STATES=1): F6 writes the state file, F7 loads it */
+  if((wparam==VK_F6 || wparam==VK_F7) && !hid_key_mapped[wparam] && !ac_menu_open && ss_enabled()) {
+   if(down && !repeat) InterlockedExchange(&ss_key,wparam==VK_F6 ? 1 : 2);
+   return 0;
+  }
   /* F3 (unless it is a game key): the game's HUD and menus are not drawn, for screenshots; again: they are (exec.c) */
   if(wparam==VK_F3 && !hid_key_mapped[VK_F3] && !ac_menu_open) {
    if(down && !repeat) {

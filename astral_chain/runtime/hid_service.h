@@ -120,7 +120,7 @@ static void hid_accept_vibration(const IpcRequest *request) {
     request->send_count || request->receive_count || request->copy_count || request->input_object_count)
   boundary("hid-vibration-layout",&state,state.pc);
  uint64_t aruid;memcpy(&aruid,request->arguments+24,8);
- if(!hid_page || aruid!=GetCurrentProcessId()) boundary("invalid-hid-resource-user",&state,state.pc);
+ if(!hid_page || aruid!=AC_PID()) boundary("invalid-hid-resource-user",&state,state.pc);
  unsigned handle=ipc_u32(request->arguments);
  float value[4];memcpy(value,request->arguments+4,sizeof(value));
  /* Out-of-range values are clamped (0..1) as the console does, not rejected: a negative or non-finite value used
