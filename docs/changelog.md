@@ -4,6 +4,12 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-18**
 
+- **In-game settings (F1): a tidier page** (issue #43; *not yet confirmed in play*): the settings are in titled
+  boxes by topic (Controller, Mouse, Picture, Frame rate display, Ultrawide and HUD, Title screen, Game), with a
+  line between settings and the ones that depend on another set in under it. Only the first sentence of each
+  explanation shows; the rest opens when you point at the **(?)** after the name or move to the setting with a
+  controller (that pop-up was not tried in the test runs). A strip at the top lists the keys: F1, F2, F3, F6 / F7
+  (save states), F11. The launcher's settings window is unchanged.
 - **Detailed frame rate panel: choose what it shows** (issue #43; *not yet confirmed in play*): with **Show the
   frame rate** on **Detailed**, the in-game menu (**F1**) lists the panel's eight parts under it, each with a box:
   GPU and video memory, CPU and memory, frame rate and frame time, the graph, renderer timings (the three orange
