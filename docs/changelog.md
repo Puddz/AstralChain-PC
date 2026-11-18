@@ -4,12 +4,14 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-18**
 
+- **Frame rate: two more places** (issue #43; *not yet confirmed in play*): the frame rate counter and the detailed
+  panel can also sit half way down the left or the right side of the window (**Middle left**, **Middle right**),
+  which the game's own HUD leaves free. The setting is now called "Frame rate: position"; it applies at once.
 - **Shadow resolution** (issue #40; *not yet confirmed in play*): a new setting in the launcher and the F1 menu,
   under Display. The game draws the shadows of characters and objects into one 2048x2048 shadow map, as on the
-  Switch; from close up or at a high resolution their edges show as blocks. **2x**, **4x**, **8x** and **16x** make
-  that map finer each way, so the blocks get that much smaller. It takes video memory: about 250 MB at 4x, 1 GB at
-  8x, 4 GB at 16x (16x needs a GPU that allows pictures 32768 wide; on others 8x is used). Off by default; applies
-  at the next start. In the police headquarters at 2560x1440 the blocks along a shadow's edge shrank with each
+  Switch; from close up or at a high resolution their edges show as blocks. **2x**, **4x** and **8x** make that map
+  finer each way, so the blocks get that much smaller. It takes video memory: about 250 MB at 4x, 1 GB at 8x (16x
+  was tried and dropped: 4 GB for a difference hard to see). Off by default; applies at the next start. In the police headquarters at 2560x1440 the blocks along a shadow's edge shrank with each
   step. The line where the game switches to its coarser shadows further away is still there.
 - **Ultrawide, HUD at the edges: the duty points and the case icon** (issues #41, #42; *not yet confirmed in play*):
   with "HUD at the screen's edges" on, the pop-up that counts duty points came apart (its arrow stayed in the middle
