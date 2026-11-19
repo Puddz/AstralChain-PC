@@ -2,6 +2,18 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-19**
+
+- **Fire light flickering on things near a fire** (issue #44; *not yet confirmed in play*): in File 3, next to the
+  burning barrel by the stairs, the fire's light on the chairs, crates and Akira went out for single frames, a few
+  times a second at times. One of the fire's lights was lost on those frames: after the GPU's light pass, the port
+  copied the buffers it had used back into the game's memory whole, read-only ones too, and so put old light data
+  back over what the game had just written for the next frames. Now only what the GPU changed is copied back. On a
+  save state at that spot (standing still, 90 to 150 frames recorded at full speed): single-frame drops of the
+  picture's orange light of 5 to 10% in about 9 of 10 runs before, none in 13 runs with the change; same frame
+  rate.
+  `AC_WB_MERGE=0` turns it off, for comparing.
+
 **2026-11-18**
 
 - **Save states can be turned on from the in-game menu** (issue #44; *not yet confirmed in play*): **F1**, the
