@@ -4,6 +4,9 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-18**
 
+- **Save states can be turned on from the in-game menu** (issue #44; *not yet confirmed in play*): **F1**, the
+  **Game** box, **Save states, F6 and F7 (experimental)**. As with the launcher's option it takes effect at the
+  next start of the game; the line of keys at the top of the menu says so until then.
 - **Settings in boxes, in the launcher too; boxes close and open; menu size** (issue #43; *not yet confirmed in
   play*): the launcher's **Settings** window now has the same titled boxes by topic as the in-game menu, with the
   first sentence of each explanation under the name and the rest as a tooltip on the **(?)**, and a line at the

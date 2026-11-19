@@ -138,6 +138,12 @@ std::vector<Opt> opts = {
     {"cutscene_fps_30", "Game", "Cutscenes at 30 fps, as on the Switch", "From the next cutscene on.", CHECK, "0", nullptr, 0, 0, true},
     {"ignore_focus", "Game", "Keep running while minimized", nullptr, CHECK, "0", nullptr, 0, 0, true},
     {"async_submit", "Game", "Graphics on a separate thread (experimental)", nullptr, CHECK, "0", nullptr, 0, 0, false},
+    {"save_states", "Game", "Save states, F6 and F7 (experimental)",
+     "F6 writes the whole running game to a file, F7 goes back to it. The file is "
+     "userdata\\saves\\01007300020fa000\\savestates\\state.acss (1 to 1.5 GB; each F6 replaces it); it holds the "
+     "game's memory, so send it privately. It loads in the same version of this port at the same render resolution. "
+     "After loading a state the game saves over your save as usual, with that state's progress.",
+     CHECK, "0", nullptr, 0, 0, false},
 };
 
 std::string env(const char *name) {
@@ -172,6 +178,7 @@ void read_session() {
         else if (k == "cutscene_fps_30") v = env("AC_CUTSCENE_FPS") == "30" ? "1" : "0";
         else if (k == "ignore_focus") { std::string e = env("AC_IGNORE_FOCUS"); v = !e.empty() && e != "0" ? "1" : "0"; }
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
+        else if (k == "save_states") v = env("AC_SAVE_STATES") == "1" ? "1" : "0";
         else if (k == "port_credit") v = env("AC_TITLE_CREDIT") == "0" ? "0" : "1";
         else if (k == "fps_counter") { std::string e = env("AC_FPS_COUNTER"); v = e == "1" || e == "2" ? e : "0"; }
         else if (k == "fps_corner") { std::string e = env("AC_FPS_CORNER"); v = e == "tr" || e == "bl" || e == "br" || e == "ml" || e == "mr" ? e : "tl"; }
@@ -520,7 +527,11 @@ void draw(float scale) {
     key_chip("F2", "HUD layout and size", false);
     key_chip("F3", "hide the HUD", false);
     if (env("AC_SAVE_STATES") == "1") { key_chip("F6", "save a state", false); key_chip("F7", "load it", false); }
-    else key_chip("F6 / F7", "save states: off (launcher, Troubleshooting)", false);
+    else {  // (off in this run: the setting below, under Game, turns them on for the next start)
+        bool next = false;
+        for (Opt &o : opts) if (!strcmp(o.key, "save_states")) next = o.value == "1";
+        key_chip("F6 / F7", next ? "save states: on when the game is next started" : "save states: off (turn on under Game, below)", false);
+    }
     key_chip("F11", "fullscreen", false);
     ImGui::PushTextWrapPos(0);
     ImGui::TextDisabled("The game does not get your input while this is open. (?) after a name: point at it, or move to the setting, for more. A box's title closes and opens it.");
