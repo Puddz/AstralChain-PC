@@ -9,7 +9,9 @@ confirmed* by players.
 
 ## Using it
 
-1. In the launcher, tick **Save states (experimental)** under Troubleshooting and press Play.
+1. In the launcher, tick **Save states (experimental)** under Troubleshooting and press Play. Or in the game:
+   **F1**, tick **Save states, F6 and F7** in the **Game** box, then close the game and start it again (the
+   option only takes effect at the start of the game).
 2. **F6** saves. The game stops for about a second and "State saved" is shown.
 3. **F7** goes back to it. This also works after the game was closed and started again: press F7 on the title
    screen.
