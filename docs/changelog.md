@@ -4,7 +4,7 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-19**
 
-- **Fire light flickering on things near a fire** (issue #44; *not yet confirmed in play*): in File 3, next to the
+- **Fire light flickering on things near a fire** (issue #44; confirmed in play): in File 3, next to the
   burning barrel by the stairs, the fire's light on the chairs, crates and Akira went out for single frames, a few
   times a second at times. One of the fire's lights was lost on those frames: after the GPU's light pass, the port
   copied the buffers it had used back into the game's memory whole, read-only ones too, and so put old light data
