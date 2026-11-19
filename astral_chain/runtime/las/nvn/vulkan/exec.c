@@ -3015,7 +3015,9 @@ static void gmem_sync(void) {
 // Packed staging (LARECOMP_VK_WB_PACK, default on): the ranges of one submission share one host allocation (WbBlock,
 // freed when its last range is applied or dropped).
 typedef struct { VkBuffer buf; VmaAllocation mem; int refs; } WbBlock;
-typedef struct { uint64_t seq, addr, size; VkBuffer buf; VmaAllocation mem; void *ptr; WbBlock *blk; } GmemWb;
+// bbuf / bptr: the range as the mirror held it before the submission's first storing dispatch over it (small ranges,
+// gmem_wb_before): only the words the GPU changed are written back (gmem_wb_merge).
+typedef struct { uint64_t seq, addr, size; VkBuffer buf; VmaAllocation mem; void *ptr; WbBlock *blk; VkBuffer bbuf; VmaAllocation bmem; void *bptr; } GmemWb;
 static void wb_release(VkBuffer buf, VmaAllocation mem, WbBlock *blk) {  // (caller holds lazy_lock)
     if (!blk) { vmaDestroyBuffer(g_vk.vma, buf, mem); return; }
     if (--blk->refs == 0) { vmaDestroyBuffer(g_vk.vma, blk->buf, blk->mem); free(blk); }
@@ -3029,6 +3031,52 @@ static void gmem_wb_note(uint64_t addr, uint64_t size) {
         if (wb_pending[i].addr == addr && wb_pending[i].size == size) return;
     if (wb_npend == 64) FATAL("heap mirror: more than 64 GPU-written ranges in one submission\n");
     wb_pending[wb_npend++] = (GmemWb){.addr = addr, .size = size};
+}
+// Small ranges (issue #44). Every storage buffer a storing shader binds is written back, read-only ones too (the
+// shader's stores go to computed addresses), and a whole small range used to be copied over guest memory. The game
+// writes some of those buffers while the GPU still works on a submission that reads them (Forward+ light arrays in
+// its per-frame heap blocks, rewritten every few frames): the copy put the bytes from before back, and the mirror was
+// marked clean, so the new ones never reached the GPU either. A light of the fire went out on the chairs and Akira
+// for single frames. Now a copy of the range from before the submission's first storing dispatch over it is kept, and
+// only the words the GPU changed are written; the pages are left for the next mirror sync to copy in.
+// AC_WB_MERGE=0: whole ranges, as before.
+enum { WBB_MAX = 256 << 10 };  // (larger ranges: the page diff below, LARECOMP_VK_WB_DIFF)
+static void gmem_wb_before(VkCommandBuffer cb, int stage) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("AC_WB_MERGE"); on = !e || atoi(e) != 0; }
+    if (!on || !gmem_alloc) return;
+    bool any = false;
+    for (int i = 0; i < 16; i++) {
+        uint64_t a = st.sbuf[stage][i].addr, sz = st.sbuf[stage][i].size;
+        if (!a || !sz || sz >= WBB_MAX || a < HEAP_BASE || a - HEAP_BASE + sz > gmem_size) continue;
+        bool have = false;
+        for (int k = 0; k < wb_npend; k++) have |= wb_pending[k].addr == a && wb_pending[k].size == sz;
+        if (have || wb_npend == 64) continue;  // (noted by an earlier dispatch of this submission: its copy is older)
+        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = sz, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                      .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+        VmaAllocationInfo info;
+        GmemWb w = {.addr = a, .size = sz};
+        if (vmaCreateBuffer(g_vk.vma, &bi, &ai, &w.bbuf, &w.bmem, &info) != VK_SUCCESS) continue;  // (whole copy, as before)
+        w.bptr = info.pMappedData;
+        if (!any) { vk_full_barrier(cb); any = true; }  // (after the work before it that may have written the range)
+        VkBufferCopy cp = {a - HEAP_BASE, 0, sz};
+        vkCmdCopyBuffer(cb, gmem_buf, w.bbuf, 1, &cp);
+        wb_pending[wb_npend++] = w;
+    }
+    if (any) vk_full_barrier(cb);
+}
+// The words of the range the GPU changed (after != before) into guest memory. Caller holds lazy_lock.
+static void gmem_wb_merge(const GmemWb *w) {
+    const uint8_t *after = w->ptr, *before = w->bptr;
+    uint8_t *g = (uint8_t *)(uintptr_t)w->addr;
+    uint64_t n = w->size, i = 0;
+    for (; i + 4 <= n; i += 4) {
+        uint32_t x, y;
+        memcpy(&x, after + i, 4); memcpy(&y, before + i, 4);
+        if (x != y) memcpy(g + i, &x, 4);
+    }
+    for (; i < n; i++) if (after[i] != before[i]) g[i] = after[i];
 }
 // Packed: each GPU -> host copy waits on the PCIe link, and the copies were one per range (~12-17 a frame). A GPU
 // behind a slower link (an RTX 5070 Ti over OCuLink, PCIe 4.0 x4) spent 8 ms of a 10 ms frame on them, 19 ms with the
@@ -3424,7 +3472,23 @@ static void gmem_writeback_apply(uint64_t done) {
     for (int i = 0; i < wb_nflight; i++) {
         GmemWb *w = &wb_flight[i];
         if (w->seq > done) { wb_flight[k++] = *w; continue; }
-        if (!nvn_guest_readable(w->addr, w->size)) { wb_release(w->buf, w->mem, w->blk); continue; }
+        if (!nvn_guest_readable(w->addr, w->size)) {
+            wb_release(w->buf, w->mem, w->blk);
+            if (w->bbuf) vmaDestroyBuffer(g_vk.vma, w->bbuf, w->bmem);
+            continue;
+        }
+        if (w->bptr) {  // (small range with its copy from before: the GPU's changed words only, eagerly; gmem_wb_before)
+            bool ov = false;  // (older pending results on these pages go in first, whole; then these words win)
+            for (uint64_t p = w->addr & ~4095ull; p < w->addr + w->size; p += 4096)
+                if (lazy_pending(p)) { lazy_resolve_page(p, false); ov = true; }
+            if (ov) lazy_compact();
+            gmem_wb_merge(w);
+            stat_wb_bytes += w->size;
+            stat_wb_ranges++;
+            wb_release(w->buf, w->mem, w->blk);
+            vmaDestroyBuffer(g_vk.vma, w->bbuf, w->bmem);
+            continue;  // (not marked clean: the next mirror sync copies in what the CPU wrote meanwhile)
+        }
         nvn_heap_mirror_clean(w->addr, w->size);
         uint64_t lo = w->addr & ~4095ull, hi = (w->addr + w->size + 4095) & ~4095ull;
         uint32_t pages = (uint32_t)((hi - lo) >> 12);
@@ -4202,6 +4266,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
         }
         LOG("\n");
     }
+    if (cp->si->uses_gmem_store) gmem_wb_before(cb, 5);  // (small storage ranges as they were: issue #44)
     if (cp->si->uses_gmem_map) gfast_prepare(cb);
     VkDescriptorSet ds = stage_set(&cp->p, cp->p.set_layout[0], 0, 5, cp->si, NULL, NULL, gx, gy, gz, NULL);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cp->pipe);
