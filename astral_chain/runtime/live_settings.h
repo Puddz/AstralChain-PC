@@ -24,6 +24,7 @@ volatile int ac_cutscene_30=-1;   /* AC_CUTSCENE_FPS=30, from the next cutscene 
 volatile int ac_ignore_focus=-1;  /* AC_IGNORE_FOCUS=1 */
 volatile int ac_upscaler=-1;      /* AC_UPSCALER=fsr1 (las/nvn/vulkan/exec.c post_process) */
 volatile float ac_fsr_sharpness=-1;  /* AC_FSR_SHARPNESS */
+volatile int ac_ao=-1;            /* AC_AO=low|high: ambient occlusion (las/nvn/vulkan/ao.c; 0 off, 1 low, 2 high) */
 volatile int ac_uncapped=-1;      /* AC_UNCAPPED=1: no 60 FPS pacing in gameplay (nvn_hle.h nvn_present_pace) */
 volatile int ac_in_cutscene;      /* (svc #0xB1: the game reports its cutscene mode each frame) */
 volatile LONG ac_game_steps;      /* (svc #0xB1 calls: game frames, for input recordings, input_record.h) */

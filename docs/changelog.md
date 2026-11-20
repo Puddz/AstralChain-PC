@@ -2,6 +2,17 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-20**
+
+- **New: ambient occlusion** (issue #46; *not yet confirmed in play*; off by default): **Settings > Display >
+  Ambient occlusion** in the launcher, or **Picture** in the in-game menu (**F1**, applies at once): Off, Low or
+  High. It darkens creases, corners and the ground under characters and objects, which the game leaves as lit as
+  open ground. Ported from [captainj-sparrow's port](https://github.com/captainj-sparrow/astral-chain-pc-recomp)
+  (MIT): its shaders as they are, its hookup rewritten for this renderer; its "high + bounce light" level is not
+  ported. Tested on save states in File 3: the darkening lands in the right places (wall corners, under railings,
+  around rubble, at the character's feet), it is subtle by design; about 0.35 ms of GPU time per frame at
+  2560x1440 on an RTX 4090, no change to the frame rate there (CPU-bound, about 75 fps uncapped either way).
+
 **2026-11-19**
 
 - **Fire light flickering on things near a fire** (issue #44; confirmed in play): in File 3, next to the

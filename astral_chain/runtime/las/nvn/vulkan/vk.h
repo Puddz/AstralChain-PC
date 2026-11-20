@@ -121,6 +121,15 @@ void vk_defer_view(VkImageView v);
 void vk_views_forget(TexBackend *b);  // drop (deferred) the cached views of an image being replaced
 uint64_t vk_frame_counter(void);
 
+// ---- ambient occlusion (ao.c; AC_AO, issue #46). exec.c tells it where passes begin and what draws bind; it runs
+// outside rendering, before what follows the game's opaque lighting.
+void vk_ao_frame(void);  // each present (device.c)
+bool vk_ao_armed(void);  // the opaque lighting drew: the occlusion runs before a dispatch, copy or submission
+void vk_ao_run(void);
+void vk_ao_pass(int ncolor, NvnTexture *c0, uint32_t lv0, NvnTexture *depth);
+void vk_ao_draw(bool writes, NvnTexture *c0, NvnTexture *depth, const float *cam, uint64_t cam_size, const float *c5,
+                uint64_t c5_size, NvnTexture *amb, NvnTexture *fogcube);
+
 // ---- shaders / pipelines (shaders.c)
 VkShaderModule vk_compile_glsl(const char *src, int stage, const char *name);  // NULL on failure (logged)
 bool vk_astc_gpu_ready(void);  // astc_gpu.c
