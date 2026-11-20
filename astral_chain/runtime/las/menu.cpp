@@ -102,6 +102,10 @@ std::vector<Opt> opts = {
     {"aniso", "Picture", "Anisotropic filtering",
      "Keeps textures seen at a slant sharp (the ground in the distance). The game's own: as on the Switch.",
      CHOICE, "0", "0|The game's own (default);4|4x;8|8x;16|16x", 0, 0, false},
+    {"ao", "Picture", "Ambient occlusion",
+     "Darkens creases, corners and the ground under characters and objects, where little of the surrounding light reaches. "
+     "The game has none of its own. High searches more directions, for more GPU time. From captainj-sparrow's port.",
+     CHOICE, "off", "off|Off (default);low|Low;high|High", 0, 0, true},
     {"shadow_res", "Picture", "Shadow resolution",
      "How finely shadows are drawn. The game's own: as on the Switch (blocky edges from close up). Video memory: about 250 MB at 4x, 1 GB at 8x.",
      CHOICE, "1", "1|The game's own (default);2|2x;4|4x;8|8x (1 GB of video memory)", 0, 0, false},
@@ -157,6 +161,7 @@ void read_session() {
         else if (k == "resolution") { std::string e = env("AC_RESOLUTION"); if (!e.empty()) v = e; }
         else if (k == "upscaler") v = env("AC_UPSCALER") == "fsr1" ? "fsr1" : "off";
         else if (k == "aniso") { std::string e = env("AC_ANISO"); v = e == "4" || e == "8" || e == "16" ? e : "0"; }
+        else if (k == "ao") { std::string e = env("AC_AO"); v = e == "low" || e == "high" ? e : "off"; }
         else if (k == "shadow_res") { std::string e = env("AC_SHADOW_SCALE"); v = e == "2" || e == "4" || e == "8" ? e : "1"; }
         else if (k == "fsr_sharpness") { std::string e = env("AC_FSR_SHARPNESS"); if (!e.empty()) v = e; }
         else if (k == "present") { std::string e = env("LARECOMP_VK_PRESENT"); if (!e.empty()) v = e; }

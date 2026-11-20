@@ -160,6 +160,12 @@ namespace AstralChainLauncher
                 "game repeats across surfaces; higher is sharper and costs a little GPU time. Applies the next time you press Play.",
                 OptKind.Choice, "0", OptTarget.Game, v => v == "4" || v == "8" || v == "16" ? "AC_ANISO=" + v : "");
             aniso.Choices = new[] { "0|The game's own (default)", "4|4x", "8|8x", "16|16x" };
+            var ao = Add("ao", "Display", "Ambient occlusion",
+                "Darkens creases, corners and the ground under characters and objects, where little of the surrounding " +
+                "light reaches. The game has none of its own. Low and high darken alike; high searches more directions " +
+                "for a little more GPU time. From captainj-sparrow's Astral Chain port. Also in the in-game menu (F1).",
+                OptKind.Choice, "off", OptTarget.Game, v => v == "low" || v == "high" ? "AC_AO=" + v : "");
+            ao.Choices = new[] { "off|Off (default)", "low|Low", "high|High" };
             var shadows = Add("shadow_res", "Display", "Shadow resolution",
                 "How finely the shadows of characters and objects are drawn. The game's own: as on the Switch, where " +
                 "their edges show as blocks from close up or at a high resolution (default). 2x, 4x, 8x: the shadow " +
@@ -1441,7 +1447,7 @@ namespace AstralChainLauncher
             new[] { "Game", "uncapped", "cutscene_fps_30", "ignore_focus", "save_snapshots" },
             new[] { "Sound", "audio_resync", "cut_carry" },
             new[] { "Picture", "fullscreen", "resolution", "handheld", "upscaler", ">fsr_sharpness=FSR 1 sharpening", "aniso",
-                "shadow_res", "present" },
+                "ao", "shadow_res", "present" },
             new[] { "Anti-aliasing and upscaling (experimental)", "temporal=Method", ">temporal_quality=Quality",
                 ">temporal_sharpness" },
             new[] { "Frame rate display", "fps_counter=Show", ">fps_corner=Position" },
