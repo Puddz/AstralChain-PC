@@ -496,8 +496,10 @@ void vk_gpuprof_report(void) {
 }
 
 // Submit the pending work (if any). wait/signal: binary semaphores for presentation (may be null).
+static void ao_point(void);
 void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra) {
     (void)extra;
+    ao_point();
     vk_end_pass();
     Sub *s = sub();
     if (!s->main_begun && !s->upload_begun && !wait && !signal) return;
@@ -1210,6 +1212,13 @@ static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v :
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
     vk_end_pass();
+    {  // (ambient occlusion, ao.c: which pass this is; when the opaque lighting ends, the occlusion runs here)
+        uint32_t lv0 = st.rt.ncolor && st.rt.has_cview[0] && (st.rt.cview[0].setmask & 1) ? st.rt.cview[0].base_level : 0;
+        int nset = 0;  // (the targets set: the game names four slots, mostly one used)
+        for (int i = 0; i < st.rt.ncolor; i++) nset += st.rt.color[i] != NULL;
+        if (g_gpuprof_frame && vk_ao_armed()) gp_mark(vk_cmd(), "ambient occlusion (if the opaque lighting ends here)");
+        vk_ao_pass(nset, st.rt.ncolor ? st.rt.color[0] : NULL, lv0, st.rt.depth);
+    }
     if (dl_on == 2) renderer_flush();  // (LARECOMP_VK_DEVLOST_TRACE=2: each pass its own submission)
     st.rt_dirty = false;
     VkCommandBuffer cb = vk_cmd();
@@ -2540,6 +2549,22 @@ static NvnTexture *shader_texture_object(int stage, ShaderTexture *st_) {
     uint32_t tic = h & 0xFFFFF;
     if (!h || !st.tpool || tic >= (uint32_t)st.tpool->count) return NULL;
     return ((NvnTexEntry *)st.tpool->entries)[tic].tex;
+}
+
+// The texture bound at a stage's slot (SetTexture), whatever the shader reads (ao.c).
+static NvnTexture *bound_texture(int stage, int slot) {
+    uint64_t h = st.tex[stage][slot];
+    uint32_t tic = h & 0xFFFFF;
+    if (!h || !st.tpool || tic >= (uint32_t)st.tpool->count) return NULL;
+    return ((NvnTexEntry *)st.tpool->entries)[tic].tex;
+}
+
+// Before a dispatch, a copy or a submission: the ambient occlusion runs first if the opaque lighting has drawn (ao.c).
+static void ao_point(void) {
+    if (!vk_ao_armed()) return;
+    vk_end_pass();
+    gp_mark(vk_cmd(), "ambient occlusion");
+    vk_ao_run();
 }
 
 static bool is_attachment(NvnTexture *t) {
@@ -4258,6 +4283,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
             LOG("\n");
         }
     }
+    ao_point();
     vk_end_pass();
     VkCommandBuffer cb = vk_cmd();
     vk_full_barrier(cb);
@@ -4744,6 +4770,9 @@ static void draw_(CmdRec *r, bool indexed) {
             memcpy(k.blend[i], st.blend[i], 8);
         }
     }
+    if (st.rt.ncolor >= 1)  // (ambient occlusion, ao.c: whether the draw writes colour, its camera, fog and ambient light)
+        vk_ao_draw(k.write_mask[0] != 0, st.rt.color[0], st.rt.depth, (const float *)(uintptr_t)st.ubuf[0][0].addr, st.ubuf[0][0].size,
+                   (const float *)(uintptr_t)st.ubuf[1][2].addr, st.ubuf[1][2].size, bound_texture(1, 5), bound_texture(1, 12));
     k.a2c = st.ms[0xC] != 0;
     k.topo_class = cls;
     k.poly_fill = st.poly[2] != 1;
@@ -5438,6 +5467,7 @@ static void copy_buffer_to_texture(uint64_t src, const TexRefRec *dst) {
     NvnTexture *t = (NvnTexture *)(uintptr_t)dst->tex;
     if (!t || !src) return;
     alias_before_write(t, 0, "upload");
+    ao_point();
     vk_end_pass();
     const FormatInfo *fi;
     int32_t rg[6];
@@ -5480,6 +5510,7 @@ static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
     NvnTexture *t = (NvnTexture *)(uintptr_t)src->tex;
     if (!t || !dst || dst < HEAP_BASE) return;
     t = alias_read(t);
+    ao_point();
     vk_end_pass();
     const FormatInfo *fi;
     int32_t rg[6];
@@ -5541,6 +5572,7 @@ static void copy_texture(const TexRefRec *src, const TexRefRec *dst, uint64_t fl
     snap_reason = "tex2tex"; snapshots_invalidate(NULL);
     NvnTexture *st_ = (NvnTexture *)(uintptr_t)src->tex, *dt = (NvnTexture *)(uintptr_t)dst->tex;
     if (!st_ || !dt) return;
+    ao_point();
     vk_end_pass();
     if (dl_on == 2) renderer_flush();  // (LARECOMP_VK_DEVLOST_TRACE=2: each copy its own submission, waited on)
     gp_mark(vk_cmd(), "copy texture %ux%u -> %ux%u", st_->width, st_->height, dt->width, dt->height);

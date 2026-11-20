@@ -736,6 +736,7 @@ void backend_present(NvnTexture *t) {
     extern void vk_tu_frame(void);  // (temporal.c: the next frame's jitter)
     vk_tu_frame();
     g_frame_counter++;
+    vk_ao_frame();  // (ambient occlusion, ao.c: the frame state starts over)
     extern void vk_pace_frame(void);
     vk_pace_frame();  // (exec.c: the game's 30 fps mode when frames don't fit 60)
     static long slow_ms = -1;

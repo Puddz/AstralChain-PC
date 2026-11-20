@@ -128,6 +128,7 @@ void ac_setting_apply(const char *key,const char *value) {
  else if(!strcmp(key,"cutscene_fps_30")) ac_cutscene_30=on;
  else if(!strcmp(key,"ignore_focus")) ac_ignore_focus=on;
  else if(!strcmp(key,"upscaler")) ac_upscaler=value && !strcmp(value,"fsr1");
+ else if(!strcmp(key,"ao")) ac_ao=value && !strcmp(value,"high") ? 2 : value && !strcmp(value,"low") ? 1 : 0;
  else if(!strcmp(key,"fsr_sharpness")) {float s=(float)atof(value);if(s>=0 && s<=2) ac_fsr_sharpness=s;}
  else if(!strcmp(key,"temporal_sharpness")) {float s=(float)atof(value);if(s>=0 && s<=1) ac_temporal_sharpness=s;}
  else if(!strcmp(key,"uncapped")) ac_uncapped=on;
