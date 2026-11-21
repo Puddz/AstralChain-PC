@@ -35,6 +35,7 @@ The keyboard keys are in the launcher's **Controls** window, not here.
 | --- | --- | --- | --- |
 | **Skip sound gaps after a stall to stay in sync** | On | After a hitch, up to 0.3 s of sound is skipped so it does not fall behind the picture | `AC_AUDIO_RESYNC=0` turns it off |
 | **Keep cutscene cuts on time at 60 fps** | On | Off: cuts end as in the original code, each up to a frame early at 60 fps (the sound drifts ahead) | `AC_CUT_CARRY=0` turns it off |
+| **5.1 surround sound** (experimental) **F1** | Off | The game mixes its sound for six speakers (front left and right, centre, LFE, side left and right) instead of two: effects and voices around you also come from the sides and behind; music and cutscenes are authored in stereo and stay in front. For Windows set to 5.1 or 7.1 speakers. Where the sound device has fewer than six channels (headphones, stereo speakers, also with Windows Sonic or Dolby Atmos for Headphones) the mix is folded back to stereo here. From [captainj-sparrow's port](https://github.com/captainj-sparrow/astral-chain-pc-recomp). In the menu, from the next start | `AC_SURROUND=1` |
 
 ## Display
 

@@ -449,7 +449,7 @@ static int ss_save(Cpu *c,uint64_t after) {
   WaveOutput *wave=&audio_outputs[i].wave;
   memset(&ss_mem.audio[i],0,sizeof(ss_mem.audio[i]));
   ss_mem.audio[i].active=audio_outputs[i].active;ss_mem.audio[i].running=wave->running;
-  ss_mem.audio[i].rate=wave->format.nSamplesPerSec;ss_mem.audio[i].channels=wave->format.nChannels;
+  ss_mem.audio[i].rate=wave->format.nSamplesPerSec;ss_mem.audio[i].channels=wave->stream_channels;
   for(unsigned k=0;k<audio_outputs[i].ndropped && ss_mem.audio[i].n<64;k++) ss_mem.audio[i].tags[ss_mem.audio[i].n++]=audio_outputs[i].dropped[k];
   for(unsigned k=0;k<wave->count && ss_mem.audio[i].n<64;k++) ss_mem.audio[i].tags[ss_mem.audio[i].n++]=wave->buffers[(wave->head+k)%32].tag;
  }
@@ -693,7 +693,7 @@ static void ss_load(void) {
  for(unsigned i=0;i<16;i++) if(ss_mem.audio[i].active) {
   WaveOutput *wave=&audio_outputs[i].wave;uint64_t gone[32];
   unsigned rate=audio_outputs[i].active && wave->format.nSamplesPerSec ? wave->format.nSamplesPerSec : ss_mem.audio[i].rate;
-  unsigned channels=audio_outputs[i].active && wave->format.nChannels ? wave->format.nChannels : ss_mem.audio[i].channels;
+  unsigned channels=audio_outputs[i].active && wave->stream_channels ? wave->stream_channels : ss_mem.audio[i].channels;
   wave_output_abandon(wave,gone,32);
   MMRESULT opened=rate && channels ? wave_output_open(wave,rate,channels) : 1;
   if(!opened && ss_mem.audio[i].running) opened=wave_output_start(wave);
