@@ -42,6 +42,10 @@ void ac_speaker_gain_init(void) {
   int g=n && n<sizeof(v) ? atoi(v) : 0;ac_speaker_gain[i]=g<-30 ? -30 : g>10 ? 10 : g;
  }
 }
+/* HDR output (AC_HDR=1, las/nvn/vulkan/hdr.c): what the window shows (0 SDR, 1 HDR10, 2 HDR asked for but the display
+ * offers no HDR10 format, 3 the AC_HDR_FORCE test), and the brightnesses in nits (AC_HDR_PEAK_NITS 400-10000,
+ * AC_HDR_GAME_NITS and AC_HDR_UI_NITS 80-500) and the highlights' hue correction (AC_HDR_HUE 0-100); -1 not read yet */
+volatile int ac_hdr_state,ac_hdr_peak=-1,ac_hdr_game=-1,ac_hdr_ui=-1,ac_hdr_hue=-1;
 volatile int ac_uncapped=-1;     /* AC_UNCAPPED=1: no 60 FPS pacing in gameplay (nvn_hle.h nvn_present_pace) */
 volatile int ac_in_cutscene;      /* (svc #0xB1: the game reports its cutscene mode each frame) */
 volatile LONG ac_game_steps;      /* (svc #0xB1 calls: game frames, for input recordings, input_record.h) */

@@ -61,6 +61,8 @@ static struct {
     PfnFfxDispatch dispatch;
     ffxContext ctx;
     uint32_t rw, rh, ow, oh;  // the context's render and output sizes
+    int hdr;                  // the context takes HDR colour (HDR output, hdr.c: the tonemap's picture continued above 1)
+    int want_hdr;             // this frame's
     uint32_t frame;           // jitter index
     float jx, jy;             // this frame's jitter, in render pixels
     uint64_t last_ns;
@@ -113,7 +115,7 @@ static bool tu_load(void) {
 
 // An image of our own (kept until the size changes), always in the GENERAL layout like the backend's others.
 static TexBackend *tu_image(TexBackend *d, VkFormat f, uint32_t w, uint32_t h) {
-    if (d->image && (d->width != w || d->height != h)) {
+    if (d->image && (d->width != w || d->height != h || d->format != f)) {
         vk_views_forget(d);
         vk_defer_image(d->image, d->mem);
         d->image = VK_NULL_HANDLE;
@@ -285,7 +287,7 @@ static void tu_destroy(void) {
 }
 
 static bool tu_context(uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
-    if (tu.ctx && tu.rw == rw && tu.rh == rh && tu.ow == ow && tu.oh == oh) return true;
+    if (tu.ctx && tu.rw == rw && tu.rh == rh && tu.ow == ow && tu.oh == oh && tu.hdr == tu.want_hdr) return true;
     tu_destroy();
     struct ffxCreateBackendVKDesc be = {0};
     be.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
@@ -300,7 +302,10 @@ static bool tu_context(uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
     up.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
     up.header.pNext = &ver.header;
     // (the tonemapped picture; depth is 0 near .. 1 at infinity)
-    up.flags = FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE | FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
+    // With HDR output (hdr.c) it holds the highlights above 1, still sRGB-encoded: taken as HDR colour, with the
+    // upscaler's own exposure (as captainj-sparrow's port gives it)
+    up.flags = (tu.want_hdr ? FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE
+                            : FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE) | FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
     if (getenv("AC_FSR_DEBUG")) up.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING | FFX_UPSCALE_ENABLE_DEBUG_VISUALIZATION;
     up.maxRenderSize.width = rw; up.maxRenderSize.height = rh;
     up.maxUpscaleSize.width = ow; up.maxUpscaleSize.height = oh;
@@ -318,7 +323,7 @@ static bool tu_context(uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
     tu.query(&tu.ctx, &pv.header);
     LOG("[fsr] %s: %ux%u -> %ux%u (%.0f ms)\n", pv.versionName ? pv.versionName : "FSR", rw, rh, ow, oh,
         (SDL_GetTicksNS() - t0) / 1e6);
-    tu.rw = rw; tu.rh = rh; tu.ow = ow; tu.oh = oh;
+    tu.rw = rw; tu.rh = rh; tu.ow = ow; tu.oh = oh; tu.hdr = tu.want_hdr;
     tu.frame = 0;
     return true;
 }
@@ -442,7 +447,7 @@ static bool ngx_load(void) {
 }
 
 static bool ngx_feature(VkCommandBuffer cb, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
-    if (ngx.feature && ngx.rw == rw && ngx.rh == rh && ngx.ow == ow && ngx.oh == oh) return true;
+    if (ngx.feature && ngx.rw == rw && ngx.rh == rh && ngx.ow == ow && ngx.oh == oh && tu.hdr == tu.want_hdr) return true;
     if (ngx.feature) { vkDeviceWaitIdle(g_vk.dev); ngx.release(ngx.feature); ngx.feature = NULL; }
     NgxParam *p = ngx.params;
     // the quality level NGX is told: by the ratio (0 performance, 1 balanced, 2 quality, 3 ultra performance, 5 DLAA)
@@ -464,7 +469,8 @@ static bool ngx_feature(VkCommandBuffer cb, uint32_t rw, uint32_t rh, uint32_t o
     ngx_set_ui(p, "OutWidth", ow);
     ngx_set_ui(p, "OutHeight", oh);
     ngx_set_i(p, "PerfQualityValue", quality);
-    ngx_set_i(p, "DLSS.Feature.Create.Flags", 1 << 1);  // motion vectors at the render size; LDR colour, depth 0 near
+    // motion vectors at the render size; LDR colour, depth 0 near; with HDR output IsHDR and AutoExposure (hdr.c)
+    ngx_set_i(p, "DLSS.Feature.Create.Flags", (1 << 1) | (tu.want_hdr ? (1 << 0) | (1 << 6) : 0));
     ngx_set_i(p, "DLSS.Enable.Output.Subrects", 0);
     uint64_t t0 = SDL_GetTicksNS();
     unsigned rc = ngx.create(g_vk.dev, cb, 1 /* SuperSampling */, p, &ngx.feature);
@@ -476,7 +482,7 @@ static bool ngx_feature(VkCommandBuffer cb, uint32_t rw, uint32_t rh, uint32_t o
     }
     LOG("[dlss] %s: %ux%u -> %ux%u (%.0f ms)\n", quality == 5 ? "DLAA" : "DLSS", rw, rh, ow, oh, (SDL_GetTicksNS() - t0) / 1e6);
     ngx.rw = rw; ngx.rh = rh; ngx.ow = ow; ngx.oh = oh;
-    tu.rw = rw; tu.rh = rh; tu.ow = ow; tu.oh = oh;
+    tu.rw = rw; tu.rh = rh; tu.ow = ow; tu.oh = oh; tu.hdr = tu.want_hdr;
     tu.frame = 0;
     return true;
 }
@@ -581,12 +587,15 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     if (vel && (vel->width != color->width || vel->height != color->height || !vel->image)) vel = NULL;
     uint32_t rw = color->width, rh = color->height, ow = dst->width, oh = dst->height;
     if (!tu_prep_ready()) { tu.state = 2; return false; }
-    bool fresh = (mode == 2 ? !ngx.feature : !tu.ctx) || tu.rw != rw || tu.rh != rh || tu.ow != ow || tu.oh != oh;
+    // HDR output (hdr.c): the upscaled picture in RGBA16F keeps the highlights; it becomes the frame's scene, and the
+    // window texture gets it clamped, as the game's SMAA blend would write it
+    tu.want_hdr = vk_hdr_active() && dst->format == VK_FORMAT_R8G8B8A8_UNORM;
+    bool fresh = (mode == 2 ? !ngx.feature : !tu.ctx) || tu.rw != rw || tu.rh != rh || tu.ow != ow || tu.oh != oh || tu.hdr != tu.want_hdr;
     if (mode == 2 ? !ngx_feature(vk_cmd(), rw, rh, ow, oh) : !tu_context(rw, rh, ow, oh)) return false;
 
     TexBackend *d = tu_image(&tu.depth, VK_FORMAT_R32_SFLOAT, rw, rh);
     TexBackend *mv = tu_image(&tu.mv, VK_FORMAT_R16G16_SFLOAT, rw, rh);
-    TexBackend *out = tu_image(&tu.out, VK_FORMAT_R8G8B8A8_UNORM, ow, oh);
+    TexBackend *out = tu_image(&tu.out, tu.want_hdr ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM, ow, oh);
     cb = vk_cmd();
     vk_full_barrier(cb);
     {   // depth and motion vectors
@@ -674,7 +683,8 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     dd.color = tu_resource(color, FFX_API_SURFACE_FORMAT_R11G11B10_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dd.depth = tu_resource(d, FFX_API_SURFACE_FORMAT_R32_FLOAT, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dd.motionVectors = tu_resource(mv, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-    dd.output = tu_resource(out, FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+    dd.output = tu_resource(out, tu.hdr ? FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT : FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM,
+                            FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dd.jitterOffset.x = jsx * tu.jx;
     dd.jitterOffset.y = jsy * tu.jy;
     dd.motionVectorScale.x = 1;
@@ -693,7 +703,7 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     dd.cameraFar = 3.4e38f;  // (infinite: FFX_UPSCALE_ENABLE_DEPTH_INFINITE)
     dd.cameraFovAngleVertical = cam && cam->fov_y > 0.01f ? cam->fov_y : 0.8f;
     dd.viewSpaceToMetersFactor = 1;
-    dd.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
+    dd.flags = tu.hdr ? 0 : FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
     if (getenv("AC_FSR_DEBUG") && atoi(getenv("AC_FSR_DEBUG")) > 1) dd.flags |= FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW;
     ffxReturnCode_t rc = tu.dispatch(&tu.ctx, &dd.header);
     if (rc != FFX_API_RETURN_OK) {
@@ -710,8 +720,15 @@ copy_out:
     vk_full_barrier(cb);
     VkImageCopy c = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                      .extent = {ow, oh, 1}};
-    vkCmdCopyImage(cb, out->image, VK_IMAGE_LAYOUT_GENERAL, dst->image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+    if (out->format == VK_FORMAT_R8G8B8A8_UNORM)
+        vkCmdCopyImage(cb, out->image, VK_IMAGE_LAYOUT_GENERAL, dst->image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+    else {  // (HDR: RGBA16F to the UNORM window texture, clamped)
+        VkImageBlit bl = {.srcSubresource = c.srcSubresource, .srcOffsets = {{0, 0, 0}, {(int32_t)ow, (int32_t)oh, 1}},
+                          .dstSubresource = c.dstSubresource, .dstOffsets = {{0, 0, 0}, {(int32_t)ow, (int32_t)oh, 1}}};
+        vkCmdBlitImage(cb, out->image, VK_IMAGE_LAYOUT_GENERAL, dst->image, VK_IMAGE_LAYOUT_GENERAL, 1, &bl, VK_FILTER_NEAREST);
+    }
     vk_full_barrier(cb);
+    if (out->format != VK_FORMAT_R8G8B8A8_UNORM) vk_hdr_reads(dst, out);  // (the frame's scene for the HDR present)
     tu.ok_frames++;
     return true;
 }

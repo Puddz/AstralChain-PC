@@ -508,6 +508,7 @@ void backend_texture_destroyed(NvnTexture *t) {
         free(b->pre_rgba);
         extern void vk_alias_texture_destroyed(NvnTexture *t);  // (exec.c copy aliases: a source's contents handed over)
         vk_alias_texture_destroyed(t);
+        vk_hdr_texture_gone(b);  // (hdr.c: the frame's scene or window texture)
         live_remove(b);
         destroy_image(b);
         free(b->pending_rgba);

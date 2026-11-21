@@ -44,6 +44,17 @@ static void create_instance(void) {
     uint32_t n_ext = 0;
     ext[n_ext++] = VK_KHR_SURFACE_EXTENSION_NAME;
     ext[n_ext++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+    if (vk_hdr_wanted()) {  // HDR10 surface formats (hdr.c)
+        uint32_t ni = 0;
+        vkEnumerateInstanceExtensionProperties(NULL, &ni, NULL);
+        VkExtensionProperties *ip = calloc(ni ? ni : 1, sizeof *ip);
+        vkEnumerateInstanceExtensionProperties(NULL, &ni, ip);
+        bool cs = false;
+        for (uint32_t i = 0; i < ni; i++) cs |= !strcmp(ip[i].extensionName, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+        free(ip);
+        if (cs) ext[n_ext++] = VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME;
+        else LOG("[hdr] the Vulkan driver has no %s: no HDR output\n", VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+    }
     bool validate = getenv("LARECOMP_VK_VALIDATION") != NULL;
     if (validate) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
@@ -157,9 +168,11 @@ static void create_device(void) {
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[20];
+    const char *ext[24];
     uint32_t n_ext = 0;
     ext[n_ext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    g_vk.hdr_metadata = vk_hdr_wanted() && has_ext(ep, ne, VK_EXT_HDR_METADATA_EXTENSION_NAME);  // the display's peak (hdr.c)
+    if (g_vk.hdr_metadata) ext[n_ext++] = VK_EXT_HDR_METADATA_EXTENSION_NAME;
     // Astral Chain, temporal upscaling (temporal.c; only when AC_TEMPORAL asks for it): DLSS's device extensions, and
     // for both upscalers 16-bit floats in shaders and buffer device addresses where the GPU has them.
     extern int vk_tu_mode(void);
@@ -393,6 +406,7 @@ static void create_swapchain(void) {
     VkSurfaceFormatKHR sf = fmts[0];
     for (uint32_t i = 0; i < nf; i++)
         if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM && fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { sf = fmts[i]; break; }
+    int hdr10 = vk_hdr_surface_format(fmts, nf, &sf);  // AC_HDR=1: HDR10 where the display offers it (hdr.c)
     uint32_t count = caps.minImageCount + 1;
     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
     if (count > 8) count = 8;
@@ -409,6 +423,8 @@ static void create_swapchain(void) {
     if (old) vkDestroySwapchainKHR(g_vk.dev, old, NULL);
     g_vk.sc_format = sf.format;
     g_vk.sc_extent = ext;
+    vk_hdr_swapchain(hdr10);
+    vk_hdr_metadata(1);
     g_vk.sc_count = 8;
     vkGetSwapchainImagesKHR(g_vk.dev, g_vk.swapchain, &g_vk.sc_count, g_vk.sc_images);
     for (uint32_t i = 0; i < g_vk.sc_count; i++) {
@@ -548,6 +564,8 @@ void vk_frame_end(const char *shot_path) {
         uint32_t w = g_vk.sc_extent.width, h = g_vk.sc_extent.height;
         uint8_t *px = shot.ptr;
         bool bgr = g_vk.sc_format == VK_FORMAT_B8G8R8A8_UNORM || g_vk.sc_format == VK_FORMAT_B8G8R8A8_SRGB;
+        if (g_vk.sc_format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || g_vk.sc_format == VK_FORMAT_A2R10G10B10_UNORM_PACK32)
+            vk_hdr_to_srgb8(px, (size_t)w * h, g_vk.sc_format == VK_FORMAT_A2R10G10B10_UNORM_PACK32);  // (HDR10: PQ codes)
         for (uint64_t i = 0; bgr && i < (uint64_t)w * h; i++) { uint8_t t = px[i * 4]; px[i * 4] = px[i * 4 + 2]; px[i * 4 + 2] = t; }
         for (uint64_t i = 0; i < (uint64_t)w * h; i++) px[i * 4 + 3] = 255;
         vk_save_png(shot_path, px, w, h);
@@ -718,14 +736,27 @@ void backend_present(NvnTexture *t) {
             ac_menu_page = getenv("AC_MENU_PAGE") ? atol(getenv("AC_MENU_PAGE")) : 0;
             ac_menu_open = 1;
         }
-        extern void menu_render(void *cmd, uint32_t w, uint32_t h);
-        menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
+        extern int menu_render(void *cmd, uint32_t w, uint32_t h);
+        uint32_t ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height;
+        if (vk_hdr_ui_needed()) {  // (HDR: the menu through an image of its own, then blended on at the HUD's white)
+            vk_frame_suspend();
+            int drew = 0;
+            if (vk_hdr_ui_begin(cb, ww, wh)) {
+                drew = menu_render((void *)cb, ww, wh);
+                vkCmdEndRendering(cb);
+                vk_full_barrier(cb);
+            }
+            vk_frame_resume();
+            if (drew) vk_hdr_ui_compose(cb, ww, wh);
+        } else menu_render((void *)cb, ww, wh);
+        vk_hdr_metadata(0);
         extern void vk_perf_frame_end(void);
         vk_perf_frame_end();
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("LARECOMP_WINDOW_SHOT") ? atol(getenv("LARECOMP_WINDOW_SHOT")) : 0;
         bool shot = win_shot && (long)total_frames + 1 == win_shot;
         vk_frame_end(shot ? "window.png" : NULL);
+        vk_hdr_after_present();
     } else {
         renderer_submit();
     }

@@ -137,6 +137,10 @@ void ac_setting_apply(const char *key,const char *value) {
   for(int i=0;i<6;i++) if(ac_gain_keys[i] && !strcmp(key,ac_gain_keys[i])) ac_speaker_gain[i]=g;
  }
  else if(!strcmp(key,"sub_bass")) ac_sub_bass=on;
+ else if(!strcmp(key,"hdr_peak")) {int v=value ? atoi(value) : 1000;ac_hdr_peak=v<400 ? 400 : v>10000 ? 10000 : v;}
+ else if(!strcmp(key,"hdr_game")) {int v=value ? atoi(value) : 203;ac_hdr_game=v<80 ? 80 : v>500 ? 500 : v;}
+ else if(!strcmp(key,"hdr_ui")) {int v=value ? atoi(value) : 203;ac_hdr_ui=v<80 ? 80 : v>500 ? 500 : v;}
+ else if(!strcmp(key,"hdr_hue")) {int v=value ? atoi(value) : 80;ac_hdr_hue=v<0 ? 0 : v>100 ? 100 : v;}
  else if(!strcmp(key,"port_credit")) ac_title_credit=on;
  else if(!strcmp(key,"fps_counter")) {int m=value ? atoi(value) : 0;ac_fps_counter=m>=0 && m<=2 ? m : 0;}
  else if(!strcmp(key,"fps_corner")) ac_fps_corner=value && !strcmp(value,"tr") ? 1 : value && !strcmp(value,"bl") ? 2 : value && !strcmp(value,"br") ? 3 : value && !strcmp(value,"ml") ? 4 : value && !strcmp(value,"mr") ? 5 : 0;
