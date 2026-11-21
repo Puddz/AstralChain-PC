@@ -17,6 +17,7 @@
 #include <psapi.h>
 #include <pdh.h>
 #include <pdhmsg.h>
+#include <ctype.h>
 #include <float.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +50,7 @@ extern volatile int ac_title_credit;                     // (live_settings.h)
 extern volatile int ac_fps_counter;                      // (live_settings.h) 0 off, 1 frame rate, 2 detailed
 extern volatile int ac_fps_corner;                       // (live_settings.h) 0 top left, 1 top right, 2 bottom left, 3 bottom right, 4 middle left, 5 middle right
 extern volatile int ac_uncapped;                         // (live_settings.h)
+extern volatile int ac_audio_mode, ac_audio_device_channels;  // (live_settings.h: what the sound output sends)
 // The renderer's numbers for the detailed frame rate panel (nvn/vulkan/exec.c, device.c)
 extern volatile int vk_perf_detail;
 void vk_perf_totals(uint64_t *gpu_ns, uint64_t *wait_gpu_ns, uint64_t *wait_shader_ns);
@@ -151,6 +153,11 @@ std::vector<Opt> opts = {
     {"surround", "Sound", "5.1 surround sound (experimental)",
      "The game mixes its sound for six speakers. For Windows set to 5.1 or 7.1 speakers; headphones and stereo "
      "speakers get it folded back to stereo. From captainj-sparrow's port.", CHECK, "0", nullptr, 0, 0, false},
+    {"gain_fl", "Sound", "Front left", "Volume of each speaker, in dB.", NUMBER, "0", nullptr, -30, 10, true},
+    {"gain_fr", "Sound", "Front right", nullptr, NUMBER, "0", nullptr, -30, 10, true},
+    {"gain_c", "Sound", "Centre", "The game sends little to the centre.", NUMBER, "0", nullptr, -30, 10, true},
+    {"gain_sl", "Sound", "Surround left", nullptr, NUMBER, "0", nullptr, -30, 10, true},
+    {"gain_sr", "Sound", "Surround right", nullptr, NUMBER, "0", nullptr, -30, 10, true},
 };
 
 std::string env(const char *name) {
@@ -188,6 +195,12 @@ void read_session() {
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
         else if (k == "save_states") v = env("AC_SAVE_STATES") == "1" ? "1" : "0";
         else if (k == "surround") v = env("AC_SURROUND") == "1" ? "1" : "0";
+        else if (!k.compare(0, 5, "gain_")) {
+            std::string up = k.substr(5);
+            for (char &c : up) c = (char)toupper((unsigned char)c);
+            std::string e = env(("AC_GAIN_" + up).c_str());
+            if (!e.empty()) v = std::to_string(atoi(e.c_str()));
+        }
         else if (k == "port_credit") v = env("AC_TITLE_CREDIT") == "0" ? "0" : "1";
         else if (k == "fps_counter") { std::string e = env("AC_FPS_COUNTER"); v = e == "1" || e == "2" ? e : "0"; }
         else if (k == "fps_corner") { std::string e = env("AC_FPS_CORNER"); v = e == "tr" || e == "bl" || e == "br" || e == "ml" || e == "mr" ? e : "tl"; }
@@ -430,6 +443,7 @@ bool unused(const Opt &o) {
     if (!strcmp(o.key, "temporal_quality")) return is("temporal", "off");
     if (!strcmp(o.key, "temporal_sharpness")) return !is("temporal", "fsr");
     if (!strcmp(o.key, "fps_corner")) return is("fps_counter", "0");
+    if (!strncmp(o.key, "gain_", 5)) return is("surround", "0") && ac_audio_mode != 1 && ac_audio_mode != 2;  // (only for a 5.1 mix)
     return false;
 }
 
@@ -517,7 +531,8 @@ void box_end() {
 
 bool is_child(const Opt &o) {
     return !strcmp(o.key, "fsr_sharpness") || !strcmp(o.key, "temporal_quality") || !strcmp(o.key, "temporal_sharpness") ||
-           !strcmp(o.key, "fps_corner") || !strcmp(o.key, "mouse_sens") || !strcmp(o.key, "mouse_invert");
+           !strcmp(o.key, "fps_corner") || !strcmp(o.key, "mouse_sens") || !strcmp(o.key, "mouse_invert") ||
+           !strncmp(o.key, "gain_", 5);
 }
 
 void draw(float scale) {
@@ -579,7 +594,8 @@ void draw(float scale) {
             if (ImGui::Checkbox("##v", &on)) set(o, on ? "1" : "0");
         } else if (o.kind == NUMBER) {
             int v = atoi(o.value.c_str());
-            if (ImGui::SliderInt("##v", &v, o.lo, o.hi, "%d", ImGuiSliderFlags_AlwaysClamp)) set(o, std::to_string(v), false);
+            const char *fmt = !strncmp(o.key, "gain_", 5) ? "%+d dB" : "%d";
+            if (ImGui::SliderInt("##v", &v, o.lo, o.hi, fmt, ImGuiSliderFlags_AlwaysClamp)) set(o, std::to_string(v), false);
             if (ImGui::IsItemDeactivatedAfterEdit()) saved_ok = save(o.key, o.value);
         } else combo(o);
         tip |= ImGui::IsItemFocused() && io.NavVisible && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId);
@@ -617,6 +633,20 @@ void draw(float scale) {
             if (!o.live) ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "Next start.");
             if (!o.live && !first.empty()) ImGui::SameLine();
             if (!first.empty()) ImGui::TextDisabled("%s", first.c_str());
+            ImGui::PopTextWrapPos();
+            if (child) ImGui::Unindent(fs * 1.2f);
+        }
+        if (!strcmp(o.key, "surround")) {  // (what the sound output sends now)
+            int m = ac_audio_mode, n = ac_audio_device_channels;
+            char line[200];
+            if (m == 1) snprintf(line, sizeof line, "Now: 5.1 surround, six channels to the sound device (it has %d).", n);
+            else if (m == 2) snprintf(line, sizeof line, "Now: the 5.1 mix folded down to stereo: the sound device has %d channels "
+                                      "(set it to 5.1 or 7.1 speakers in Windows' sound settings for six).", n);
+            else if (m == 0) snprintf(line, sizeof line, "Now: stereo.");
+            else snprintf(line, sizeof line, "Now: no sound output yet.");
+            if (child) ImGui::Indent(fs * 1.2f);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - box_pad);
+            ImGui::TextColored(m == 1 ? ImVec4(0.5f, 0.9f, 0.6f, 1) : ImVec4(0.75f, 0.8f, 0.9f, 1), "%s", line);
             ImGui::PopTextWrapPos();
             if (child) ImGui::Unindent(fs * 1.2f);
         }
