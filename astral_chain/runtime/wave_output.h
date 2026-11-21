@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <mmreg.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,12 +112,15 @@ static MMRESULT wave_output_open(WaveOutput *output,unsigned rate,unsigned chann
  unsigned device=channels;
  if(channels==6) {  /* a 5.1 mix: as it is where the device has the speakers, else folded down to stereo here */
   int speakers=wave_device_channels();
+  ac_speaker_gain_init();
   char v[4];DWORD n=GetEnvironmentVariableA("AC_AUDIO_FOLD",v,sizeof(v));  /* (tests: 1 always fold, 0 never) */
   output->fold=n==1 ? v[0]=='1' : speakers<6;
   if(output->fold) device=2;
   printf("AUDIO 5.1 mix: the default device has %d channels: %s\n",speakers,
    output->fold ? "folded down to stereo here" : "sent as 5.1");
+  ac_audio_device_channels=speakers;
  }
+ ac_audio_mode=channels!=6 ? 0 : output->fold ? 2 : 1;
  output->format_ext=(WAVEFORMATEXTENSIBLE){0};
  output->format=(WAVEFORMATEX){.wFormatTag=WAVE_FORMAT_PCM,.nChannels=(WORD)device,
   .nSamplesPerSec=rate,.nAvgBytesPerSec=rate*device*2,.nBlockAlign=(WORD)(device*2),.wBitsPerSample=16};
@@ -158,18 +162,29 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
  if(!output->handle || !output->ready)return MMSYSERR_INVALHANDLE;
  if(!pcm || !size || size>16u*1024*1024 || size%output->stream_block)return MMSYSERR_INVALPARAM;
  if(output->count==32 || output->queued_bytes+size>64u*1024*1024)return MMSYSERR_NOMEM;
- if(output->fold) {  /* 5.1 to stereo (ITU-R BS.775: the centre and each side at -3 dB; the LFE, which the game leaves
-                      * silent, dropped), clipped */
-  static __thread int16_t *folded;static __thread size_t folded_cap;
-  size_t frames=size/12;
-  if(folded_cap<frames) {free(folded);folded=malloc(frames*4);folded_cap=folded ? frames : 0;if(!folded)return MMSYSERR_NOMEM;}
-  const int16_t *in=(const int16_t*)pcm;
-  for(size_t i=0;i<frames;i++,in+=6) {
-   float c=0.70710678f*in[2],l=in[0]+c+0.70710678f*in[4],r=in[1]+c+0.70710678f*in[5];
-   folded[i*2]=(int16_t)(l>32767.f ? 32767.f : l<-32768.f ? -32768.f : l);
-   folded[i*2+1]=(int16_t)(r>32767.f ? 32767.f : r<-32768.f ? -32768.f : r);
+ if(output->stream_channels==6) {
+  /* The player's gain per speaker (dB, live from the menu), then for a device with fewer speakers the fold to stereo
+   * (ITU-R BS.775: the centre and each side at -3 dB; the LFE, which the game leaves silent, dropped); clipped */
+  float g[6];int flat=1;
+  for(int c=0;c<6;c++) {int db=ac_speaker_gain[c];flat&=!db;g[c]=db ? powf(10.f,db/20.f) : 1.f;}
+  if(output->fold || !flat) {
+   static __thread int16_t *mixed;static __thread size_t mixed_cap;
+   size_t frames=size/12;
+   if(mixed_cap<frames) {free(mixed);mixed=malloc(frames*12);mixed_cap=mixed ? frames : 0;if(!mixed)return MMSYSERR_NOMEM;}
+   const int16_t *in=(const int16_t*)pcm;
+#define WAVE_CLIP(x) ((int16_t)((x)>32767.f ? 32767.f : (x)<-32768.f ? -32768.f : (x)))
+   if(output->fold) {
+    for(size_t i=0;i<frames;i++,in+=6) {
+     float c=0.70710678f*g[2]*in[2],l=g[0]*in[0]+c+0.70710678f*g[4]*in[4],r=g[1]*in[1]+c+0.70710678f*g[5]*in[5];
+     mixed[i*2]=WAVE_CLIP(l);mixed[i*2+1]=WAVE_CLIP(r);
+    }
+    size=frames*4;
+   } else {
+    for(size_t i=0;i<frames*6;i++) {float x=g[i%6]*in[i];mixed[i]=WAVE_CLIP(x);}
+   }
+#undef WAVE_CLIP
+   pcm=mixed;
   }
-  pcm=folded;size=frames*4;
  }
  /* Timing: when the queued sound runs out (play_end, QPC seconds) and whether it ran dry before this buffer. A dry
   * queue pauses the sound, which then stays behind the picture by the gap: the cutscene drift reported on a second PC

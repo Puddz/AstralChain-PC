@@ -4,7 +4,14 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-21**
 
-- **New: 5.1 surround sound** (issue #48; *experimental, not yet tested on 5.1 speakers*; off by default):
+- **5.1 surround: a volume per speaker, and what goes out** (issue #48; *not yet confirmed in play*): under
+  **5.1 surround sound**, sliders for front left, front right, centre, surround left and surround right, -30 to
+  +10 dB (launcher, and the in-game menu, where they apply at once). The menu also says what the sound output sends
+  now: stereo, 5.1 with six channels, or the 5.1 mix folded down to stereo, with the sound device's channel count.
+  Checked from the sound the port sends out: -30 dB on front right gave 0.033 of front left's level, -6 dB on
+  surround left about half of surround right's.
+- **New: 5.1 surround sound** (issue #48; experimental; reported working by the issue's author on their surround
+  systems; off by default):
   **Settings > Sound > 5.1 surround sound** in the launcher, or **Sound** in the in-game menu (**F1**, from the next
   start). The port now tells the game the sound output has six channels, and the game's sound engine then mixes
   5.1 itself, as captainj-sparrow found in [their port](https://github.com/captainj-sparrow/astral-chain-pc-recomp).
