@@ -25,7 +25,21 @@ volatile int ac_ignore_focus=-1;  /* AC_IGNORE_FOCUS=1 */
 volatile int ac_upscaler=-1;      /* AC_UPSCALER=fsr1 (las/nvn/vulkan/exec.c post_process) */
 volatile float ac_fsr_sharpness=-1;  /* AC_FSR_SHARPNESS */
 volatile int ac_ao=-1;            /* AC_AO=low|high: ambient occlusion (las/nvn/vulkan/ao.c; 0 off, 1 low, 2 high) */
-volatile int ac_uncapped=-1;      /* AC_UNCAPPED=1: no 60 FPS pacing in gameplay (nvn_hle.h nvn_present_pace) */
+/* 5.1 sound (AC_SURROUND=1, wave_output.h): what goes out (0 stereo, 1 the 5.1 mix to the device, 2 the 5.1 mix
+ * folded down to stereo here; -1 no sound output yet) and the device's channel count, for the menu; and a gain per
+ * speaker in dB (front left, right, centre, LFE, side left, right; AC_GAIN_FL, _FR, _C, _SL, _SR; -30 to +10) */
+volatile int ac_audio_mode=-1,ac_audio_device_channels;
+volatile int ac_speaker_gain[6];
+static const char *const ac_gain_keys[6]={"gain_fl","gain_fr","gain_c",NULL,"gain_sl","gain_sr"};
+void ac_speaker_gain_init(void) {
+ static int done;if(done) return;done=1;  /* (once: later changes come from the menu) */
+ static const char *const names[6]={"AC_GAIN_FL","AC_GAIN_FR","AC_GAIN_C",NULL,"AC_GAIN_SL","AC_GAIN_SR"};
+ for(int i=0;i<6;i++) if(names[i]) {
+  char v[8];DWORD n=GetEnvironmentVariableA(names[i],v,sizeof(v));
+  int g=n && n<sizeof(v) ? atoi(v) : 0;ac_speaker_gain[i]=g<-30 ? -30 : g>10 ? 10 : g;
+ }
+}
+volatile int ac_uncapped=-1;     /* AC_UNCAPPED=1: no 60 FPS pacing in gameplay (nvn_hle.h nvn_present_pace) */
 volatile int ac_in_cutscene;      /* (svc #0xB1: the game reports its cutscene mode each frame) */
 volatile LONG ac_game_steps;      /* (svc #0xB1 calls: game frames, for input recordings, input_record.h) */
 volatile int ac_fps_counter=-1;  /* AC_FPS_COUNTER=1: frames per second in the corner, 2: the detailed panel (las/menu.cpp) */
