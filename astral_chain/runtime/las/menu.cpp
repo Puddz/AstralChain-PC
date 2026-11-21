@@ -137,6 +137,9 @@ std::vector<Opt> opts = {
      "game's memory, so send it privately. It loads in the same version of this port at the same render resolution. "
      "After loading a state the game saves over your save as usual, with that state's progress.",
      CHECK, "0", nullptr, 0, 0, false},
+    {"surround", "Sound", "5.1 surround sound (experimental)",
+     "The game mixes its sound for six speakers. For Windows set to 5.1 or 7.1 speakers; headphones and stereo "
+     "speakers get it folded back to stereo. From captainj-sparrow's port.", CHECK, "0", nullptr, 0, 0, false},
 };
 
 std::string env(const char *name) {
@@ -170,6 +173,7 @@ void read_session() {
         else if (k == "ignore_focus") { std::string e = env("AC_IGNORE_FOCUS"); v = !e.empty() && e != "0" ? "1" : "0"; }
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
         else if (k == "save_states") v = env("AC_SAVE_STATES") == "1" ? "1" : "0";
+        else if (k == "surround") v = env("AC_SURROUND") == "1" ? "1" : "0";
         else if (k == "port_credit") v = env("AC_TITLE_CREDIT") == "0" ? "0" : "1";
         else if (k == "fps_counter") { std::string e = env("AC_FPS_COUNTER"); v = e == "1" || e == "2" ? e : "0"; }
         else if (k == "fps_corner") { std::string e = env("AC_FPS_CORNER"); v = e == "tr" || e == "bl" || e == "br" || e == "ml" || e == "mr" ? e : "tl"; }

@@ -43,7 +43,7 @@ static void audout_stream_dispatch(unsigned session,uint8_t *buffer,const IpcReq
   /* Nonzero offset/next semantics have not been established for this SDK. */
   if(descriptor[0] || descriptor[4]) boundary("audout-buffer-offset-or-chain",&state,state.pc);
   if(!descriptor[3] || descriptor[3]>descriptor[2] || descriptor[3]>16u*1024*1024 ||
-     descriptor[3]%wave->format.nBlockAlign)
+     descriptor[3]%wave->stream_block)
    boundary("audout-buffer-size",&state,state.pc);
   audout_memory(descriptor[1],descriptor[3],1,"audout-samples-not-readable");
   for(unsigned i=0;i<wave->count;i++) if(wave->buffers[(wave->head+i)%32].tag==tag)
@@ -51,7 +51,7 @@ static void audout_stream_dispatch(unsigned session,uint8_t *buffer,const IpcReq
   MMRESULT result=wave_output_append(wave,tag,(const void*)(uintptr_t)descriptor[1],(size_t)descriptor[3]);
   if(result==MMSYSERR_INVALHANDLE || result==MMSYSERR_NODRIVER) {
    /* The host device went away: reopen it with the same format and append again. */
-   unsigned rate=wave->format.nSamplesPerSec,channels=wave->format.nChannels;int running=wave->running;
+   unsigned rate=wave->format.nSamplesPerSec,channels=wave->stream_channels;int running=wave->running;
    unsigned *nd=&audio_outputs[id-1].ndropped;
    unsigned first=*nd;*nd+=wave_output_abandon(wave,audio_outputs[id-1].dropped+*nd,32-*nd);
    /* A failed append can leave its own buffer counted as queued: it is appended again below, so it is not
@@ -134,6 +134,10 @@ static void audout_dispatch(unsigned session,uint8_t *buffer,const IpcRequest *r
  if(!memchr(name,0,256)) boundary("audout-name-termination",&state,state.pc);
  if(*name && strcmp(name,"DeviceOut")) boundary("audout-device-name",&state,state.pc);
  printf("AUDOUT open name=%s rate=%u channels=%u process=0x%x\n",name,rate,channels,request->copy_handle);
+ /* AC_SURROUND=1: the answer is 6 channels, and the game's sound engine (Wwise) then mixes 5.1 itself (front left,
+  * right, centre, LFE, side left, right), as captainj-sparrow found in their port (astral-chain-pc-recomp,
+  * docs/architecture.md). wave_output_open folds it down to stereo where the device has fewer speakers. */
+ {char v[4];DWORD n=GetEnvironmentVariableA("AC_SURROUND",v,sizeof(v));if(n==1 && v[0]=='1') channels=6;}
  unsigned slot=0;while(slot<16 && audio_outputs[slot].active)slot++;
  if(slot==16) boundary("audout-stream-limit",&state,state.pc);
  MMRESULT result=wave_output_open(&audio_outputs[slot].wave,rate,channels);

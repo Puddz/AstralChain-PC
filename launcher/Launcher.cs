@@ -99,6 +99,13 @@ namespace AstralChainLauncher
             Add("cut_carry", "Sound", "Keep cutscene cuts on time at 60 fps",
                 "Off: cuts end as in the original code, each up to a frame early at 60 fps (sound drifts ahead).",
                 OptKind.Check, "1", OptTarget.Game, When("0", "AC_CUT_CARRY=0"));
+            Add("surround", "Sound", "5.1 surround sound (experimental)",
+                "The game mixes its sound for six speakers instead of two, as it can on the Switch: effects and " +
+                "voices around you come from behind too; music and cutscenes stay in front. For Windows set to 5.1 " +
+                "or 7.1 speakers (a receiver or speaker set). Headphones and stereo speakers get the mix folded back " +
+                "to stereo, which sounds like the stereo mix. From captainj-sparrow's Astral Chain port. Not yet " +
+                "tested on real 5.1 speakers. Applies the next time you press Play.",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_SURROUND=1"));
             Add("fullscreen", "Display", "Start in fullscreen",
                 "The game window covers the whole screen, without borders (the display mode is not changed). " +
                 "F11 or Alt+Enter switches between fullscreen and a window at any time.",
@@ -1445,7 +1452,7 @@ namespace AstralChainLauncher
         static readonly string[][] BoxLayout =
         {
             new[] { "Game", "uncapped", "cutscene_fps_30", "ignore_focus", "save_snapshots" },
-            new[] { "Sound", "audio_resync", "cut_carry" },
+            new[] { "Sound", "audio_resync", "cut_carry", "surround" },
             new[] { "Picture", "fullscreen", "resolution", "handheld", "upscaler", ">fsr_sharpness=FSR 1 sharpening", "aniso",
                 "ao", "shadow_res", "present" },
             new[] { "Anti-aliasing and upscaling (experimental)", "temporal=Method", ">temporal_quality=Quality",
