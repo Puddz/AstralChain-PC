@@ -167,7 +167,18 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
    * (ITU-R BS.775: the centre and each side at -3 dB; the LFE, which the game leaves silent, dropped); clipped */
   float g[6];int flat=1;
   for(int c=0;c<6;c++) {int db=ac_speaker_gain[c];flat&=!db;g[c]=db ? powf(10.f,db/20.f) : 1.f;}
-  if(output->fold || !flat) {
+  /* Bass to the subwoofer (AC_SUB_BASS=1, live; after captainj-sparrow's port): the other five speakers' sum, after
+   * their gains, through a 120 Hz low-pass (Butterworth, 12 dB per octave), into the LFE 10 dB down (a receiver plays
+   * the LFE channel 10 dB hot) at the subwoofer's gain. The other speakers keep their bass. Not when folding down. */
+  int bass=ac_sub_bass>0 && !output->fold;
+  static __thread float lp[5],lp_z[2];static __thread unsigned lp_rate;
+  if(bass && lp_rate!=output->format.nSamplesPerSec) {
+   lp_rate=output->format.nSamplesPerSec;
+   float w=2.f*3.14159265f*120.f/(float)(lp_rate ? lp_rate : 48000),cw=cosf(w),al=sinf(w)/(2.f*0.70710678f),a0=1.f+al;
+   lp[0]=(1.f-cw)/2.f/a0;lp[1]=(1.f-cw)/a0;lp[2]=lp[0];lp[3]=-2.f*cw/a0;lp[4]=(1.f-al)/a0;lp_z[0]=lp_z[1]=0;
+  }
+  if(!bass) lp_z[0]=lp_z[1]=0;
+  if(output->fold || !flat || bass) {
    static __thread int16_t *mixed;static __thread size_t mixed_cap;
    size_t frames=size/12;
    if(mixed_cap<frames) {free(mixed);mixed=malloc(frames*12);mixed_cap=mixed ? frames : 0;if(!mixed)return MMSYSERR_NOMEM;}
@@ -180,7 +191,16 @@ static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *p
     }
     size=frames*4;
    } else {
-    for(size_t i=0;i<frames*6;i++) {float x=g[i%6]*in[i];mixed[i]=WAVE_CLIP(x);}
+    for(size_t i=0;i<frames;i++,in+=6) {
+     float f[6];
+     for(int c=0;c<6;c++) f[c]=g[c]*in[c];
+     if(bass) {  /* (transposed direct form II) */
+      float x=f[0]+f[1]+f[2]+f[4]+f[5],y=lp[0]*x+lp_z[0];
+      lp_z[0]=lp[1]*x-lp[3]*y+lp_z[1];lp_z[1]=lp[2]*x-lp[4]*y;
+      f[3]+=0.31622777f*g[3]*y;
+     }
+     for(int c=0;c<6;c++) mixed[i*6+c]=WAVE_CLIP(f[c]);
+    }
    }
 #undef WAVE_CLIP
    pcm=mixed;

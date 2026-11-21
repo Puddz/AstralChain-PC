@@ -28,13 +28,15 @@ volatile float ac_temporal_sharpness=-1;  /* AC_TEMPORAL_SHARPNESS: 0 to 1, FSR 
 volatile int ac_ao=-1;            /* AC_AO=low|high: ambient occlusion (las/nvn/vulkan/ao.c; 0 off, 1 low, 2 high) */
 /* 5.1 sound (AC_SURROUND=1, wave_output.h): what goes out (0 stereo, 1 the 5.1 mix to the device, 2 the 5.1 mix
  * folded down to stereo here; -1 no sound output yet) and the device's channel count, for the menu; and a gain per
- * speaker in dB (front left, right, centre, LFE, side left, right; AC_GAIN_FL, _FR, _C, _SL, _SR; -30 to +10) */
+ * speaker in dB (front left, right, centre, LFE, side left, right; AC_GAIN_FL, _FR, _C, _LFE, _SL, _SR; -30 to +10);
+ * ac_sub_bass: AC_SUB_BASS=1, the other speakers' bass to the subwoofer (wave_output.h) */
 volatile int ac_audio_mode=-1,ac_audio_device_channels;
-volatile int ac_speaker_gain[6];
-static const char *const ac_gain_keys[6]={"gain_fl","gain_fr","gain_c",NULL,"gain_sl","gain_sr"};
+volatile int ac_speaker_gain[6],ac_sub_bass;
+static const char *const ac_gain_keys[6]={"gain_fl","gain_fr","gain_c","gain_lfe","gain_sl","gain_sr"};
 void ac_speaker_gain_init(void) {
  static int done;if(done) return;done=1;  /* (once: later changes come from the menu) */
- static const char *const names[6]={"AC_GAIN_FL","AC_GAIN_FR","AC_GAIN_C",NULL,"AC_GAIN_SL","AC_GAIN_SR"};
+ static const char *const names[6]={"AC_GAIN_FL","AC_GAIN_FR","AC_GAIN_C","AC_GAIN_LFE","AC_GAIN_SL","AC_GAIN_SR"};
+ {char v[4];DWORD n=GetEnvironmentVariableA("AC_SUB_BASS",v,sizeof(v));ac_sub_bass=n==1 && v[0]=='1';}
  for(int i=0;i<6;i++) if(names[i]) {
   char v[8];DWORD n=GetEnvironmentVariableA(names[i],v,sizeof(v));
   int g=n && n<sizeof(v) ? atoi(v) : 0;ac_speaker_gain[i]=g<-30 ? -30 : g>10 ? 10 : g;

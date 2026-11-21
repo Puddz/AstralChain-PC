@@ -156,8 +156,13 @@ std::vector<Opt> opts = {
     {"gain_fl", "Sound", "Front left", "Volume of each speaker, in dB.", NUMBER, "0", nullptr, -30, 10, true},
     {"gain_fr", "Sound", "Front right", nullptr, NUMBER, "0", nullptr, -30, 10, true},
     {"gain_c", "Sound", "Centre", "The game sends little to the centre.", NUMBER, "0", nullptr, -30, 10, true},
+    {"gain_lfe", "Sound", "Subwoofer", "The game sends it nothing of its own: turn on the bass to the subwoofer below.",
+     NUMBER, "0", nullptr, -30, 10, true},
     {"gain_sl", "Sound", "Surround left", nullptr, NUMBER, "0", nullptr, -30, 10, true},
     {"gain_sr", "Sound", "Surround right", nullptr, NUMBER, "0", nullptr, -30, 10, true},
+    {"sub_bass", "Sound", "Bass to the subwoofer",
+     "The bass (below 120 Hz) of the other five speakers also goes to the subwoofer, at its volume above. Leave it off "
+     "when your receiver already sends the bass to the subwoofer. From captainj-sparrow's port.", CHECK, "0", nullptr, 0, 0, true},
 };
 
 std::string env(const char *name) {
@@ -195,6 +200,7 @@ void read_session() {
         else if (k == "async_submit") v = env("AC_ASYNC_SUBMIT") == "1" ? "1" : "0";
         else if (k == "save_states") v = env("AC_SAVE_STATES") == "1" ? "1" : "0";
         else if (k == "surround") v = env("AC_SURROUND") == "1" ? "1" : "0";
+        else if (k == "sub_bass") v = env("AC_SUB_BASS") == "1" ? "1" : "0";
         else if (!k.compare(0, 5, "gain_")) {
             std::string up = k.substr(5);
             for (char &c : up) c = (char)toupper((unsigned char)c);
@@ -443,7 +449,7 @@ bool unused(const Opt &o) {
     if (!strcmp(o.key, "temporal_quality")) return is("temporal", "off");
     if (!strcmp(o.key, "temporal_sharpness")) return !is("temporal", "fsr");
     if (!strcmp(o.key, "fps_corner")) return is("fps_counter", "0");
-    if (!strncmp(o.key, "gain_", 5)) return is("surround", "0") && ac_audio_mode != 1 && ac_audio_mode != 2;  // (only for a 5.1 mix)
+    if (!strncmp(o.key, "gain_", 5) || !strcmp(o.key, "sub_bass")) return is("surround", "0") && ac_audio_mode != 1 && ac_audio_mode != 2;  // (only for a 5.1 mix)
     return false;
 }
 
@@ -532,7 +538,7 @@ void box_end() {
 bool is_child(const Opt &o) {
     return !strcmp(o.key, "fsr_sharpness") || !strcmp(o.key, "temporal_quality") || !strcmp(o.key, "temporal_sharpness") ||
            !strcmp(o.key, "fps_corner") || !strcmp(o.key, "mouse_sens") || !strcmp(o.key, "mouse_invert") ||
-           !strncmp(o.key, "gain_", 5);
+           !strncmp(o.key, "gain_", 5) || !strcmp(o.key, "sub_bass");
 }
 
 void draw(float scale) {
