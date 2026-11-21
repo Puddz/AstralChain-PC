@@ -51,6 +51,7 @@ extern volatile int ac_fps_counter;                      // (live_settings.h) 0 
 extern volatile int ac_fps_corner;                       // (live_settings.h) 0 top left, 1 top right, 2 bottom left, 3 bottom right, 4 middle left, 5 middle right
 extern volatile int ac_uncapped;                         // (live_settings.h)
 extern volatile int ac_audio_mode, ac_audio_device_channels;  // (live_settings.h: what the sound output sends)
+extern volatile int ac_hdr_state;  // (live_settings.h: 0 off, 1 HDR10, 2 no HDR10 format offered, 3 AC_HDR_FORCE)
 // The renderer's numbers for the detailed frame rate panel (nvn/vulkan/exec.c, device.c)
 extern volatile int vk_perf_detail;
 void vk_perf_totals(uint64_t *gpu_ns, uint64_t *wait_gpu_ns, uint64_t *wait_shader_ns);
@@ -113,6 +114,15 @@ std::vector<Opt> opts = {
      CHOICE, "1", "1|The game's own (default);2|2x;4|4x;8|8x (1 GB of video memory)", 0, 0, false},
     {"present", "Picture", "Presentation mode", "Mailbox: no tearing. Vsync: waits for the display. Immediate: tearing, lowest latency.",
      CHOICE, "mailbox", "mailbox|Mailbox (default);fifo|Vsync (FIFO);immediate|Immediate", 0, 0, false},
+    {"hdr", "HDR", "HDR output (experimental)",
+     "Highlights brighter than the game's white: lights, neon signs, fire, the sky. Needs an HDR display with \"Use HDR\" on "
+     "in Windows' display settings. From captainj-sparrow's port.", CHECK, "0", nullptr, 0, 0, false},
+    {"hdr_peak", "HDR", "Peak brightness (nits)", "Your display's brightest; the highlights go up to it.", NUMBER, "1000", nullptr, 400, 10000, true},
+    {"hdr_game", "HDR", "Game brightness (nits)", "The picture's white (\"paper white\"). 203 is the HDR standard's.", NUMBER, "203", nullptr, 80, 500, true},
+    {"hdr_ui", "HDR", "HUD and menu brightness (nits)", nullptr, NUMBER, "203", nullptr, 80, 500, true},
+    {"hdr_hue", "HDR", "Highlight hue correction (%)",
+     "100: bright colours (fire, sparks) turn towards white as in the game's own picture. 0: they stay saturated.",
+     NUMBER, "80", nullptr, 0, 100, true},
     {"fps_counter", "Frame rate display", "Show",
      "Frame rate: frames per second and the average frame time. Detailed: also a frame time graph, "
      "the slowest frames, GPU and CPU load, memory, the GPU's temperature and power where its driver gives them, and the "
@@ -187,6 +197,11 @@ void read_session() {
         else if (k == "save_states") v = env("AC_SAVE_STATES") == "1" ? "1" : "0";
         else if (k == "surround") v = env("AC_SURROUND") == "1" ? "1" : "0";
         else if (k == "sub_bass") v = env("AC_SUB_BASS") == "1" ? "1" : "0";
+        else if (k == "hdr") v = env("AC_HDR") == "1" ? "1" : "0";
+        else if (k == "hdr_peak" || k == "hdr_game" || k == "hdr_ui" || k == "hdr_hue") {
+            std::string e = env(k == "hdr_peak" ? "AC_HDR_PEAK_NITS" : k == "hdr_game" ? "AC_HDR_GAME_NITS" : k == "hdr_ui" ? "AC_HDR_UI_NITS" : "AC_HDR_HUE");
+            if (!e.empty()) v = std::to_string(atoi(e.c_str()));
+        }
         else if (!k.compare(0, 5, "gain_")) {
             std::string up = k.substr(5);
             for (char &c : up) c = (char)toupper((unsigned char)c);
@@ -350,7 +365,8 @@ bool init() {
     ii.UseDynamicRendering = true;
     ii.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
     ii.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
-    ii.PipelineRenderingCreateInfo.pColorAttachmentFormats = &g_vk.sc_format;
+    static VkFormat ui_format = vk_hdr_ui_format();  // (with AC_HDR=1 the menu draws into an image of its own: hdr.c)
+    ii.PipelineRenderingCreateInfo.pColorAttachmentFormats = &ui_format;
     if (!ImGui_ImplVulkan_Init(&ii)) { printf("[menu] Vulkan backend init failed: no in-game menu\n"); return false; }
     read_session();
     printf("[menu] ready (settings file: %ls)\n", settings_path().empty() ? L"none" : settings_path().c_str());
@@ -436,6 +452,7 @@ bool unused(const Opt &o) {
     if (!strcmp(o.key, "temporal_sharpness")) return !is("temporal", "fsr");
     if (!strcmp(o.key, "fps_corner")) return is("fps_counter", "0");
     if (!strncmp(o.key, "gain_", 5) || !strcmp(o.key, "sub_bass")) return is("surround", "0") && ac_audio_mode != 1 && ac_audio_mode != 2;  // (only for a 5.1 mix)
+    if (!strncmp(o.key, "hdr_", 4)) return is("hdr", "0") && ac_hdr_state != 1 && ac_hdr_state != 3;  // (only with HDR output)
     return false;
 }
 
@@ -524,7 +541,7 @@ void box_end() {
 bool is_child(const Opt &o) {
     return !strcmp(o.key, "fsr_sharpness") || !strcmp(o.key, "temporal_quality") || !strcmp(o.key, "temporal_sharpness") ||
            !strcmp(o.key, "fps_corner") || !strcmp(o.key, "mouse_sens") || !strcmp(o.key, "mouse_invert") ||
-           !strncmp(o.key, "gain_", 5) || !strcmp(o.key, "sub_bass");
+           !strncmp(o.key, "gain_", 5) || !strcmp(o.key, "sub_bass") || !strncmp(o.key, "hdr_", 4);
 }
 
 void draw(float scale) {
@@ -625,6 +642,16 @@ void draw(float scale) {
             if (!o.live) ImGui::TextColored(ImVec4(1, 0.8f, 0.4f, 1), "Next start.");
             if (!o.live && !first.empty()) ImGui::SameLine();
             if (!first.empty()) ImGui::TextDisabled("%s", first.c_str());
+            ImGui::PopTextWrapPos();
+            if (child) ImGui::Unindent(fs * 1.2f);
+        }
+        if (!strcmp(o.key, "hdr")) {  // (what the window shows now)
+            int m = ac_hdr_state;
+            const char *line = m == 1 ? "Now: HDR10." : m == 2 ? "Now: SDR: the display offers no HDR. Turn on \"Use HDR\" in Windows' display settings for this screen, then restart the game."
+                             : m == 3 ? "Now: HDR test on an SDR display (AC_HDR_FORCE)." : "Now: SDR.";
+            if (child) ImGui::Indent(fs * 1.2f);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - box_pad);
+            ImGui::TextColored(m == 1 ? ImVec4(0.5f, 0.9f, 0.6f, 1) : ImVec4(0.75f, 0.8f, 0.9f, 1), "%s", line);
             ImGui::PopTextWrapPos();
             if (child) ImGui::Unindent(fs * 1.2f);
         }
@@ -1514,7 +1541,7 @@ void draw_fps(float w, float h) {
 
 }  // namespace
 
-extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
+extern "C" int menu_render(void *cmd, uint32_t w, uint32_t h) {
     if (!layout_loaded) load_layout();
     bool open = ac_menu_open != 0;
     ULONGLONG tick = GetTickCount64();
@@ -1530,9 +1557,9 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
             quit_asked = false;
             InterlockedExchange(&ac_menu_modal, 0);
         }
-        if ((!credit && !fps && !hint && !note) || failed) return;
+        if ((!credit && !fps && !hint && !note) || failed) return 0;
         if (!inited) {
-            if (!init()) { failed = true; return; }
+            if (!init()) { failed = true; return 0; }
             inited = true;
         }
         ImGui::SetCurrentContext(ctx);
@@ -1547,11 +1574,11 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
         if (note) draw_hud_note((float)w, (float)h, tick);
         ImGui::Render();
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);
-        return;
+        return 1;
     }
-    if (failed) return;
+    if (failed) return 0;
     if (!inited) {
-        if (!init()) { failed = true; return; }
+        if (!init()) { failed = true; return 0; }
         inited = true;
     }
     if (!was_open)  // (fullscreen may have changed with F11)
@@ -1584,4 +1611,5 @@ extern "C" void menu_render(void *cmd, uint32_t w, uint32_t h) {
     was_open = true;
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);
+    return 1;
 }

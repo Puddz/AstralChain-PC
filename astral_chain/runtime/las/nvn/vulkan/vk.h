@@ -38,6 +38,7 @@ typedef struct {
     bool occ_precise;  // occlusionQueryPrecise: samples-passed counters count samples, not just visible / not (exec.c oq_*)
     bool depth_clamp;  // depthClamp feature: game pipelines clamp depth instead of clipping it (exec.c game_depth_clamp)
     bool gpl;  // VK_EXT_graphics_pipeline_library with fast linking (exec.c: shader libraries)
+    bool hdr_metadata;  // VK_EXT_hdr_metadata (hdr.c vk_hdr_metadata)
     // window
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;
@@ -129,6 +130,25 @@ void vk_ao_run(void);
 void vk_ao_pass(int ncolor, NvnTexture *c0, uint32_t lv0, NvnTexture *depth);
 void vk_ao_draw(bool writes, NvnTexture *c0, NvnTexture *depth, const float *cam, uint64_t cam_size, const float *c5,
                 uint64_t c5_size, NvnTexture *amb, NvnTexture *fogcube);
+
+// ---- HDR output (hdr.c; AC_HDR, issue #49)
+int vk_hdr_wanted(void);   // AC_HDR=1
+int vk_hdr_active(void);   // the swapchain is HDR10 (or AC_HDR_FORCE)
+int vk_hdr_surface_format(const VkSurfaceFormatKHR *f, uint32_t n, VkSurfaceFormatKHR *out);
+void vk_hdr_swapchain(int hdr10);  // (device.c create_swapchain)
+void vk_hdr_metadata(int new_swapchain);
+void vk_hdr_after_present(void);
+char *vk_hdr_tonemap_glsl(const char *src);  // the game's tonemap with our main, or NULL (exec.c translate_program)
+void vk_hdr_tint(float tint[8]);             // the tonemap's parameters (binding 19)
+int vk_hdr_tracking(void);
+void vk_hdr_reads(TexBackend *win, TexBackend *src);  // a draw into the presented window texture win sampled src
+void vk_hdr_texture_gone(TexBackend *b);
+TexBackend *vk_hdr_encode(VkCommandBuffer cb, TexBackend *win, VkImageView raw);  // outside rendering (exec.c post_process)
+int vk_hdr_ui_needed(void);
+VkFormat vk_hdr_ui_format(void);  // the in-game menu's pipelines (las/menu.cpp)
+int vk_hdr_ui_begin(VkCommandBuffer cb, uint32_t w, uint32_t h);
+void vk_hdr_ui_compose(VkCommandBuffer cb, uint32_t w, uint32_t h);
+void vk_hdr_to_srgb8(uint8_t *px, size_t n, int a2r);
 
 // ---- shaders / pipelines (shaders.c)
 VkShaderModule vk_compile_glsl(const char *src, int stage, const char *name);  // NULL on failure (logged)

@@ -59,7 +59,7 @@ namespace AstralChainLauncher
         public OptTarget Target;
         public string[] Choices;      // Choice: "value|label"
         public Func<string, string> Env; // value -> "NAME=value;..." ("" for none)
-        public int Min, Max;
+        public int Min, Max, Step;  // (Step: the arrows' step; 0: 1 for a range of 100 or less, else 100)
     }
 
     static class Options
@@ -192,6 +192,29 @@ namespace AstralChainLauncher
                 "for a little more GPU time. From captainj-sparrow's Astral Chain port. Also in the in-game menu (F1).",
                 OptKind.Choice, "off", OptTarget.Game, v => v == "low" || v == "high" ? "AC_AO=" + v : "");
             ao.Choices = new[] { "off|Off (default)", "low|Low", "high|High" };
+            Add("hdr", "Display", "HDR output (experimental)",
+                "On an HDR display: highlights brighter than the game's white, such as lights, neon signs, fire and " +
+                "the sky; the rest of the picture looks as in SDR. Needs \"Use HDR\" on in Windows' display " +
+                "settings for that screen (without it the picture stays SDR). The HUD and menus keep their own " +
+                "brightness. From captainj-sparrow's Astral Chain port. The in-game menu (F1) says whether it is on. " +
+                "Applies the next time you press Play.",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_HDR=1"));
+            foreach (var hn in new[] {
+                new[] { "hdr_peak", "Peak brightness (nits)", "AC_HDR_PEAK_NITS", "1000", "400", "10000",
+                    "With HDR output: your display's brightest, in nits (its HDR peak; 1000 by default). The highlights go up to it." },
+                new[] { "hdr_game", "Game brightness (nits)", "AC_HDR_GAME_NITS", "203", "80", "500",
+                    "With HDR output: the picture's white (\"paper white\"), in nits. 203 by default, the HDR standard's; higher is brighter." },
+                new[] { "hdr_ui", "HUD and menu brightness (nits)", "AC_HDR_UI_NITS", "203", "80", "500",
+                    "With HDR output: the white of the HUD, the game's menus and this port's menu, in nits (203 by default)." },
+                new[] { "hdr_hue", "Highlight hue correction (%)", "AC_HDR_HUE", "80", "0", "100",
+                    "With HDR output: 100 keeps bright colours (fire, sparks) turning towards white as in the game's own " +
+                    "picture; 0 keeps them saturated. 80 by default." } })
+            {
+                string name = hn[2], def = hn[3];
+                var o = Add(hn[0], "Display", hn[1], hn[6] + " Also in the in-game menu (F1), where it applies at once.",
+                    OptKind.Number, def, OptTarget.Game, v => v == def ? "" : name + "=" + v);
+                o.Min = int.Parse(hn[4]); o.Max = int.Parse(hn[5]); o.Step = hn[0] == "hdr_peak" ? 50 : hn[0] == "hdr_hue" ? 5 : 1;
+            }
             var shadows = Add("shadow_res", "Display", "Shadow resolution",
                 "How finely the shadows of characters and objects are drawn. The game's own: as on the Switch, where " +
                 "their edges show as blocks from close up or at a high resolution (default). 2x, 4x, 8x: the shadow " +
@@ -1457,6 +1480,7 @@ namespace AstralChainLauncher
             new[] { "Sound", "audio_resync", "cut_carry", "surround", ">gain_fl", ">gain_fr", ">gain_c", ">gain_lfe", ">gain_sl", ">gain_sr", ">sub_bass" },
             new[] { "Picture", "fullscreen", "resolution", "handheld", "upscaler", ">fsr_sharpness=FSR 1 sharpening", "aniso",
                 "ao", "shadow_res", "present" },
+            new[] { "HDR (experimental)", "hdr=HDR output", ">hdr_peak", ">hdr_game", ">hdr_ui", ">hdr_hue" },
             new[] { "Anti-aliasing and upscaling (experimental)", "temporal=Method", ">temporal_quality=Quality",
                 ">temporal_sharpness" },
             new[] { "Frame rate display", "fps_counter=Show", ">fps_corner=Position" },
@@ -1676,7 +1700,7 @@ namespace AstralChainLauncher
                         {
                             int n;
                             if (!int.TryParse(value, out n)) n = int.Parse(o.Default);
-                            input = new NumericUpDown { Minimum = o.Min, Maximum = o.Max, Increment = o.Max - o.Min <= 100 ? 1 : 100,
+                            input = new NumericUpDown { Minimum = o.Min, Maximum = o.Max, Increment = o.Step > 0 ? o.Step : o.Max - o.Min <= 100 ? 1 : 100,
                                 Value = Math.Max(o.Min, Math.Min(o.Max, n)), Location = new Point(250, y),
                                 Size = new Size(100, 24), BackColor = Field, ForeColor = Theme.Text, BorderStyle = BorderStyle.FixedSingle };
                         }
