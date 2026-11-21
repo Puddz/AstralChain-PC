@@ -107,16 +107,24 @@ namespace AstralChainLauncher
                 "menu (F1) says what goes out. Applies the next time you press Play.",
                 OptKind.Check, "0", OptTarget.Game, When("1", "AC_SURROUND=1"));
             foreach (var sp in new[] { new[] { "fl", "Front left (dB)", "FL" }, new[] { "fr", "Front right (dB)", "FR" },
-                new[] { "c", "Centre (dB)", "C" }, new[] { "sl", "Surround left (dB)", "SL" }, new[] { "sr", "Surround right (dB)", "SR" } })
+                new[] { "c", "Centre (dB)", "C" }, new[] { "lfe", "Subwoofer (dB)", "LFE" }, new[] { "sl", "Surround left (dB)", "SL" },
+                new[] { "sr", "Surround right (dB)", "SR" } })
             {
                 string name = "AC_GAIN_" + sp[2];
                 var gain = Add("gain_" + sp[0], "Sound", sp[1],
                     "With 5.1 surround sound: the volume of this speaker, in dB, from -30 to +10 (0: as the game mixes " +
-                    "it). The game sends little to the centre, and nothing to the subwoofer (LFE). Also in the in-game " +
+                    "it). The game sends little to the centre, and nothing of its own to the subwoofer (LFE): turn on " +
+                    "the bass to the subwoofer for it. Also in the in-game " +
                     "menu (F1), where it applies at once.",
                     OptKind.Number, "0", OptTarget.Game, v => v == "0" ? "" : name + "=" + v);
                 gain.Min = -30; gain.Max = 10;
             }
+            Add("sub_bass", "Sound", "Bass to the subwoofer",
+                "With 5.1 surround sound: the bass (below 120 Hz) of the other five speakers also goes to the " +
+                "subwoofer, at its volume above (10 dB down, as receivers expect). The other speakers keep their bass. " +
+                "Leave it off when your receiver already sends the bass to the subwoofer. From captainj-sparrow's " +
+                "Astral Chain port. Also in the in-game menu (F1), where it applies at once.",
+                OptKind.Check, "0", OptTarget.Game, When("1", "AC_SUB_BASS=1"));
             Add("fullscreen", "Display", "Start in fullscreen",
                 "The game window covers the whole screen, without borders (the display mode is not changed). " +
                 "F11 or Alt+Enter switches between fullscreen and a window at any time.",
@@ -1446,7 +1454,7 @@ namespace AstralChainLauncher
         static readonly string[][] BoxLayout =
         {
             new[] { "Game", "uncapped", "cutscene_fps_30", "ignore_focus", "save_snapshots" },
-            new[] { "Sound", "audio_resync", "cut_carry", "surround", ">gain_fl", ">gain_fr", ">gain_c", ">gain_sl", ">gain_sr" },
+            new[] { "Sound", "audio_resync", "cut_carry", "surround", ">gain_fl", ">gain_fr", ">gain_c", ">gain_lfe", ">gain_sl", ">gain_sr", ">sub_bass" },
             new[] { "Picture", "fullscreen", "resolution", "handheld", "upscaler", ">fsr_sharpness=FSR 1 sharpening", "aniso",
                 "ao", "shadow_res", "present" },
             new[] { "Anti-aliasing and upscaling (experimental)", "temporal=Method", ">temporal_quality=Quality",

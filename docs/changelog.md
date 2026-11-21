@@ -4,7 +4,14 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-21**
 
-- **5.1 surround: a volume per speaker, and what goes out** (issue #48; *not yet confirmed in play*): under
+- **5.1 surround: bass to the subwoofer, and its volume** (issue #48; *not yet confirmed in play*): **Bass to the
+  subwoofer** (off by default) also sends the bass of the other five speakers to the subwoofer (LFE), which the game
+  leaves silent: their sum through a 120 Hz low-pass, 10 dB down (receivers play the LFE 10 dB hot), as
+  captainj-sparrow's port does. A **Subwoofer** volume slider joins the others. The other speakers keep their bass.
+  Launcher and in-game menu (at once). Checked from the sound the port sends out, with the subwoofer at -6 dB: below
+  60 Hz the subwoofer carries the other speakers' sum at -16.1 dB (-10 and -6), falling off above 120 Hz (-22 dB at
+  120-240 Hz, -59 dB at 1-4 kHz).
+- **5.1 surround: a volume per speaker, and what goes out** (issue #48; reported working by the issue's author): under
   **5.1 surround sound**, sliders for front left, front right, centre, surround left and surround right, -30 to
   +10 dB (launcher, and the in-game menu, where they apply at once). The menu also says what the sound output sends
   now: stereo, 5.1 with six channels, or the 5.1 mix folded down to stereo, with the sound device's channel count.

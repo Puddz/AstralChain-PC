@@ -135,6 +135,7 @@ void ac_setting_apply(const char *key,const char *value) {
   int g=value ? atoi(value) : 0;g=g<-30 ? -30 : g>10 ? 10 : g;
   for(int i=0;i<6;i++) if(ac_gain_keys[i] && !strcmp(key,ac_gain_keys[i])) ac_speaker_gain[i]=g;
  }
+ else if(!strcmp(key,"sub_bass")) ac_sub_bass=on;
  else if(!strcmp(key,"port_credit")) ac_title_credit=on;
  else if(!strcmp(key,"fps_counter")) {int m=value ? atoi(value) : 0;ac_fps_counter=m>=0 && m<=2 ? m : 0;}
  else if(!strcmp(key,"fps_corner")) ac_fps_corner=value && !strcmp(value,"tr") ? 1 : value && !strcmp(value,"bl") ? 2 : value && !strcmp(value,"br") ? 3 : value && !strcmp(value,"ml") ? 4 : value && !strcmp(value,"mr") ? 5 : 0;
