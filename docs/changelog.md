@@ -4,6 +4,16 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-21**
 
+- **New: HDR output** (issue #49; experimental; *not yet confirmed in play*: tested here without an HDR display; off
+  by default): **Settings > Display > HDR output** in the launcher, or **HDR** in the in-game menu (from the next
+  start). On a display with Windows' **Use HDR** on, the window becomes HDR10 and the picture keeps the highlights
+  the game's tonemap clips (lights, fire, neon), up to the display's peak, with the game's colour grade; the HUD,
+  the game's menus and this port's menu are shown at their own brightness. Settings for the peak, the game's white,
+  the HUD's white and the highlights' hue, applied at once. Ported from captainj-sparrow's port (which follows
+  RenoDX's approach). Measured from the encoded picture of a gameplay frame (fire, street lights): below the game's
+  white it matches the SDR picture (mean difference 0.004 of white), 1.4% of the pixels went above white, up to 983
+  of the 1000 nits set; same frame rate (60 fps) as without it. With FSR 1 the upscaled HDR picture matched the SDR
+  one below white.
 - **5.1 surround: bass to the subwoofer, and its volume** (issue #48; *not yet confirmed in play*): **Bass to the
   subwoofer** (off by default) also sends the bass of the other five speakers to the subwoofer (LFE), which the game
   leaves silent: their sum through a 120 Hz low-pass, 10 dB down (receivers play the LFE 10 dB hot), as
