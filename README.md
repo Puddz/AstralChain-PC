@@ -125,7 +125,8 @@ The `upscaling` branch was merged into `main` on 2026-11-12 (render resolutions,
 - [astral-extractor](https://github.com/cabalex/astral-extractor) by cabalex: format research.
 - [astral-chain-pc-recomp](https://github.com/captainj-sparrow/astral-chain-pc-recomp) by captainj-sparrow (MIT): the
   ambient occlusion (its shaders, as they are, and the design and values of its `vk_ao.c`, rewritten for this
-  renderer; `astral_chain/runtime/las/nvn/vulkan/ao.c`, `ao_shaders.h`, licence in `LICENSE-astral-chain-pc-recomp`).
+  renderer; `astral_chain/runtime/las/nvn/vulkan/ao.c`, `ao_shaders.h`, licence in `LICENSE-astral-chain-pc-recomp`),
+  and the finding that the game mixes 5.1 sound when its sound output reports six channels (the 5.1 option).
 - The launcher's backgrounds and icon (`launcher/art/`, `launcher/icon.ico`) are original AI-generated images in the
   style of the game, without official artwork. The default (`1-visor.jpg`) was chosen by the project's owner; the
   other five and the icon were made with OpenAI Codex's image generation for this project.

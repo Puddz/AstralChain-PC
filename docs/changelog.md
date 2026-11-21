@@ -2,6 +2,17 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-21**
+
+- **New: 5.1 surround sound** (issue #48; *experimental, not yet tested on 5.1 speakers*; off by default):
+  **Settings > Sound > 5.1 surround sound** in the launcher, or **Sound** in the in-game menu (**F1**, from the next
+  start). The port now tells the game the sound output has six channels, and the game's sound engine then mixes
+  5.1 itself, as captainj-sparrow found in [their port](https://github.com/captainj-sparrow/astral-chain-pc-recomp).
+  Where the sound device has fewer than six channels, the mix is folded back to stereo. Measured without speakers,
+  from the sound the port sends out, on the save after the highway chase: in gameplay the side speakers carry their
+  own sound (correlation with the fronts 0.1); the cutscene stays in the front pair, the centre and LFE get almost
+  nothing. Folded back to stereo, the level is within 3% of the stereo mix.
+
 **2026-11-20**
 
 - **New: ambient occlusion** (issue #46; *not yet confirmed in play*; off by default): **Settings > Display >

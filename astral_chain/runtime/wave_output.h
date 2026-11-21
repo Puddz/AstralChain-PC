@@ -4,6 +4,7 @@
 #pragma once
 #include <windows.h>
 #include <mmsystem.h>
+#include <mmreg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,7 +41,9 @@ typedef struct { WAVEHDR header; uint64_t tag; } WaveBuffer;
 typedef struct {
  HWAVEOUT handle;
  HANDLE completion,closed;
- WAVEFORMATEX format;
+ union { WAVEFORMATEX format; WAVEFORMATEXTENSIBLE format_ext; };  /* what the device is given */
+ unsigned stream_channels,stream_block;  /* what the game sends (6: a 5.1 mix) */
+ int fold;  /* the 5.1 mix is folded down to stereo here (the device has fewer speakers) */
  WaveBuffer buffers[32];
  unsigned head,count,running,ready;
  uint64_t queued_bytes,position_epoch;
@@ -59,14 +62,71 @@ static void CALLBACK wave_output_callback(HWAVEOUT wave,UINT message,DWORD_PTR c
  if(message==WOM_CLOSE)SetEvent(output->closed);
 }
 
+/* The default sound device's channel count (its mix format), asked on a thread of its own so the caller's COM state is
+ * not touched; 0 when unknown. Windows "5.1" or "7.1" speakers give 6 or 8; headphones and stereo speakers 2 (also
+ * with Windows Sonic or Dolby Atmos for Headphones on, which keep a stereo mix format). */
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+static volatile LONG wave_speakers;
+static DWORD WINAPI wave_device_channels_thread(void *unused) {
+ (void)unused;
+ HMODULE ole=LoadLibraryExW(L"ole32.dll",NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);if(!ole) return 0;
+ HRESULT (WINAPI *init)(void*,DWORD)=(HRESULT (WINAPI*)(void*,DWORD))GetProcAddress(ole,"CoInitializeEx");
+ void (WINAPI *uninit)(void)=(void (WINAPI*)(void))GetProcAddress(ole,"CoUninitialize");
+ HRESULT (WINAPI *create)(REFCLSID,void*,DWORD,REFIID,void**)=(HRESULT (WINAPI*)(REFCLSID,void*,DWORD,REFIID,void**))GetProcAddress(ole,"CoCreateInstance");
+ void (WINAPI *taskfree)(void*)=(void (WINAPI*)(void*))GetProcAddress(ole,"CoTaskMemFree");
+ if(init && uninit && create && taskfree && SUCCEEDED(init(NULL,COINIT_MULTITHREADED))) {
+  static const GUID clsid_enum={0xbcde0395,0xe52f,0x467c,{0x8e,0x3d,0xc4,0x57,0x92,0x91,0x69,0x2e}};
+  static const GUID iid_enum={0xa95664d2,0x9614,0x4f35,{0xa7,0x46,0xde,0x8d,0xb6,0x36,0x17,0xe6}};
+  static const GUID iid_client={0x1cb9ad4c,0xdbfa,0x4c32,{0xb1,0x78,0xc2,0xf5,0x68,0xa7,0x03,0xb2}};
+  IMMDeviceEnumerator *e=NULL;IMMDevice *d=NULL;IAudioClient *c=NULL;WAVEFORMATEX *mix=NULL;
+  if(SUCCEEDED(create(&clsid_enum,NULL,CLSCTX_ALL,&iid_enum,(void**)&e)) &&
+     SUCCEEDED(e->lpVtbl->GetDefaultAudioEndpoint(e,eRender,eConsole,&d)) &&
+     SUCCEEDED(d->lpVtbl->Activate(d,&iid_client,CLSCTX_ALL,NULL,(void**)&c)) &&
+     SUCCEEDED(c->lpVtbl->GetMixFormat(c,&mix)) && mix)
+   InterlockedExchange(&wave_speakers,mix->nChannels);
+  if(mix) taskfree(mix);
+  if(c) c->lpVtbl->Release(c);
+  if(d) d->lpVtbl->Release(d);
+  if(e) e->lpVtbl->Release(e);
+  uninit();
+ }
+ FreeLibrary(ole);return 0;
+}
+static int wave_device_channels(void) {
+ InterlockedExchange(&wave_speakers,0);
+ HANDLE t=CreateThread(NULL,0,wave_device_channels_thread,NULL,0,NULL);
+ if(!t) return 0;
+ int n=WaitForSingleObject(t,3000)==WAIT_OBJECT_0 ? (int)wave_speakers : 0;
+ CloseHandle(t);return n;
+}
+
 static MMRESULT wave_output_open(WaveOutput *output,unsigned rate,unsigned channels) {
  if(output->handle || output->closed)return MMSYSERR_ALLOCATED;
  HANDLE completion=output->completion;  /* kept across a reopen: the guest holds copies of it */
  if(rate<8000 || rate>192000 || !channels || channels>8)return WAVERR_BADFORMAT;
  MMRESULT result=wave_api_load();if(result)return result;
  memset(output,0,sizeof(*output));output->completion=completion;
- output->format=(WAVEFORMATEX){.wFormatTag=WAVE_FORMAT_PCM,.nChannels=(WORD)channels,
-  .nSamplesPerSec=rate,.nAvgBytesPerSec=rate*channels*2,.nBlockAlign=(WORD)(channels*2),.wBitsPerSample=16};
+ output->stream_channels=channels;output->stream_block=channels*2;
+ unsigned device=channels;
+ if(channels==6) {  /* a 5.1 mix: as it is where the device has the speakers, else folded down to stereo here */
+  int speakers=wave_device_channels();
+  char v[4];DWORD n=GetEnvironmentVariableA("AC_AUDIO_FOLD",v,sizeof(v));  /* (tests: 1 always fold, 0 never) */
+  output->fold=n==1 ? v[0]=='1' : speakers<6;
+  if(output->fold) device=2;
+  printf("AUDIO 5.1 mix: the default device has %d channels: %s\n",speakers,
+   output->fold ? "folded down to stereo here" : "sent as 5.1");
+ }
+ output->format_ext=(WAVEFORMATEXTENSIBLE){0};
+ output->format=(WAVEFORMATEX){.wFormatTag=WAVE_FORMAT_PCM,.nChannels=(WORD)device,
+  .nSamplesPerSec=rate,.nAvgBytesPerSec=rate*device*2,.nBlockAlign=(WORD)(device*2),.wBitsPerSample=16};
+ if(device>2) {  /* the game's order: front left, right, centre, LFE, side left, right */
+  static const GUID pcm={0x00000001,0x0000,0x0010,{0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71}};
+  output->format.wFormatTag=WAVE_FORMAT_EXTENSIBLE;output->format.cbSize=22;
+  output->format_ext.Samples.wValidBitsPerSample=16;
+  output->format_ext.dwChannelMask=device==6 ? 0x60fu : 0;
+  output->format_ext.SubFormat=pcm;
+ }
  if(!output->completion)output->completion=CreateEventW(NULL,TRUE,FALSE,NULL);
  output->closed=CreateEventW(NULL,TRUE,FALSE,NULL);
  if(!output->completion || !output->closed)result=MMSYSERR_NOMEM;
@@ -96,8 +156,21 @@ static MMRESULT wave_output_pause(WaveOutput *output) {
 static MMRESULT wave_output_position(WaveOutput *output,uint64_t *frames);
 static MMRESULT wave_output_append(WaveOutput *output,uint64_t tag,const void *pcm,size_t size) {
  if(!output->handle || !output->ready)return MMSYSERR_INVALHANDLE;
- if(!pcm || !size || size>16u*1024*1024 || size%output->format.nBlockAlign)return MMSYSERR_INVALPARAM;
+ if(!pcm || !size || size>16u*1024*1024 || size%output->stream_block)return MMSYSERR_INVALPARAM;
  if(output->count==32 || output->queued_bytes+size>64u*1024*1024)return MMSYSERR_NOMEM;
+ if(output->fold) {  /* 5.1 to stereo (ITU-R BS.775: the centre and each side at -3 dB; the LFE, which the game leaves
+                      * silent, dropped), clipped */
+  static __thread int16_t *folded;static __thread size_t folded_cap;
+  size_t frames=size/12;
+  if(folded_cap<frames) {free(folded);folded=malloc(frames*4);folded_cap=folded ? frames : 0;if(!folded)return MMSYSERR_NOMEM;}
+  const int16_t *in=(const int16_t*)pcm;
+  for(size_t i=0;i<frames;i++,in+=6) {
+   float c=0.70710678f*in[2],l=in[0]+c+0.70710678f*in[4],r=in[1]+c+0.70710678f*in[5];
+   folded[i*2]=(int16_t)(l>32767.f ? 32767.f : l<-32768.f ? -32768.f : l);
+   folded[i*2+1]=(int16_t)(r>32767.f ? 32767.f : r<-32768.f ? -32768.f : r);
+  }
+  pcm=folded;size=frames*4;
+ }
  /* Timing: when the queued sound runs out (play_end, QPC seconds) and whether it ran dry before this buffer. A dry
   * queue pauses the sound, which then stays behind the picture by the gap: the cutscene drift reported on a second PC
   * (the game keeps only 15-47 ms queued; its sound thread was 55-128 ms late in 140 ms frames). Gaps under 0.5 s are

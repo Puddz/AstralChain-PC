@@ -142,6 +142,7 @@ powershell -File astral_chain\run_guarded.ps1 -Run build\<new folder> -Seconds 3
 | `LARECOMP_STALLS=<frame>:<ms>,...` | Stall the render thread at those frames; `LARECOMP_SLOW_FRAME_MS` / `_FROM` / `_UNTIL` / `_EVERY` for ranges |
 | `AC_CUTSCENE_STALL_LOCKED=1` | Test stalls hold the kernel lock: every guest thread waits, the sound thread too |
 | `AC_CUT_CARRY=0` | Cutscene cuts end as in the original code (each cut up to a frame early at 60 fps; svc #0xB2) |
+| `AC_AUDIO_FOLD=0` / `1` | With `AC_SURROUND=1`: send the 5.1 mix to the device as it is (Windows converts it) / always fold it to stereo here, whatever the device has |
 | `AC_AUDIO_RESYNC=0` | Do not skip sound after an underrun (by default the gap, up to 0.3 s, is skipped to stay in sync) |
 | `AC_SAVE_SNAPSHOTS=0` | Do not copy each game save to `<save folder>-snapshots\<date-time>\` (on by default, newest 30 kept) |
 | `AC_CRASH_DUMP=1` | On a host fault, also write `crash.dmp` (a minidump: thread stacks and registers) to the run folder. Read it with `round-00\trace.pdb`. The launcher's diagnostics mode sets it |
