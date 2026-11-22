@@ -26,7 +26,7 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-21**
 
-- **New: HDR output** (issue #49; experimental; *not yet confirmed in play*: tested here without an HDR display; off
+- **New: HDR output** (issue #49; experimental; reported working by the issue's author on their HDR display; off
   by default): **Settings > Display > HDR output** in the launcher, or **HDR** in the in-game menu (from the next
   start). On a display with Windows' **Use HDR** on, the window becomes HDR10 and the picture keeps the highlights
   the game's tonemap clips (lights, fire, neon), up to the display's peak, with the game's colour grade; the HUD,
@@ -38,7 +38,7 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
   one below white. On this branch DLSS and FSR 3.1 / 4 then take the picture with its highlights (as HDR colour, into
   a float image, as captainj-sparrow's port does): on the fire save state the highlights went up to 848 nits with
   DLSS and 770 with FSR 3.1 (915 without), and below white each matched its SDR picture (mean difference 0.0003).
-- **5.1 surround: bass to the subwoofer, and its volume** (issue #48; *not yet confirmed in play*): **Bass to the
+- **5.1 surround: bass to the subwoofer, and its volume** (issue #48; reported working by the issue's author): **Bass to the
   subwoofer** (off by default) also sends the bass of the other five speakers to the subwoofer (LFE), which the game
   leaves silent: their sum through a 120 Hz low-pass, 10 dB down (receivers play the LFE 10 dB hot), as
   captainj-sparrow's port does. A **Subwoofer** volume slider joins the others. The other speakers keep their bass.
