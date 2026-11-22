@@ -9,7 +9,16 @@ static void stack_map(uint64_t destination,uint64_t source,uint64_t size) {
  if(nvmap_overlaps(source,size)) boundary("stack-nvmap-backing",&state,state.pc);
  if(uncached_overlap(source,size)) boundary("stack-uncached-memory",&state,state.pc);
  if(src.kind!=5 || src.permission!=3 || size>src.size-(source-src.base)) boundary("stack-map-source",&state,state.pc);
- if(dst.kind || size>dst.size-(destination-dst.base)) boundary("stack-map-destination",&state,state.pc);
+ if(dst.kind || size>dst.size-(destination-dst.base)) {
+  /* (what is in the way: the guest's kind of region, and what Windows has there) */
+  MEMORY_BASIC_INFORMATION info={0};VirtualQuery((void*)(uintptr_t)destination,&info,sizeof(info));
+  fprintf(stderr,"STACK map at 0x%llx+0x%llx: region 0x%llx+0x%llx kind %u; host allocation 0x%llx state 0x%lx type 0x%lx region 0x%llx+0x%llx\n",
+          (unsigned long long)destination,(unsigned long long)size,(unsigned long long)dst.base,(unsigned long long)dst.size,dst.kind,
+          (unsigned long long)(uintptr_t)info.AllocationBase,(unsigned long)info.State,(unsigned long)info.Type,
+          (unsigned long long)(uintptr_t)info.BaseAddress,(unsigned long long)info.RegionSize);
+  fflush(stderr);
+  boundary("stack-map-destination",&state,state.pc);
+ }
  unsigned slot=0;while(slot<64 && stack_maps[slot].size) slot++;
  if(slot==64) boundary("stack-map-limit",&state,state.pc);
  HANDLE backing=CreateFileMappingW(INVALID_HANDLE_VALUE,NULL,PAGE_READWRITE,0,(DWORD)size,NULL);

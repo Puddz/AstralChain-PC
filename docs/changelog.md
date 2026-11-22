@@ -4,6 +4,13 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-22**
 
+- **HUD at the edges: the button guide's sweep left behind** (issue #53; *not yet confirmed in play*): with *HUD at
+  the screen's edges* on, a translucent strip that sweeps across the button guide every few seconds stayed where the
+  panel is at 16:9, so it slid across the picture beside the moved panel. It is drawn far from its own origin, which
+  kept it from being matched with its panel; it now goes with the panel. Checked at 5760x1080 on the reporter's save
+  state (File 1 chapter 2): the strip no longer shows beside the panel; on a recording with the Legion wheel and the
+  Police Gear menu nothing else moves differently.
+
 - **HDR: bands in bright glows** (issues #54 and #52; *not yet confirmed in play*): with HDR output the bright parts
   of the picture (lights, the bloom around them, the bike's headlight on the wet tunnel road) showed steps instead of
   smooth gradients. The game keeps its picture in a format with 5-6 bits of precision per colour, enough below the
