@@ -395,8 +395,10 @@ static uint64_t hid_script_buttons(uint64_t now) {
  static char script[4096];static int loaded;static uint64_t origin;
  if(!loaded) {loaded=1;DWORD n=GetEnvironmentVariableA("AC_INPUT_SCRIPT",script,sizeof(script));if(!n || n>=sizeof(script))script[0]=0;}
  if(!script[0]) return 0;
- if(!origin) origin=now;
- double t=(double)(now-origin)/19200000.0;uint64_t mask=0;
+ /* (real time: without the jump a loaded save state adds to the game's clock, ss_tick_offset) */
+ uint64_t real=now-ss_tick_offset;
+ if(!origin) origin=real;
+ double t=(double)(real-origin)/19200000.0;uint64_t mask=0;
  for(const char *p=script;*p;) {
   double a,b;unsigned long long m;int used=0;
   if(sscanf(p,"%lf-%lf:%llx%n",&a,&b,&m,&used)!=3) break;
