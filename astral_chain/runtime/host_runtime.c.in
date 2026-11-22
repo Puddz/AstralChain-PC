@@ -631,6 +631,22 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   c->x[21]=passed;
   return;
  }
+ if(imm==0xB5) {
+  /* svc #0xB5 (astral_chain/patches/cutscene-catchup-1.0.1.pchtxt): how late a Bink video without sound may be before
+   * Bink restarts its timer from the frame it is on (x19 = the Bink; [+0x64C] = 2 frames' time in ms, [+8] the frame
+   * count, [+0x630] the current frame, [+0x648] the frame its timer started at). A long video (60 s or more) that is
+   * playing gets 32 times that, so it catches up after a stall instead of falling behind the game's music (issue #50).
+   * Others keep the original: the title waits on its logo video while it is held on the last frame. */
+  uint64_t at=pc-0x7000010000ull;
+  const uint8_t *b=(const uint8_t*)(uintptr_t)c->x[19];
+  uint32_t lim,frames,frame,from,num,den;
+  memcpy(&lim,b+0x64c,4);memcpy(&frames,b+8,4);memcpy(&frame,b+0x630,4);memcpy(&from,b+0x648,4);memcpy(&num,b+0x14,4);memcpy(&den,b+0x18,4);
+  if(num && den && (uint64_t)frames*den>=60ull*num && frame>from && frame<frames && lim<1000) lim*=32;
+  if(at==0x6FE890) c->x[10]=lim;
+  else if(at==0x7004E0) c->x[8]=lim;
+  else boundary("bink-late-site",&state,pc);
+  return;
+ }
  if(imm==0xB1) {
   ac_game_steps++;
   static int at30=-1;

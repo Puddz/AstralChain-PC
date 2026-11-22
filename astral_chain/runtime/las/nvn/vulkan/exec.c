@@ -4879,6 +4879,13 @@ static void draw_(CmdRec *r, bool indexed) {
     if (!ui_box && (ui_vs == 0xb5baa56b2673446aull || ui_vs == 0x0b479d98b0cba667ull) && !st.rt.depth &&
         (uint64_t)st.rt.color[0]->width * 9 > (uint64_t)st.rt.color[0]->height * 16 * 101 / 100 && renderer_texture_presented(st.rt.color[0]))
         ui_box = true;
+    // A Bink movie drawn straight into the picture with its own shader, not the UI's (issue #50: the opening's lab
+    // scene after a new game, 1600x900 Y + two 800x450 chroma planes, a quad over the whole target): wider than 16:9
+    // it was stretched to the full width. It goes in the 16:9 area in the middle, with the sides cleared to black (an
+    // in-engine scene is drawn under it).
+    if (!ui_box && rt_wide && !st.rt.depth && stage_hash(st.program, 1) == 0xd8e428b833e6b3abull &&
+        vp[0] == 0 && vp[2] >= (float)st.rt.color[0]->width - 0.5f)
+        ui_box = video_sides = true;
     {   // camera-attached effects sized for 16:9 are widened with the view (runtime/hle/widescreen.c)
         extern float widescreen_effect_stretch(uint64_t fs_hash);
         float k = widescreen_effect_stretch(g_cur_fs_hash);
