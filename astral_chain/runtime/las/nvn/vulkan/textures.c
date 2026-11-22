@@ -322,6 +322,14 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     uint32_t samples = t->samples > 1 ? t->samples : 1;
     if (samples > 1) levels = 1;
     VkFormat vf = mf.vf;
+    // HDR output (AC_HDR=1, hdr.c): the game's R11G11B10 float pictures (the scene, its tonemapped copy, the bloom
+    // chain) are kept as 16-bit float. Their 6-bit (red, green) and 5-bit (blue) mantissas are fine below the SDR
+    // white, but HDR shows the values above it: a step there was 3-7% of the brightness, seen as bands in bright
+    // glows (issue #54). Copies to other formats are blits; copies into guest memory convert back (exec.c).
+    // (Compute shaders write their images without a format qualifier: 16-bit float works for them too.)
+    bool hdr_float = vf == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && type == VK_IMAGE_TYPE_2D && layers == 1 && samples == 1 &&
+                     vk_hdr_wanted();
+    if (hdr_float) vf = VK_FORMAT_R16G16B16A16_SFLOAT;
     VkFormatFeatureFlags need = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
     b->astc_bw = b->astc_bh = 0;
     if (!format_supports(vf, need)) {
@@ -397,6 +405,13 @@ static void create_image(NvnTexture *t, TexBackend *b) {
                  : t->target == 8 ? VK_IMAGE_VIEW_TYPE_CUBE : t->target == 9 ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY
                  : layers > 1 || t->target == 4 || t->target == 6 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     vk_image_init_layout(vk_upload_cmd(), b->image, b->aspect);
+    if (hdr_float && vf == VK_FORMAT_R16G16B16A16_SFLOAT) {  // (no upload from guest memory reaches it: start black)
+        VkCommandBuffer cb = vk_upload_cmd();
+        VkClearColorValue zero = {{0, 0, 0, 0}};
+        VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+        vkCmdClearColorImage(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &rg);
+        vk_full_barrier(cb);
+    }
     if (depthfmt) {
         // New depth / stencil images start zeroed (as fresh memory reads on Apple GPUs). The game builds its depth
         // pyramid with depth-only copies, so the stencil of those images was never written: whatever the memory
