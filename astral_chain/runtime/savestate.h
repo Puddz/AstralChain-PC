@@ -139,6 +139,7 @@ static SsArena *ss_arena(void) {  /* (NULL: save states are off) */
  if(!tried) {
   tried=1;
   if(ss_enabled()) {
+   guest_space_take(SS_ARENA_BASE,SS_ARENA_SIZE);
    void *p=VirtualAlloc((void*)(uintptr_t)SS_ARENA_BASE,SS_ARENA_SIZE,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
    if(p==(void*)(uintptr_t)SS_ARENA_BASE) {a=p;a->magic=0x414e455241535341ull;a->top=(sizeof(SsArena)+15)&~15ull;}
    else {
@@ -313,6 +314,7 @@ static void ss_unmap_extra(void) {
  }
  for(unsigned i=0;i<32;i++) if(thread_tls[i] && thread_tls[i]!=ss_mem.tls[i]) {
   if(!VirtualFree((void*)(uintptr_t)thread_tls[i],0,MEM_RELEASE)) boundary("ss-tls-release",&state,state.pc);
+  guest_space_give(thread_tls[i],65536);
   thread_tls[i]=0;tls++;
  }
  if(ss_mem.foreign) {
@@ -343,6 +345,7 @@ static void ss_map_saved(void) {
   }
  }
  for(unsigned i=0;i<32;i++) if(ss_mem.tls[i] && thread_tls[i]!=ss_mem.tls[i]) {
+  guest_space_take(ss_mem.tls[i],65536);
   if(VirtualAlloc((void*)(uintptr_t)ss_mem.tls[i],65536,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE)!=(void*)(uintptr_t)ss_mem.tls[i]) {
    fprintf(stderr,"[ss] thread-local block at 0x%llx: address taken (error %lu)\n",(unsigned long long)ss_mem.tls[i],(unsigned long)GetLastError());
    boundary("ss-tls-address",&state,state.pc);

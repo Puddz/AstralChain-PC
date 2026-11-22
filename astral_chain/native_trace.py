@@ -520,6 +520,7 @@ Cpu *c=&state; c->sp=STACK_BASE+STACK_SIZE-16; c->tpidrro={TLS_BASE}ull;
 c->x[1]=0x1000;
 c->pc={entry}ull; c->x[30]=0x7fffffffffffull;
 if(!reserve_heap_range()) boundary("host-heap-reservation",c,c->pc);
+guest_space_guard();
 guest_execute=execute;
 execute(c); return 0; }}
 '''

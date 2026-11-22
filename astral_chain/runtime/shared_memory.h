@@ -45,6 +45,7 @@ static void shared_map(uint64_t handle,uint64_t address,uint64_t size,uint64_t p
  if(granule==64) {
   granule=0;while(granule<64 && shared_granules[granule].base) granule++;
   if(granule==64) boundary("shared-granule-limit",&state,state.pc);
+  guest_space_take(base,65536);
   if(shared_alloc2(GetCurrentProcess(),(void*)(uintptr_t)base,65536,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0)!=(void*)(uintptr_t)base) {
    /* (what holds the address: a host allocation that Windows placed inside the guest's address space) */
    DWORD error=GetLastError();MEMORY_BASIC_INFORMATION info={0};wchar_t module[MAX_PATH]=L"";
@@ -84,6 +85,7 @@ static void shared_unmap(uint64_t handle,uint64_t address,uint64_t size) {
   for(unsigned page=0;page<16;page++)
    if(!VirtualFree((void*)(uintptr_t)(base+page*4096),0,MEM_RELEASE)) boundary("host-shared-placeholder-release",&state,state.pc);
   shared_granules[granule].base=0;
+  guest_space_give(base,65536);
  }
  }
  memset(&shared_views[view],0,sizeof(shared_views[view]));
