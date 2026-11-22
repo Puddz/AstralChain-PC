@@ -4,6 +4,14 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-22**
 
+- **Ultrawide: enemy death flashes and shot flares drawn away from the enemy** (issue #51; *not yet confirmed in
+  play*): wider than 16:9, the flash when an enemy dies and the flares on shots and hits landed further out the further
+  the enemy was from the middle of the screen (3 times as far at 48:9). They take their place from the same screen
+  position calculation as the HUD's markers, which since issue #21 works in the HUD's centred 16:9 layout; those
+  effects now get the whole picture's instead, and the markers keep theirs. Checked at 5760x1080 on the reporter's save
+  state of the File 1 truck fight: a flare drawn 400 px right of the middle for an enemy 133 px right of it before;
+  after, the flares sit on the dying enemies and the markers stay on theirs.
+
 - **Save states: loading after a restart stopped the game at ultrawide** (*not yet confirmed fixed*): loading a state
   in a newly started game at 3840x1080 with DLSS stopped it (`shared-map-overlap`). The game puts its input and clock
   memory at random addresses, and a state needs them at the same addresses again; Windows had put one of its own

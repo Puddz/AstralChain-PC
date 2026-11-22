@@ -51,4 +51,8 @@
 // the rectangle is as wide as the view at the HUD's 720 height and centred on the 16:9 HUD (32:9: -640, 0, 2560,
 // 720), so markers on characters and targets stay on them instead of sitting at the 16:9 offset (issue #21).
 009A30C4 611600D4 // svc #0xB3: [x8+0x260] = rect x, y; w1 = rect width (was str xzr,[x8,#0x260])
+// World to screen (main+0x9A31F0) passes that rectangle on at 0x9A320C. Some effects (an enemy's flash when it dies,
+// the flares on shots and hits) use the point as one on the whole picture, not the HUD: for their calls the runtime
+// passes the camera's original rectangle (0, 0, 1280, 720) instead (issue #51).
+009A320C 611600D4 // svc #0xB3: x8 = the rectangle for this caller (was add x8,x4,#0x260)
 @stop

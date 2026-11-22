@@ -795,6 +795,19 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
     }
     memcpy((void*)(uintptr_t)(c->x[8]+0x260),&rx,4);memcpy((void*)(uintptr_t)(c->x[8]+0x264),&ry,4);return;
    }
+   case 0x9A320C:{  /* world to screen: the camera's screen rectangle (was add x8,x4,#0x260; x4 = the camera) */
+    /* The rectangle widened above suits the HUD (markers on enemies, issue #21), but some effects (the flash when an
+     * enemy dies, the flares on their shots and hits; issue #51) take the screen point it gives as a point on the
+     * whole picture: wider than 16:9 they landed (aspect / 16:9) times as far from the middle as the thing they belong
+     * to. Those callers (the return addresses after their calls) get the rectangle of the whole picture. */
+    c->x[8]=c->x[4]+0x260;
+    uint64_t lr=c->x[30]-0x7000010000ull;
+    if(lr==0x970370 || lr==0x977188 || lr==0x98543C) {
+     int32_t r[4];memcpy(r,(void*)(uintptr_t)(c->x[4]+0x260),16);
+     if(r[0]<0) {static __thread int32_t whole[4];whole[0]=0;whole[1]=r[1];whole[2]=r[2]+2*r[0];whole[3]=r[3];c->x[8]=(uint64_t)(uintptr_t)whole;}
+    }
+    return;
+   }
   }
   #undef SETW
   boundary("svc-b3-site",c,pc);
