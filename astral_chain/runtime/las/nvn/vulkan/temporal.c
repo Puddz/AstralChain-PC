@@ -223,7 +223,7 @@ static bool tu_check(VkCommandBuffer cb, TexBackend *color, TexBackend *mv, TexB
         if (res != VK_SUCCESS) return false;
     }
     bool first = !tu.check_prev.image || tu.check_prev.width != rw || tu.check_prev.height != rh;
-    TexBackend *prev = tu_image(&tu.check_prev, VK_FORMAT_B10G11R11_UFLOAT_PACK32, rw, rh);
+    TexBackend *prev = tu_image(&tu.check_prev, color->format, rw, rh);  // (copied from the scene: its format)
     VkImageCopy c = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                      .extent = {rw, rh, 1}};
     vk_full_barrier(cb);
@@ -580,7 +580,9 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     int mode = vk_tu_mode();
     if (!mode || !(mode == 2 ? ngx_load() : tu_load())) return false;
     if (!color || !depth || !dst || !color->image || !depth->image || !dst->image) return false;
-    if (color->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 || !(depth->aspect & VK_IMAGE_ASPECT_DEPTH_BIT)) return false;
+    // (the scene: R11G11B10 float, or RGBA16F with HDR output, textures.c)
+    if ((color->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 && color->format != VK_FORMAT_R16G16B16A16_SFLOAT) ||
+        !(depth->aspect & VK_IMAGE_ASPECT_DEPTH_BIT)) return false;
     if (depth->width != color->width || depth->height != color->height) return false;
     if (dst->width < color->width || dst->height < color->height) return false;
     if (dst->format != VK_FORMAT_R8G8B8A8_UNORM && dst->format != VK_FORMAT_R8G8B8A8_SRGB) return false;
@@ -680,7 +682,8 @@ bool vk_tu_upscale(VkCommandBuffer cb, TexBackend *color, TexBackend *depth, Tex
     dd.commandList = (void *)cb;
     // (every image is in the GENERAL layout, which is what FSR's "unordered access" state means on Vulkan; it moves
     // them to the layouts it reads and writes with and back)
-    dd.color = tu_resource(color, FFX_API_SURFACE_FORMAT_R11G11B10_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+    dd.color = tu_resource(color, color->format == VK_FORMAT_R16G16B16A16_SFLOAT ? FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT
+                                  : FFX_API_SURFACE_FORMAT_R11G11B10_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dd.depth = tu_resource(d, FFX_API_SURFACE_FORMAT_R32_FLOAT, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dd.motionVectors = tu_resource(mv, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
     dd.output = tu_resource(out, tu.hdr ? FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT : FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM,
