@@ -254,6 +254,7 @@ static struct { uint64_t base; unsigned occupied; } shared_granules[64];  /* (sh
 static struct { uint64_t source,destination,size; HANDLE backing; unsigned handle; } stack_maps[64];
 static uint64_t thread_tls[32];
 static struct { uint64_t address,size; void *data; unsigned refs,handle_open; } transfer_memory[32];
+#include "guest_space_guard.h"
 #include "nvmap_memory.h"
 /* Bumped whenever query() could answer differently for a mapped address (heap size, stack and transfer mappings,
  * shared views, TLS slots, memory attributes): exclusive_pair.h caches its last validated region against it. */
@@ -299,6 +300,7 @@ static void snapshot(void) {
  * free region starts at the queried page. */
 static int host_reservation_own(uint64_t address) {
  if(heap_reserved && address>=heap_base && address-heap_base<HEAP_LIMIT) return 1;
+ if(guest_space_guarded(address)) return 1;
  for(unsigned i=0;i<64;i++) if(shared_granules[i].base && shared_granules[i].base==(address&~65535ull)) return 1;
  return 0;
 }
@@ -795,7 +797,10 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
   if(imm==4) stack_map(c->x[0],c->x[1],c->x[2]);else stack_unmap(c->x[0],c->x[1],c->x[2]);
   c->x[0]=0;return;
  }
- if(imm==0x13) {shared_map(c->x[0],c->x[1],c->x[2],c->x[3]);c->x[0]=0;return;}
+ if(imm==0x13) {
+  printf("SHARED map handle=0x%llx address=0x%llx size=0x%llx\n",(unsigned long long)c->x[0],(unsigned long long)c->x[1],(unsigned long long)c->x[2]);
+  shared_map(c->x[0],c->x[1],c->x[2],c->x[3]);c->x[0]=0;return;
+ }
  if(imm==0x14) {shared_unmap(c->x[0],c->x[1],c->x[2]);c->x[0]=0;return;}
  if(imm==0x16 && c->x[0]>=0x4000 && c->x[0]<0x4040 && shared_handles[c->x[0]-0x4000]) {
   unsigned slot=c->x[0]-0x4000;

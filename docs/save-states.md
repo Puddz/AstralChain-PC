@@ -37,6 +37,8 @@ copy the file to keep more than one (F7 loads the one named `state.acss`).
 - For some seconds after a state is loaded in a newly started game the frame rate is lower, while shaders and
   textures are made again.
 - Rarely Windows has put something where the game's memory has to go. Then a load stops the game with a message in
-  the log, or save states are off for that run; start the game again.
+  the log, or save states are off for that run; start the game again. Since 2026-11-22 the port keeps the game's
+  address range free of Windows' own allocations from startup on, which makes this much rarer (a state that stopped
+  at `shared-map-overlap` when loaded after a restart at 3840x1080, *not yet confirmed fixed*).
 - Not tried yet: a state taken during a pre-rendered video cutscene.
 - F6 and F7 are not used when a game key is set to them in the launcher's key settings.
