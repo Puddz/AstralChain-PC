@@ -4,6 +4,15 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-22**
 
+- **Save states: loading after a restart stopped the game at ultrawide** (*not yet confirmed fixed*): loading a state
+  in a newly started game at 3840x1080 with DLSS stopped it (`shared-map-overlap`). The game puts its input and clock
+  memory at random addresses, and a state needs them at the same addresses again; Windows had put one of its own
+  allocations there in the new run (larger graphics buffers make that more likely). The port now reserves the game's
+  free address range at startup, before the graphics and sound libraries load, so Windows' allocations go elsewhere,
+  and releases it piece by piece where the game maps memory. This reserves addresses only, no memory. Measured at
+  3840x1080: Windows' and the driver's allocations inside the game's range went from 3.3 GB to none; the same frame
+  rate (59.9 fps on the same route either way); states saved and loaded in the same run and in three new runs. The
+  rare startup stop `host-shared-placeholder-reserve` has the same cause.
 - **The opening video after a new game: 16:9 on ultrawide, and in step with its music** (issue #50; *not yet
   confirmed in play*): the lab scene that opens a new game is a video (`movie/ev0010.bk2`, 1600x900), drawn with its
   own shader rather than the UI's, so wider than 16:9 it was stretched to the full width. It is now shown in the

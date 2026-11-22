@@ -56,6 +56,7 @@ static uint64_t thread_allocate_tls(void) {
    next=space.base+space.size;
   } else {
    MEMORY_BASIC_INFORMATION host;
+   if(guest_space_guarded(tls)) guest_space_take(tls,alignment);
    if(!VirtualQuery((void*)(uintptr_t)tls,&host,sizeof(host))) return 0;
    uint64_t host_end=(uint64_t)(uintptr_t)host.BaseAddress+host.RegionSize;
    if(host.State!=MEM_FREE || host_end-tls<alignment) next=host_end;
@@ -514,6 +515,7 @@ static int thread_svc(Cpu *c,unsigned imm) {
   if(i && (guest_threads[i].status==THREAD_CREATED || guest_threads[i].status==THREAD_EXITED)) {
    if(i==current_thread) boundary("thread-close-current-context",c,c->pc);
    if(!VirtualFree((void*)(uintptr_t)thread_tls[i-1],0,MEM_RELEASE)) boundary("thread-tls-release",c,c->pc);
+   guest_space_give(thread_tls[i-1],65536);
    thread_tls[i-1]=0;memset(&guest_threads[i],0,sizeof(guest_threads[i])); InterlockedIncrement(&mapping_generation);
   }
   c->x[0]=0;return 1;
