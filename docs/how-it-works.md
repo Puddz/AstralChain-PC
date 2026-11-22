@@ -8,7 +8,8 @@
    `game/romfs.bin`. The game reads that image at run time.
 2. **Patches.** Three pchtxt patches are applied to `main` before translation:
    - Dynamic-FPS: the measured frame time drives the game step, and the frame cap is 60;
-   - `cutscene-catchup`: cutscenes may take larger steps after a stall, so they stay in sync with their audio;
+   - `cutscene-catchup`: cutscenes may take larger steps after a stall, and long Bink videos may show the frames they
+     are behind (svc #0xB5), so they stay in sync with their audio;
    - `resolution`: the docked render size, the dynamic resolution levels and the size of the render targets' memory
      pool come from the runtime (svc #0xB3), so `AC_RESOLUTION` can change them at launch. Without it they are the
      game's own values. A size wider than 16:9 (21:9, 32:9, 48:9) also sets the 3D cameras' aspect, so the view widens;

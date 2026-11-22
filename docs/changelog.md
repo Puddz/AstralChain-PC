@@ -2,6 +2,19 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-22**
+
+- **The opening video after a new game: 16:9 on ultrawide, and in step with its music** (issue #50; *not yet
+  confirmed in play*): the lab scene that opens a new game is a video (`movie/ev0010.bk2`, 1600x900), drawn with its
+  own shader rather than the UI's, so wider than 16:9 it was stretched to the full width. It is now shown in the
+  16:9 area in the middle with black sides, as the title screen's videos are. The game's videos have no sound of
+  their own (the music and voices are the game's), and the video player restarted its clock whenever the picture
+  was more than two frames late, so every hitch over ~70 ms left the picture further behind the music for good.
+  Long videos (60 s or more) now catch up after a hitch of up to 2 s instead. Measured at 5120x1440 with a test
+  stall of 300 ms every 2 s: the picture fell 4.9 s behind real time over 35 s before, 0.0 s after; without stalls
+  30 video frames a second at 60 fps either way. Below 30 fps the video still runs slower than real time (the game
+  shows at most one video frame per frame).
+
 **2026-11-21**
 
 - **New: HDR output** (issue #49; experimental; *not yet confirmed in play*: tested here without an HDR display; off

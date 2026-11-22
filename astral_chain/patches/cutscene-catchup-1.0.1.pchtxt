@@ -35,4 +35,15 @@
 // next cut, w24 = cut length, s8 = speed.
 008C254C 411600D4 // svc #0xB2 (was scvtf s1,w24)
 008C2550 09000014 // b 0x8C2574: return
+// Bink videos (issue #50: the opening's lab scene, movie/ev0010.bk2, drifted from its music at 32:9). The game's
+// videos have no audio track (the music and voices are the game's own sounds), and Bink plays such a video on its
+// own timer: when it is more than [b+0x64C] (2 frames' time) behind on a frame advance (main+0x6FE890), or twice that
+// in BinkWait (main+0x7004E0), it restarts its timer from the frame it is on. So a stall over ~70 ms was lost for good
+// and the picture fell further behind the music with every hitch (measured: a 300 ms stall every 2 s left it 4.9 s
+// behind after 35 s). The runtime (svc #0xB5, host_runtime.c.in) loads that limit 32 times larger (64 frames, 2.1 s
+// at 30 fps) for a long video (60 s or more) that is playing: after a shorter stall the game shows the frames it is
+// behind, one per game frame (up to 60 a second), until it is back on time. Other videos (the title's logo, held on
+// its last frame and waited on; looping backgrounds) keep the original limit.
+006FE890 A11600D4 // svc #0xB5: w10 = the limit (was ldr w10,[x19,#0x64c])
+007004E0 A11600D4 // svc #0xB5: w8 = the limit (was ldr w8,[x19,#0x64c])
 @stop
