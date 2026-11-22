@@ -4819,6 +4819,8 @@ static void draw_(CmdRec *r, bool indexed) {
         // lines). They lie in exactly the plane of the panel's other parts, right beside them, which nothing of the
         // wheel does: such a part goes with a part of this or the last frame that moved, has the same normal (each
         // component within 0.02), is on the same half of the layout and within 150 across and 140 down of it.
+        // A part in exactly that plane (within 0.003) with its origin out at the layout's side (x under 80 or over 1200) goes
+        // with it from within 400: the strip that sweeps across the button guide is drawn far from its origin (issue #53).
         if (!ui_box && st.ubuf[0][1].addr && st.ubuf[0][1].size >= 48 && p[46] != 0 && p[44] == 0 && p[45] == 0 &&
             renderer_texture_presented(st.rt.color[0])) {
             const float *m = (const float *)(uintptr_t)st.ubuf[0][1].addr;
@@ -4856,7 +4858,14 @@ static void draw_(CmdRec *r, bool indexed) {
                     for (int f = 0; f < 2 && !hud_side; f++)
                         for (int i = 0; i < nmoved[f]; i++)
                             if (fabsf(moved[f][i].n[0] - n[0]) < 0.02f && fabsf(moved[f][i].n[1] - n[1]) < 0.02f && fabsf(moved[f][i].n[2] - n[2]) < 0.02f &&
-                                fabsf(moved[f][i].tx - m[3]) < 150 && fabsf(moved[f][i].ty - m[7]) < 140 && (moved[f][i].tx < 640) == (m[3] < 640)) {
+                                (moved[f][i].tx < 640) == (m[3] < 640) &&
+                                ((fabsf(moved[f][i].tx - m[3]) < 150 && fabsf(moved[f][i].ty - m[7]) < 140) ||
+                                 // (the same plane to within 0.003: a part of that panel whose origin is far from what it
+                                 // draws, as the strip that sweeps across the button guide, issue #53: its origin 210 above)
+                                 (fabsf(moved[f][i].n[0] - n[0]) < 0.003f && fabsf(moved[f][i].n[1] - n[1]) < 0.003f &&
+                                  fabsf(moved[f][i].n[2] - n[2]) < 0.003f && fabsf(moved[f][i].tx - m[3]) < 400 && fabsf(moved[f][i].ty - m[7]) < 400 &&
+                                  fabsf(m[3] - 640) > 560))) {  // (its origin out at the layout's side, as that strip's: not the
+                                                                // wheel's spinning parts in the middle, whose normals pass by)
                                 hud_side = moved[f][i].side;
                                 break;
                             }
