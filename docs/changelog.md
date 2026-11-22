@@ -4,6 +4,16 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-22**
 
+- **HDR: bands in bright glows** (issues #54 and #52; *not yet confirmed in play*): with HDR output the bright parts
+  of the picture (lights, the bloom around them, the bike's headlight on the wet tunnel road) showed steps instead of
+  smooth gradients. The game keeps its picture in a format with 5-6 bits of precision per colour, enough below the
+  SDR white but not for the brightness HDR shows above it (steps of 3-7%). With HDR on, those pictures are now kept
+  at 16-bit float. Measured on the tunnel frame of the #52 console screenshot: in the parts above the SDR white,
+  neighbouring pixels with exactly the same value (flat steps) went from 56% to 28%; a ceiling light that stepped
+  558, 558, 533, 533 nits now falls off 558, 553, 548, 541, 529; same frame rate (59.8 fps on the route, with and
+  without FSR 1). SDR is unchanged. The bright patch beside the bike in the tunnel is the bike's headlight on the
+  wet road: the console shows it too (compared on the same moment), so that part is the game's look.
+
 - **Ultrawide: enemy death flashes and shot flares drawn away from the enemy** (issue #51; *not yet confirmed in
   play*): wider than 16:9, the flash when an enemy dies and the flares on shots and hits landed further out the further
   the enemy was from the middle of the screen (3 times as far at 48:9). They take their place from the same screen

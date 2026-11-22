@@ -5303,9 +5303,14 @@ static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
     vk_full_barrier(cb);
     VkImage srcimg = b->image;
     VmaAllocation small_mem = NULL;
-    if ((tsx != 1 || tsy != 1) && level == 0 && !renderer_format_is_depth(t->format)) {
+    // (an R11G11B10 picture kept as 16-bit float for HDR output, textures.c: converted back to the guest's format)
+    bool promoted = b->format != vk_format(t->format) && b->format == VK_FORMAT_R16G16B16A16_SFLOAT &&
+                    vk_format(t->format) == VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+    if (promoted && level != 0) return;
+    if (((tsx != 1 || tsy != 1) || promoted) && level == 0 && !renderer_format_is_depth(t->format)) {
         // the CPU expects guest-sized texels: filter the scaled allocation down first
-        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = b->format,
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
+                                .format = promoted ? VK_FORMAT_B10G11R11_UFLOAT_PACK32 : b->format,
                                 .extent = {t->width, t->height, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
                                 .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
