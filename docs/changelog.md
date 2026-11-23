@@ -4,6 +4,15 @@ Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confi
 
 **2026-11-23**
 
+- **Reflections on wet roads showing an old place** (issue #52; *not yet confirmed in play*): the game keeps a
+  reflection map (a cubemap with six faces) that it updates as you move, keeping its older picture only where a small
+  helper cubemap says to. It clears that helper to "update everything" every frame with one call for all six faces;
+  the port cleared only the first face, so five of the six faces of the reflections kept whatever they showed when
+  they were last updated. In the File 1 tunnel that was the orange-lit street before it: the road had a brown cast
+  and did not reflect the tunnel's lights and signs. All six faces are cleared now. Checked on the tunnel replay:
+  every face of the reflection map now shows the tunnel, and the road reflects its blue lights instead of the orange
+  street. Other places that use the same reflection map should change the same way; only the tunnel was checked.
+
 - **Ultrawide: the red glint on an enemy's gun drawn away from it** (issue #51; *not yet confirmed in play*): the
   death flashes were fixed on 2026-11-22, but the small red glint on an enemy's gun as it is about to fire still landed
   further out the further the enemy was from the middle of the screen (2 times as far at 32:9, 3 times at 48:9). It is
