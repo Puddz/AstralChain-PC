@@ -6045,7 +6045,31 @@ static void exec_list(uint64_t handle, int depth) {
                 LOG("[ct] clear-color %p mask %#x sc %d %d %d %d\n", (void *)st.rt.color[index], (uint32_t)r->x[2], st.scissor[0][0], st.scissor[0][1],
                     st.scissor[0][2], st.scissor[0][3]);
             if (index < st.rt.ncolor && st.rt.color[index]) alias_before_write(st.rt.color[index], 0, "clear");
-            if (index < st.rt.ncolor && st.rt.color[index]) clear(index, (int)r->x[5], x, (uint32_t)r->x[2], false, 0, false, 0, 0);
+            if (index < st.rt.ncolor && st.rt.color[index]) {
+                // A texture with layers (cube, array) bound without a view is a layered target: a clear clears every layer.
+                // Attachments here are one layer, so each is cleared on its own (the game clears a cubemap that way each
+                // frame; with only its first face cleared, five faces of the reflections stayed stale: issue #52).
+                NvnTexture *t = st.rt.color[index];
+                TexBackend *tb = t->backend;
+                if (!st.rt.has_cview[index] && tb && tb->layers > 1 && tb->depth == 1) {
+                    RtState saved = st.rt;
+                    for (uint32_t ly = 0; ly < tb->layers; ly++) {
+                        if (ly) {
+                            vk_end_pass();
+                            st.rt.has_cview[index] = 1;
+                            memset(&st.rt.cview[index], 0, sizeof st.rt.cview[index]);
+                            st.rt.cview[index].setmask = 2; st.rt.cview[index].min_layer = (uint16_t)ly; st.rt.cview[index].num_layers = 1;
+                            st.rt_dirty = true;
+                        }
+                        clear(index, (int)r->x[5], x, (uint32_t)r->x[2], false, 0, false, 0, 0);
+                    }
+                    vk_end_pass();
+                    st.rt = saved;
+                    st.rt_dirty = true;
+                } else {
+                    clear(index, (int)r->x[5], x, (uint32_t)r->x[2], false, 0, false, 0, 0);
+                }
+            }
             break;
         }
         case CMD_CLEAR_TEXTURE: {
