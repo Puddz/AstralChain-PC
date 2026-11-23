@@ -2,6 +2,16 @@
 
 Fixes marked *not yet confirmed* were tested in scripted runs, but not yet confirmed in play.
 
+**2026-11-23**
+
+- **Ultrawide: the red glint on an enemy's gun drawn away from it** (issue #51; *not yet confirmed in play*): the
+  death flashes were fixed on 2026-11-22, but the small red glint on an enemy's gun as it is about to fire still landed
+  further out the further the enemy was from the middle of the screen (2 times as far at 32:9, 3 times at 48:9). It is
+  placed by a different kind of effect, which the markers that need the HUD's layout use too; glints of this kind that
+  are not tied to anything now get the whole picture's position. Checked at 5760x1080 on a save state taken just before
+  a volley in the File 1 truck fight: before, the glints sat left of the truck while the enemies were on it; after,
+  they sit on the enemies' guns. Only the truck fight was checked (not File 9 or the tunnel).
+
 **2026-11-22**
 
 - **HUD at the edges: the button guide's sweep left behind** (issue #53; *not yet confirmed in play*): with *HUD at

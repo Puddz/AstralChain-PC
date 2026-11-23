@@ -802,7 +802,16 @@ static void rt_svc_body(Cpu*c,uint32_t imm,uint64_t pc) {
      * to. Those callers (the return addresses after their calls) get the rectangle of the whole picture. */
     c->x[8]=c->x[4]+0x260;
     uint64_t lr=c->x[30]-0x7000010000ull;
-    if(lr==0x970370 || lr==0x977188 || lr==0x98543C) {
+    /* 0x975C00 places one kind of effect at a screen point. The glint on an enemy's gun as it is about to fire is one
+     * of them, drawn on the whole picture; the ones tied to something else ([effect+0x8B8] set, drawn through 0x928E90)
+     * keep the HUD's rectangle. The effect is the caller's x19, which 0x9A31F0 has saved at [x29-0x10]. */
+    int plain_effect=0;
+    if(lr==0x975C00 && c->x[29]) {
+     uint64_t effect=0,tied=1;memcpy(&effect,(void*)(uintptr_t)(c->x[29]-0x10),8);
+     if(effect>=0x7000000000ull) memcpy(&tied,(void*)(uintptr_t)(effect+0x8B8),8);
+     plain_effect=!tied;
+    }
+    if(lr==0x970370 || lr==0x977188 || lr==0x98543C || plain_effect) {
      int32_t r[4];memcpy(r,(void*)(uintptr_t)(c->x[4]+0x260),16);
      if(r[0]<0) {static __thread int32_t whole[4];whole[0]=0;whole[1]=r[1];whole[2]=r[2]+2*r[0];whole[3]=r[3];c->x[8]=(uint64_t)(uintptr_t)whole;}
     }
